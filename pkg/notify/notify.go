@@ -1,3 +1,4 @@
+// Package notify handles user notifications and reminders.
 package notify
 
 import (

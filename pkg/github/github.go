@@ -1,3 +1,4 @@
+// Package github provides a GitHub API client for GitHub App interactions.
 package github
 
 import (
@@ -5,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -18,10 +20,10 @@ import (
 
 // Client wraps the GitHub API client.
 type Client struct {
-	appID          string
 	privateKey     *rsa.PrivateKey
-	installationID int64
 	client         *github.Client
+	appID          string
+	installationID int64
 }
 
 // New creates a new GitHub client configured as a GitHub App.
@@ -29,7 +31,7 @@ func New(ctx context.Context, appID, privateKeyPEM, installationID string) (*Cli
 	// Parse the private key.
 	block, _ := pem.Decode([]byte(privateKeyPEM))
 	if block == nil {
-		return nil, fmt.Errorf("failed to parse PEM block")
+		return nil, errors.New("failed to parse PEM block")
 	}
 
 	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
@@ -42,7 +44,7 @@ func New(ctx context.Context, appID, privateKeyPEM, installationID string) (*Cli
 		var ok bool
 		key, ok = keyInterface.(*rsa.PrivateKey)
 		if !ok {
-			return nil, fmt.Errorf("private key is not RSA")
+			return nil, errors.New("private key is not RSA")
 		}
 	}
 
@@ -227,9 +229,12 @@ func (c *Client) GetPRChecks(ctx context.Context, owner, repo string, number int
 		retry.Context(ctx),
 	)
 	if err != nil {
-		slog.Error("failed to get check runs after retries, returning nil",
+		slog.Error("failed to get check runs after retries, returning empty result",
 			"owner", owner, "repo", repo, "number", number, "error", err)
-		return nil, nil // Graceful degradation
+		// Return an empty result instead of nil for graceful degradation
+		return &github.ListCheckRunsResults{
+			CheckRuns: []*github.CheckRun{},
+		}, nil
 	}
 
 	return checkRuns, nil
@@ -268,6 +273,9 @@ func (c *Client) GetPRState(ctx context.Context, owner, repo string, number int)
 				if check.GetConclusion() != "success" && check.GetConclusion() != "skipped" {
 					checksFailed = true
 				}
+			default:
+				// Unknown check status, log for debugging
+				slog.Debug("unknown check status", "status", check.GetStatus())
 			}
 		}
 	}
@@ -292,6 +300,9 @@ func (c *Client) GetPRState(ctx context.Context, owner, repo string, number int)
 			hasApproval = true
 		case "CHANGES_REQUESTED":
 			needsChanges = true
+		default:
+			// Other review states (COMMENTED, PENDING, DISMISSED, etc.)
+			slog.Debug("other review state", "state", review.GetState())
 		}
 	}
 
@@ -357,16 +368,16 @@ func (c *Client) WebhookHandler(w http.ResponseWriter, r *http.Request) {
 
 // PRInfo contains simplified PR information.
 type PRInfo struct {
+	CreatedAt time.Time
+	UpdatedAt time.Time
 	Owner     string
 	Repo      string
-	Number    int
 	Title     string
 	Author    string
 	State     string
-	BlockedOn []string
 	URL       string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	BlockedOn []string
+	Number    int
 }
 
 // GetClient returns the underlying GitHub client.

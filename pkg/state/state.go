@@ -1,3 +1,4 @@
+// Package state manages application state with file persistence.
 package state
 
 import (
@@ -13,44 +14,44 @@ import (
 
 // UserPreferences holds user notification preferences.
 type UserPreferences struct {
-	RealTimeNotifications bool          `json:"real_time_notifications"`
-	ChannelNotifyDelay    time.Duration `json:"channel_notify_delay"` // 15min, 30min, 60min, 2hr
-	DailyReminders        bool          `json:"daily_reminders"`
-	Timezone              string        `json:"timezone"`
 	LastNotified          time.Time     `json:"last_notified"`
+	Timezone              string        `json:"timezone"`
+	ChannelNotifyDelay    time.Duration `json:"channel_notify_delay"`
+	RealTimeNotifications bool          `json:"real_time_notifications"`
+	DailyReminders        bool          `json:"daily_reminders"`
 }
 
 // PRState represents the current state of a PR.
 type PRState struct {
-	Owner        string    `json:"owner"`
-	Repo         string    `json:"repo"`
-	Number       int       `json:"number"`
-	Title        string    `json:"title"`
-	Author       string    `json:"author"`
-	State        string    `json:"state"` // test_tube, broken_heart, hourglass, etc.
-	BlockedOn    []string  `json:"blocked_on"`
-	Reviewers    []string  `json:"reviewers"`
-	ThreadTS     string    `json:"thread_ts"`  // Slack thread timestamp
-	ChannelID    string    `json:"channel_id"` // Slack channel ID
 	LastUpdated  time.Time `json:"last_updated"`
 	LastNotified time.Time `json:"last_notified"`
+	Owner        string    `json:"owner"`
+	Repo         string    `json:"repo"`
+	Title        string    `json:"title"`
+	Author       string    `json:"author"`
+	State        string    `json:"state"`
+	ThreadTS     string    `json:"thread_ts"`
+	ChannelID    string    `json:"channel_id"`
+	BlockedOn    []string  `json:"blocked_on"`
+	Reviewers    []string  `json:"reviewers"`
+	Number       int       `json:"number"`
 }
 
 // WorkspaceData holds data for a Slack workspace.
 type WorkspaceData struct {
-	WorkspaceID string                     `json:"workspace_id"`
-	Users       map[string]UserPreferences `json:"users"`    // userID -> preferences
-	PRs         map[string]*PRState        `json:"prs"`      // "owner/repo#number" -> state
-	UserPRs     map[string][]string        `json:"user_prs"` // userID -> list of PR keys
 	LastUpdated time.Time                  `json:"last_updated"`
+	Users       map[string]UserPreferences `json:"users"`
+	PRs         map[string]*PRState        `json:"prs"`
+	UserPRs     map[string][]string        `json:"user_prs"`
+	WorkspaceID string                     `json:"workspace_id"`
 }
 
 // Manager manages application state with file persistence.
 type Manager struct {
-	mu       sync.RWMutex
+	data     map[string]*WorkspaceData
+	saveChan chan string
 	dataDir  string
-	data     map[string]*WorkspaceData // workspaceID -> data
-	saveChan chan string               // channel for async saves
+	mu       sync.RWMutex
 }
 
 // New creates a new state manager.
@@ -163,7 +164,15 @@ func (m *Manager) SetPRState(workspaceID string, pr *PRState) {
 
 	// Add to blocked users' lists.
 	for _, userID := range pr.BlockedOn {
-		if !contains(workspace.UserPRs[userID], key) {
+		// Check if PR key already exists in user's list
+		alreadyExists := false
+		for _, prKey := range workspace.UserPRs[userID] {
+			if prKey == key {
+				alreadyExists = true
+				break
+			}
+		}
+		if !alreadyExists {
 			workspace.UserPRs[userID] = append(workspace.UserPRs[userID], key)
 		}
 	}
@@ -392,13 +401,4 @@ func (m *Manager) saveWorkspaceData(workspaceID string) {
 	}
 
 	slog.Info("saved state", "workspace", workspaceID)
-}
-
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
 }

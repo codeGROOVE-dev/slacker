@@ -1,3 +1,4 @@
+// Package main implements the slacker server.
 package main
 
 import (
@@ -7,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -133,52 +135,48 @@ func main() {
 }
 
 func loadConfig() (*config.ServerConfig, error) {
+	// Get environment variables with defaults
+	dataDir := os.Getenv("DATA_DIR")
+	if dataDir == "" {
+		configDir, err := os.UserConfigDir()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get user config directory: %w", err)
+		}
+		dataDir = filepath.Join(configDir, "slacker")
+	}
+	sprinklerURL := os.Getenv("SPRINKLER_URL")
+	if sprinklerURL == "" {
+		sprinklerURL = "wss://hook.g.robot-army.dev/ws"
+	}
+
 	cfg := &config.ServerConfig{
-		DataDir:              getEnvOrDefault("DATA_DIR", "./data"),
+		DataDir:              dataDir,
 		SlackToken:           os.Getenv("SLACK_BOT_TOKEN"),
 		SlackSigningSecret:   os.Getenv("SLACK_SIGNING_SECRET"),
 		GitHubAppID:          os.Getenv("GITHUB_APP_ID"),
 		GitHubPrivateKey:     os.Getenv("GITHUB_PRIVATE_KEY"),
 		GitHubInstallationID: os.Getenv("GITHUB_INSTALLATION_ID"),
-		SprinklerURL:         getEnvOrDefault("SPRINKLER_URL", "wss://hook.g.robot-army.dev/ws"),
+		SprinklerURL:         sprinklerURL,
 	}
 
+	// Validate required fields
 	if cfg.SlackToken == "" {
-		return nil, errMissingEnvVar("SLACK_BOT_TOKEN")
+		return nil, fmt.Errorf("missing required environment variable: SLACK_BOT_TOKEN")
 	}
 	if cfg.SlackSigningSecret == "" {
-		return nil, errMissingEnvVar("SLACK_SIGNING_SECRET")
+		return nil, fmt.Errorf("missing required environment variable: SLACK_SIGNING_SECRET")
 	}
 	if cfg.GitHubAppID == "" {
-		return nil, errMissingEnvVar("GITHUB_APP_ID")
+		return nil, fmt.Errorf("missing required environment variable: GITHUB_APP_ID")
 	}
 	if cfg.GitHubPrivateKey == "" {
-		return nil, errMissingEnvVar("GITHUB_PRIVATE_KEY")
+		return nil, fmt.Errorf("missing required environment variable: GITHUB_PRIVATE_KEY")
 	}
 
 	return cfg, nil
 }
 
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-func errMissingEnvVar(name string) error {
-	return &missingEnvVarError{name: name}
-}
-
-type missingEnvVarError struct {
-	name string
-}
-
-func (e *missingEnvVarError) Error() string {
-	return "missing required environment variable: " + e.name
-}
-
-func healthHandler(w http.ResponseWriter, r *http.Request) {
+func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write([]byte("OK")); err != nil {
 		slog.Error("failed to write health response", "error", err)

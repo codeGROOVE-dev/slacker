@@ -1,10 +1,11 @@
+// Package config manages server and repository configurations.
 package config
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -26,19 +27,19 @@ type ServerConfig struct {
 
 // RepoConfig represents the slack.yaml configuration for a GitHub org.
 type RepoConfig struct {
-	Global struct {
-		Prefix string `yaml:"prefix"`
-	} `yaml:"global"`
 	Repos map[string]struct {
 		Channels []string `yaml:"channels"`
 	} `yaml:"repos"`
+	Global struct {
+		Prefix string `yaml:"prefix"`
+	} `yaml:"global"`
 }
 
 // Manager manages repository configurations.
 type Manager struct {
-	mu      sync.RWMutex
-	configs map[string]*RepoConfig // org -> config
+	configs map[string]*RepoConfig
 	client  *github.Client
+	mu      sync.RWMutex
 }
 
 // New creates a new config manager.
@@ -63,7 +64,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 	defer m.mu.Unlock()
 
 	if m.client == nil {
-		return fmt.Errorf("github client not initialized")
+		return errors.New("github client not initialized")
 	}
 
 	var content *github.RepositoryContent
@@ -83,7 +84,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 			if err != nil {
 				// Check if it's a 404 - config might not exist yet
 				var ghErr *github.ErrorResponse
-				if errors.As(err, &ghErr) && ghErr.Response.StatusCode == 404 {
+				if errors.As(err, &ghErr) && ghErr.Response.StatusCode == http.StatusNotFound {
 					slog.Debug("config file not found, using defaults", "org", org)
 					return retry.Unrecoverable(err)
 				}
@@ -93,7 +94,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 
 			if content == nil || content.Content == nil {
 				slog.Debug("config file empty", "org", org)
-				return retry.Unrecoverable(fmt.Errorf("config file empty"))
+				return retry.Unrecoverable(errors.New("config file empty"))
 			}
 
 			// Decode the content

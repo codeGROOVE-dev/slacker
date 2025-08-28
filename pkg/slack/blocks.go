@@ -88,7 +88,27 @@ func BuildDashboardBlocks(userID string, prs []*state.PRState) []slack.Block {
 }
 
 func createPRBlock(pr *state.PRState) slack.Block {
-	stateEmoji := getStateEmoji(pr.State)
+	// Map state to emoji
+	var stateEmoji string
+	switch pr.State {
+	case "test_tube":
+		stateEmoji = "🧪"
+	case "broken_heart":
+		stateEmoji = "💔"
+	case "hourglass":
+		stateEmoji = "⏳"
+	case "carpentry_saw":
+		stateEmoji = "🪚"
+	case "check":
+		stateEmoji = "✅"
+	case "pray":
+		stateEmoji = "🙏"
+	case "face_palm":
+		stateEmoji = "🤦"
+	default:
+		stateEmoji = "❓"
+	}
+
 	prURL := fmt.Sprintf("https://github.com/%s/%s/pull/%d", pr.Owner, pr.Repo, pr.Number)
 
 	text := fmt.Sprintf("%s <%s|%s/%s#%d>\n%s\nby @%s",
@@ -109,27 +129,6 @@ func createPRBlock(pr *state.PRState) slack.Block {
 		slack.NewTextBlockObject("mrkdwn", text, false, false),
 		nil, nil,
 	)
-}
-
-func getStateEmoji(state string) string {
-	switch state {
-	case "test_tube":
-		return "🧪"
-	case "broken_heart":
-		return "💔"
-	case "hourglass":
-		return "⏳"
-	case "carpentry_saw":
-		return "🪚"
-	case "check":
-		return "✅"
-	case "pray":
-		return "🙏"
-	case "face_palm":
-		return "🤦"
-	default:
-		return "❓"
-	}
 }
 
 // BuildSettingsBlocks creates Slack blocks for user settings.

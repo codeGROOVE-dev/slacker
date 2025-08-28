@@ -1,8 +1,10 @@
+// Package bot implements the coordination logic between GitHub, Slack, and notifications.
 package bot
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -240,7 +242,7 @@ func (c *Coordinator) processEvent(ctx context.Context, msg SprinklerMessage) er
 
 	if owner == "" || repo == "" {
 		slog.Warn("empty owner or repo name", "owner", owner, "repo", repo)
-		return fmt.Errorf("empty owner or repo name")
+		return errors.New("empty owner or repo name")
 	}
 
 	// Load config for this org if not already loaded.
@@ -363,6 +365,9 @@ func (c *Coordinator) handlePullRequestEvent(ctx context.Context, owner, repo st
 				slog.Warn("failed to update reaction", "error", err)
 			}
 		}
+	default:
+		// Other PR actions are not handled
+		slog.Debug("unhandled PR action", "action", event.Action)
 	}
 
 	// Save PR state.
@@ -406,10 +411,14 @@ func (c *Coordinator) handlePullRequestReviewEvent(ctx context.Context, owner, r
 	// Update thread with review status.
 	if pr.ThreadTS != "" && event.Action == "submitted" {
 		message := fmt.Sprintf("@%s reviewed the PR", event.Review.User.Login)
-		if event.Review.State == "approved" {
+		switch event.Review.State {
+		case "approved":
 			message += " ✅"
-		} else if event.Review.State == "changes_requested" {
+		case "changes_requested":
 			message += " 🔧"
+		default:
+			// Other review states (commented, dismissed, etc.)
+			message += fmt.Sprintf(" (%s)", event.Review.State)
 		}
 		if err := c.notifier.SendThreadUpdate(ctx, pr.ChannelID, pr.ThreadTS, message); err != nil {
 			slog.Warn("failed to send thread update", "error", err)

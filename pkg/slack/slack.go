@@ -1,3 +1,4 @@
+// Package slack provides a Slack API client and interaction handlers.
 package slack
 
 import (
@@ -54,7 +55,9 @@ func (c *Client) PostThread(ctx context.Context, channelID, text string, attachm
 					slog.Warn("rate limited posting, backing off", "channel", channelID)
 					return err
 				}
-				if isChannelNotFoundError(err) {
+				// Check if channel not found
+				if err != nil && (strings.Contains(err.Error(), "channel_not_found") ||
+					strings.Contains(err.Error(), "not_in_channel")) {
 					slog.Warn("channel not found, not retrying", "channel", channelID)
 					return retry.Unrecoverable(err)
 				}
@@ -329,6 +332,9 @@ func (c *Client) InteractionsHandler(w http.ResponseWriter, r *http.Request) {
 	case slack.InteractionTypeViewSubmission:
 		// Handle modal submissions.
 		slog.Debug("received view submission", "interaction", interaction)
+	default:
+		// Other interaction types
+		slog.Debug("unhandled interaction type", "type", interaction.Type)
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -440,15 +446,6 @@ func isRateLimitError(err error) bool {
 	}
 	return strings.Contains(err.Error(), "rate_limited") ||
 		strings.Contains(err.Error(), "429")
-}
-
-// isChannelNotFoundError checks if error indicates channel not found.
-func isChannelNotFoundError(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(err.Error(), "channel_not_found") ||
-		strings.Contains(err.Error(), "not_in_channel")
 }
 
 // updateAppHome updates the app home view for a user.
