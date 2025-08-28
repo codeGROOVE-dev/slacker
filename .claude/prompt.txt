@@ -1,0 +1,135 @@
+Build an elegant modern Slack bot, named Ready to Review, in the Go programming language with the following features:
+
+* Start threads in a channel when a new PR comes in for a particular GitHub repo, pinging users when it's their turn for review.
+* Notify users when a PR is newly blocked on them
+* Notify
+* Show a dashboard of the incoming and outgoing PRs for themselves (or another user).
+* Multi-homed: can connect to many GitHub orgs and many Slack environments.
+
+Stylistically, it should feel like a collaboration between Craigslist & Steve Jobs, with input from James Brown to keep it funky and interesting.
+
+## DASHBOARD FEATURE
+====================
+On the bot account page, users should be able to see their dashboard - using the best in Slack Block Kit design. If you look at ../dashboard, you can see the web-only implementation of this dashboard. It shows a users incoming and outgoing PRs, specifically highlighting those that are blocked on them. The Slack bot will auth as a GitHub app.
+
+The user page will also have 3 settings:
+
+- Enable real-time notifications [defaults to on]
+  - If notification is posted to a channel, send notification after being blocked for [15 minutes, 30 minutes, 60 minutes, 2 hours] - defaults to 30 minutes.
+- Enable daily reminders [defaults to on]
+
+## USER NOTIFICATIONS FEATURE
+============================
+
+If a user has real-time notifications enabled, and they are blocking a PR fom moving forward, it'll send them a message that says:
+
+:postal_horn: Update README.md • goose#51 by @slackUser - waiting for your review (it could also say "waiting for you to fix tests" or other messages.
+
+If the user has specified a delay if a notification was posted in a channel; it should respect that delay. It should only send this delayed notifications if they are "Active" on Slack. If they are "away" for an hour, we should send the notification when they are Active again after an hour.
+
+For dailly reminders: If it's between 8am-9am local time, and it's been more than 8 hours since we notified them, do so, if their setting has that feature enabled.
+
+## CHANNEL NOTIFICATIONS FEATURE
+================================
+For a given GitHub org, there will be a YAML configuration file in their /.github repo, at codeGROOVE/slack.yaml; so for xyz org, you would find the YAML configuration file named: https://github.com/xyz/.github - in a file named /codeGROOVE/slack.yaml.
+
+We'll read this file at startup, and whenever we see a PR merged to this repo. We can get those PR notifications using https://github.com/codeGROOVE-dev/sprinkler
+
+This file will contain a notification map:
+
+```yaml
+global:
+    prefix: ":postal_horn"
+
+repos:
+    goose:
+        channels:
+            - #goose
+    .github:
+        channels:
+            - #goose
+            - #eng
+```
+
+Here's what a thread starter would look like:
+
+```
+:postal_horn: Update README.md • goose#51 by @slackUser
+```
+
+goose#51 should be a link to the PR. If possible, disable link previews for the GitHUb link.
+
+Based on the current state of the PR, this thread starter will have a reaction emoji appropriately:
+
+- :test_tube: - tests are running/pending
+- :broken_heart: - tests are broken (blocked on author)
+- :hourglass: - PR is waiting on a review
+- :carpentry_saw: - PR has been approved but still needs work (blocked on author)
+- :check: - PR has been reviewed & approved (blocked on author)
+- :pray: - PR has been merged
+- :face_palm: - PR has been closed, but not merged
+
+When reviewers are assigned to the PR, there shoud be a follow-up comment to the thread:
+
+@user was added as a reviewer
+
+When @user has reviewed the PR, this app will add a checkmark reaction to that follow-up comment. If the person is a blocker, add a :scream_cat: decoration to this message.
+
+## USEFUL LIBRARIES
+
+- https://github.com/codeGROOVE-dev/sprinkler will ping you when a PR has been updated or created. You can see ../prs and ../sprinkler for implementation details
+- https://github.com/codeGROOVE-dev/turnclient will give you details on a PR, including it's state and who it's blocked on.
+
+## CODING PHILOSOPHY
+
+Ensure that the code meets the following standards:
+
+## Code Philosophy and Best Practices
+
+- Code should be written for simplicity, scalability, security, and reliability
+
+### On Go
+
+- Go code should be written with best practices in a way that emulates what the Go project itself uses; prioritizing advice mentioned on go.dev
+- Code should adhere to advice on https://google.github.io/styleguide/go/
+- Code should adhere to advice on https://go.dev/wiki/CodeReviewComments
+- Code should adhere to advice on https://go.dev/doc/effective_go
+- Code should be something that Rob Pike could be proud of.
+- Contexts should never be embedded into a struct or created within a library. They should always be passed from main.
+
+### On Reliability
+
+- Code should not contain any bugs
+- Code should be optimized for speed and resource usage, but without adding complexity
+- The app/service should degrade gracefully when a dependent API call fails
+- Code should be written with tests and unit testing in mind
+- Tests should always pass.
+- Code should have great logging to make it easier to debug and better understand the decisions it's making.
+
+### On Security
+
+- Look for security bugs: both obvious and subtle.
+- Expect that security professionals will be inspecting and attacking this service
+- Simplicity is security.
+
+### On Simplicity
+
+- Consider what Rob Pike would do to improve this code
+- Make the code so simple that bugs have nowhere to hide.
+- Code should have as few external dependencies as possible
+- Any small (less than 7 line) function that is only called from a single location should be inlined
+- Simplicity is security.
+
+
+
+-- FAQ --
+
+⏺ A few questions:
+
+1. Sprinkler connection: Use the same as the prs command: wss://hook.g.robot-army.dev/ws
+2. Database/Storage: Similar to ../gutz, we're going to use a simple approach where do track data in-memory, but store them in a per-Slack, per-user gzip-compressed JSON file for persistence. We won't read this file until the first time we need to reference it after a restart. Any updates to this JSON file will be done in a non-blocking fashion in the background. Dumb, but straightforward.
+3. Slack App setup: Credentials will come from environment variables.
+4. GitHub App credentials: They will come from the environment
+5. Dashboard port: It should use $PORT, but default to 9119
+6. User timezone detection: You should be able to get this from Slack.
+7. Initial deployment target: single Slack workspace and GitHub org for  testing, but a full Slack Organization-ready app on the Marketplace for deployment.
