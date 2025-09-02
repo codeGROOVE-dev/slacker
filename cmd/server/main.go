@@ -41,6 +41,11 @@ func main() {
 		<-sigChan
 		slog.Info("received shutdown signal, gracefully stopping")
 		cancel()
+		
+		// Force exit after 10 seconds if graceful shutdown doesn't complete
+		time.Sleep(10 * time.Second)
+		slog.Error("graceful shutdown timeout, forcing exit")
+		os.Exit(1)
 	}()
 
 	// Log configuration without secrets.
