@@ -2,6 +2,7 @@
 package slack
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -56,8 +57,8 @@ func (c *Client) PostThread(ctx context.Context, channelID, text string, attachm
 					return err
 				}
 				// Check if channel not found
-				if err != nil && (strings.Contains(err.Error(), "channel_not_found") ||
-					strings.Contains(err.Error(), "not_in_channel")) {
+				if strings.Contains(err.Error(), "channel_not_found") ||
+					strings.Contains(err.Error(), "not_in_channel") {
 					slog.Warn("channel not found, not retrying", "channel", channelID)
 					return retry.Unrecoverable(err)
 				}
@@ -70,6 +71,7 @@ func (c *Client) PostThread(ctx context.Context, channelID, text string, attachm
 		retry.Delay(2*time.Second),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
 		retry.LastErrorOnly(true),
 		retry.Context(ctx),
 	)
@@ -81,47 +83,124 @@ func (c *Client) PostThread(ctx context.Context, channelID, text string, attachm
 	return timestamp, nil
 }
 
-// PostThreadReply posts a reply to an existing thread.
+// PostThreadReply posts a reply to an existing thread with retry logic.
 func (c *Client) PostThreadReply(ctx context.Context, channelID, threadTS, text string) error {
 	options := []slack.MsgOption{
 		slack.MsgOptionText(text, false),
 		slack.MsgOptionTS(threadTS),
 	}
 
-	_, _, err := c.api.PostMessageContext(ctx, channelID, options...)
+	err := retry.Do(
+		func() error {
+			_, _, err := c.api.PostMessageContext(ctx, channelID, options...)
+			if err != nil {
+				if isRateLimitError(err) {
+					slog.Warn("rate limited posting reply, backing off", "channel", channelID, "thread", threadTS)
+					return err
+				}
+				// Don't retry on permanent errors
+				if strings.Contains(err.Error(), "channel_not_found") ||
+					strings.Contains(err.Error(), "not_in_channel") ||
+					strings.Contains(err.Error(), "thread_not_found") {
+					return retry.Unrecoverable(err)
+				}
+				slog.Warn("failed to post reply, retrying", "channel", channelID, "error", err)
+				return err
+			}
+			return nil
+		},
+		retry.Attempts(5),
+		retry.Delay(2*time.Second),
+		retry.MaxDelay(2*time.Minute),
+		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
+		retry.LastErrorOnly(true),
+		retry.Context(ctx),
+	)
 	if err != nil {
-		return fmt.Errorf("failed to post reply: %w", err)
+		return fmt.Errorf("failed to post reply after retries: %w", err)
 	}
 
 	return nil
 }
 
-// AddReaction adds a reaction emoji to a message.
+// AddReaction adds a reaction emoji to a message with retry logic.
 func (c *Client) AddReaction(ctx context.Context, channelID, timestamp, emoji string) error {
-	err := c.api.AddReactionContext(ctx, emoji, slack.ItemRef{
-		Channel:   channelID,
-		Timestamp: timestamp,
-	})
+	err := retry.Do(
+		func() error {
+			err := c.api.AddReactionContext(ctx, emoji, slack.ItemRef{
+				Channel:   channelID,
+				Timestamp: timestamp,
+			})
+			if err != nil {
+				// Ignore "already_reacted" errors - not really an error
+				if strings.Contains(err.Error(), "already_reacted") {
+					return nil
+				}
+				if isRateLimitError(err) {
+					slog.Debug("rate limited adding reaction, backing off", "emoji", emoji)
+					return err
+				}
+				// Don't retry on message_not_found
+				if strings.Contains(err.Error(), "message_not_found") ||
+					strings.Contains(err.Error(), "no_reaction") {
+					return retry.Unrecoverable(err)
+				}
+				slog.Debug("failed to add reaction, retrying", "emoji", emoji, "error", err)
+				return err
+			}
+			return nil
+		},
+		retry.Attempts(3),
+		retry.Delay(time.Second),
+		retry.MaxDelay(10*time.Second),
+		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
+		retry.LastErrorOnly(true),
+		retry.Context(ctx),
+	)
 	if err != nil {
-		// Ignore "already_reacted" errors.
-		if !strings.Contains(err.Error(), "already_reacted") {
-			return fmt.Errorf("failed to add reaction: %w", err)
-		}
+		return fmt.Errorf("failed to add reaction after retries: %w", err)
 	}
 	return nil
 }
 
-// RemoveReaction removes a reaction emoji from a message.
+// RemoveReaction removes a reaction emoji from a message with retry logic.
 func (c *Client) RemoveReaction(ctx context.Context, channelID, timestamp, emoji string) error {
-	err := c.api.RemoveReactionContext(ctx, emoji, slack.ItemRef{
-		Channel:   channelID,
-		Timestamp: timestamp,
-	})
+	err := retry.Do(
+		func() error {
+			err := c.api.RemoveReactionContext(ctx, emoji, slack.ItemRef{
+				Channel:   channelID,
+				Timestamp: timestamp,
+			})
+			if err != nil {
+				// Ignore "no_reaction" errors - not really an error
+				if strings.Contains(err.Error(), "no_reaction") {
+					return nil
+				}
+				if isRateLimitError(err) {
+					slog.Debug("rate limited removing reaction, backing off", "emoji", emoji)
+					return err
+				}
+				// Don't retry on message_not_found
+				if strings.Contains(err.Error(), "message_not_found") {
+					return retry.Unrecoverable(err)
+				}
+				slog.Debug("failed to remove reaction, retrying", "emoji", emoji, "error", err)
+				return err
+			}
+			return nil
+		},
+		retry.Attempts(3),
+		retry.Delay(time.Second),
+		retry.MaxDelay(10*time.Second),
+		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
+		retry.LastErrorOnly(true),
+		retry.Context(ctx),
+	)
 	if err != nil {
-		// Ignore "no_reaction" errors.
-		if !strings.Contains(err.Error(), "no_reaction") {
-			return fmt.Errorf("failed to remove reaction: %w", err)
-		}
+		return fmt.Errorf("failed to remove reaction after retries: %w", err)
 	}
 	return nil
 }
@@ -178,6 +257,7 @@ func (c *Client) SendDirectMessage(ctx context.Context, userID, text string) err
 		retry.Delay(time.Second),
 		retry.MaxDelay(30*time.Second),
 		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
 		retry.LastErrorOnly(true),
 		retry.Context(ctx),
 	)
@@ -203,6 +283,7 @@ func (c *Client) SendDirectMessage(ctx context.Context, userID, text string) err
 		retry.Delay(2*time.Second),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
 		retry.LastErrorOnly(true),
 		retry.Context(ctx),
 	)
@@ -214,27 +295,79 @@ func (c *Client) SendDirectMessage(ctx context.Context, userID, text string) err
 	return nil
 }
 
-// GetUserInfo gets user information including timezone.
-func (c *Client) GetUserInfo(ctx context.Context, userID string) (*slack.User, error) {
-	user, err := c.api.GetUserInfoContext(ctx, userID)
+// UserInfo gets user information including timezone with retry logic.
+func (c *Client) UserInfo(ctx context.Context, userID string) (*slack.User, error) {
+	var user *slack.User
+	err := retry.Do(
+		func() error {
+			var err error
+			user, err = c.api.GetUserInfoContext(ctx, userID)
+			if err != nil {
+				if isRateLimitError(err) {
+					slog.Warn("rate limited getting user info, backing off", "user", userID)
+					return err
+				}
+				// Don't retry on user_not_found
+				if strings.Contains(err.Error(), "user_not_found") {
+					return retry.Unrecoverable(err)
+				}
+				slog.Warn("failed to get user info, retrying", "user", userID, "error", err)
+				return err
+			}
+			return nil
+		},
+		retry.Attempts(3),
+		retry.Delay(time.Second),
+		retry.MaxDelay(30*time.Second),
+		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
+		retry.LastErrorOnly(true),
+		retry.Context(ctx),
+	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get user info: %w", err)
+		return nil, fmt.Errorf("failed to get user info after retries: %w", err)
 	}
 	return user, nil
 }
 
-// GetUserPresence gets user presence (active/away).
-func (c *Client) GetUserPresence(ctx context.Context, userID string) (string, error) {
-	presence, err := c.api.GetUserPresenceContext(ctx, userID)
+// UserPresence gets user presence (active/away) with retry logic.
+func (c *Client) UserPresence(ctx context.Context, userID string) (string, error) {
+	var presence *slack.UserPresence
+	err := retry.Do(
+		func() error {
+			var err error
+			presence, err = c.api.GetUserPresenceContext(ctx, userID)
+			if err != nil {
+				if isRateLimitError(err) {
+					slog.Debug("rate limited getting presence, backing off", "user", userID)
+					return err
+				}
+				// Don't retry on user_not_found
+				if strings.Contains(err.Error(), "user_not_found") {
+					return retry.Unrecoverable(err)
+				}
+				slog.Debug("failed to get presence, retrying", "user", userID, "error", err)
+				return err
+			}
+			return nil
+		},
+		retry.Attempts(3),
+		retry.Delay(time.Second),
+		retry.MaxDelay(10*time.Second),
+		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
+		retry.LastErrorOnly(true),
+		retry.Context(ctx),
+	)
 	if err != nil {
-		return "", fmt.Errorf("failed to get user presence: %w", err)
+		return "", fmt.Errorf("failed to get user presence after retries: %w", err)
 	}
 	return presence.Presence, nil
 }
 
 // IsUserActive checks if a user is currently active.
 func (c *Client) IsUserActive(ctx context.Context, userID string) bool {
-	presence, err := c.GetUserPresence(ctx, userID)
+	presence, err := c.UserPresence(ctx, userID)
 	if err != nil {
 		slog.Warn("failed to get presence for user", "user", userID, "error", err)
 		return false
@@ -295,7 +428,9 @@ func (c *Client) EventsHandler(w http.ResponseWriter, r *http.Request) {
 			slog.Debug("received app mention", "event", evt)
 		case *slackevents.AppHomeOpenedEvent:
 			// Update app home when user opens it.
-			go c.updateAppHome(evt.User)
+			// In a full implementation, this would update the home tab.
+			// For now, just log.
+			slog.Debug("would update app home for user", "user", evt.User)
 		}
 	}
 
@@ -360,7 +495,7 @@ func (c *Client) SlashCommandHandler(w http.ResponseWriter, r *http.Request) {
 	var response string
 	switch cmd.Command {
 	case "/r2r":
-		response = c.handleR2RCommand(cmd)
+		response = c.handleR2RCommand(&cmd)
 	default:
 		response = "Unknown command"
 	}
@@ -376,13 +511,21 @@ func (c *Client) SlashCommandHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleR2RCommand handles the /r2r slash command.
-func (c *Client) handleR2RCommand(cmd slack.SlashCommand) string {
-	args := strings.Fields(cmd.Text)
+func (*Client) handleR2RCommand(cmd *slack.SlashCommand) string {
+	// Sanitize and validate input.
+	text := strings.TrimSpace(cmd.Text)
+	if len(text) > 200 { // Reasonable limit for command input.
+		return "Command too long. Please use shorter commands."
+	}
+
+	args := strings.Fields(text)
 	if len(args) == 0 {
 		return "Usage: /r2r [dashboard|settings|help]"
 	}
 
-	switch args[0] {
+	// Validate command argument.
+	command := strings.ToLower(args[0])
+	switch command {
 	case "dashboard":
 		// Note: In a full implementation, we'd send blocks here instead of plain text.
 		// For now, return a link to the web dashboard.
@@ -404,12 +547,12 @@ func (c *Client) handleR2RCommand(cmd slack.SlashCommand) string {
 
 // verifySignature verifies a Slack request signature.
 func (c *Client) verifySignature(signature, timestamp string, body []byte) bool {
-	// Check timestamp to prevent replay attacks.
+	// Check timestamp to prevent replay attacks (60 seconds window).
 	ts, err := strconv.ParseInt(timestamp, 10, 64)
 	if err != nil {
 		return false
 	}
-	if time.Since(time.Unix(ts, 0)) > 5*time.Minute {
+	if time.Since(time.Unix(ts, 0)) > 60*time.Second {
 		return false
 	}
 
@@ -430,11 +573,13 @@ func (c *Client) verifyRequest(r *http.Request) bool {
 	signature := r.Header.Get("X-Slack-Signature")
 	timestamp := r.Header.Get("X-Slack-Request-Timestamp")
 
-	// Read body.
+	// Read body into buffer to allow re-reading.
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return false
 	}
+	// Restore the body for subsequent reads.
+	r.Body = io.NopCloser(bytes.NewBuffer(body))
 
 	return c.verifySignature(signature, timestamp, body)
 }
@@ -448,27 +593,38 @@ func isRateLimitError(err error) bool {
 		strings.Contains(err.Error(), "429")
 }
 
-// updateAppHome updates the app home view for a user.
-func (c *Client) updateAppHome(userID string) {
-	// In a full implementation, this would:
-	// 1. Get user's PRs from state manager
-	// 2. Build blocks using BuildDashboardBlocks
-	// 3. Call views.publish to update the home tab
-
-	// For now, just log.
-	slog.Debug("would update app home for user", "user", userID)
-}
-
-// PublishHomeView publishes a view to a user's app home.
+// PublishHomeView publishes a view to a user's app home with retry logic.
 func (c *Client) PublishHomeView(userID string, blocks []slack.Block) error {
 	view := slack.HomeTabViewRequest{
 		Type:   "home",
 		Blocks: slack.Blocks{BlockSet: blocks},
 	}
 
-	_, err := c.api.PublishView(userID, view, "")
+	err := retry.Do(
+		func() error {
+			_, err := c.api.PublishView(userID, view, "")
+			if err != nil {
+				if isRateLimitError(err) {
+					slog.Warn("rate limited publishing home view, backing off", "user", userID)
+					return err
+				}
+				// Don't retry on user_not_found
+				if strings.Contains(err.Error(), "user_not_found") {
+					return retry.Unrecoverable(err)
+				}
+				slog.Warn("failed to publish home view, retrying", "user", userID, "error", err)
+				return err
+			}
+			return nil
+		},
+		retry.Attempts(3),
+		retry.Delay(time.Second),
+		retry.MaxDelay(30*time.Second),
+		retry.DelayType(retry.BackOffDelay),
+		retry.LastErrorOnly(true),
+	)
 	if err != nil {
-		return fmt.Errorf("failed to publish home view: %w", err)
+		return fmt.Errorf("failed to publish home view after retries: %w", err)
 	}
 	return nil
 }

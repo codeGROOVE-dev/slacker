@@ -11,19 +11,34 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/codeGROOVE-dev/retry"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/go-github/v50/github"
 	"golang.org/x/oauth2"
 )
 
 // Client wraps the GitHub API client.
 type Client struct {
-	privateKey     *rsa.PrivateKey
-	client         *github.Client
-	appID          string
-	installationID int64
+	privateKey        *rsa.PrivateKey
+	client            *github.Client
+	appID             string
+	installationID    int64
+	installationToken string    // Store the installation token
+	tokenExpiry       time.Time // Track token expiration
+	tokenMutex        sync.RWMutex
+}
+
+// userAgentTransport adds a custom User-Agent header to requests.
+type userAgentTransport struct {
+	base http.RoundTripper
+}
+
+func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.Header.Set("User-Agent", "Slacker/1.0.0 (github.com/codeGROOVE-dev/slacker)")
+	return t.base.RoundTrip(req)
 }
 
 // New creates a new GitHub client configured as a GitHub App.
@@ -48,6 +63,11 @@ func New(ctx context.Context, appID, privateKeyPEM, installationID string) (*Cli
 		}
 	}
 
+	// Validate RSA key strength (minimum 2048 bits).
+	if key.N.BitLen() < 2048 {
+		return nil, fmt.Errorf("RSA key too weak: %d bits (minimum 2048 required)", key.N.BitLen())
+	}
+
 	// Parse installation ID.
 	instID, err := strconv.ParseInt(installationID, 10, 64)
 	if err != nil {
@@ -70,31 +90,66 @@ func New(ctx context.Context, appID, privateKeyPEM, installationID string) (*Cli
 
 // authenticate creates an authenticated GitHub client with retry logic.
 func (c *Client) authenticate(ctx context.Context) error {
-	slog.Info("authenticating GitHub App", "app_id", c.appID)
+	slog.Info("authenticating GitHub App",
+		"app_id", c.appID,
+		"installation_id", c.installationID)
 
 	// Create JWT for app authentication.
-	jwt, err := c.createJWT()
+	jwtToken, err := c.createJWT()
 	if err != nil {
+		slog.Error("failed to create JWT for GitHub App authentication",
+			"app_id", c.appID,
+			"error", err,
+			"hint", "Check that your GitHub private key is valid and in the correct format (PEM)")
 		return fmt.Errorf("failed to create JWT: %w", err)
 	}
 
-	// Create app client.
-	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: jwt})
+	// Create app client with custom user-agent.
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: jwtToken})
 	tc := oauth2.NewClient(ctx, ts)
+	tc.Transport = &userAgentTransport{base: tc.Transport}
 	appClient := github.NewClient(tc)
 
 	// Get installation token with retry.
 	var token *github.InstallationToken
 	err = retry.Do(
 		func() error {
+			var resp *github.Response
 			var err error
-			token, _, err = appClient.Apps.CreateInstallationToken(
+			token, resp, err = appClient.Apps.CreateInstallationToken(
 				ctx,
 				c.installationID,
 				&github.InstallationTokenOptions{},
 			)
 			if err != nil {
-				slog.Warn("failed to create installation token, retrying", "error", err)
+				// Provide helpful error messages based on the error type
+				if resp != nil {
+					switch resp.StatusCode {
+					case http.StatusNotFound:
+						slog.Error("GitHub App installation not found",
+							"installation_id", c.installationID,
+							"hint", "Check that GITHUB_INSTALLATION_ID is correct. Find it at: https://github.com/settings/installations")
+						return retry.Unrecoverable(fmt.Errorf("installation %d not found", c.installationID))
+					case http.StatusForbidden:
+						slog.Error("GitHub App lacks permissions",
+							"installation_id", c.installationID,
+							"hint", "Ensure the GitHub App has been installed and has the necessary permissions")
+						return retry.Unrecoverable(err)
+					case http.StatusUnauthorized:
+						slog.Error("GitHub App authentication failed",
+							"app_id", c.appID,
+							"hint", "Check that your GitHub App ID and private key are correct")
+						return retry.Unrecoverable(err)
+					default:
+						// Other errors might be transient
+						slog.Warn("unexpected status code from GitHub API",
+							"status_code", resp.StatusCode,
+							"installation_id", c.installationID)
+					}
+				}
+				slog.Warn("failed to create installation token, retrying",
+					"error", err,
+					"installation_id", c.installationID)
 				return err
 			}
 			return nil
@@ -103,6 +158,7 @@ func (c *Client) authenticate(ctx context.Context) error {
 		retry.Delay(time.Second),
 		retry.MaxDelay(30*time.Second),
 		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
 		retry.LastErrorOnly(true),
 		retry.Context(ctx),
 	)
@@ -110,24 +166,75 @@ func (c *Client) authenticate(ctx context.Context) error {
 		return fmt.Errorf("failed to create installation token after retries: %w", err)
 	}
 
-	// Create installation client.
+	// Create installation client with custom user-agent.
 	ts = oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token.GetToken()})
 	tc = oauth2.NewClient(ctx, ts)
+	tc.Transport = &userAgentTransport{base: tc.Transport}
 	c.client = github.NewClient(tc)
 
-	slog.Info("successfully authenticated GitHub App", "app_id", c.appID)
+	// Store the token with expiry (GitHub tokens expire after 1 hour).
+	c.tokenMutex.Lock()
+	c.installationToken = token.GetToken()
+	c.tokenExpiry = time.Now().Add(55 * time.Minute) // Refresh 5 minutes before expiry
+	c.tokenMutex.Unlock()
+
+	// Test the token by making a simple API call
+	// Use an endpoint that works with installation tokens
+	testCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, _, testErr := c.client.Apps.ListRepos(testCtx, nil)
+	if testErr != nil {
+		// Try a simpler test - just get the rate limit
+		_, _, testErr = c.client.RateLimits(testCtx)
+		if testErr != nil {
+			slog.Warn("token validation test failed", "error", testErr)
+		} else {
+			slog.Debug("token validated successfully (rate limit check)")
+		}
+	} else {
+		slog.Debug("token validated successfully (repo list check)")
+	}
+
+	slog.Info("successfully authenticated GitHub App",
+		"app_id", c.appID,
+		"token_length", len(token.GetToken()),
+		"token_prefix", token.GetToken()[:min(10, len(token.GetToken()))]+"...",
+		"token_expires_at", token.GetExpiresAt())
 	return nil
 }
 
 // createJWT creates a JWT for GitHub App authentication.
 func (c *Client) createJWT() (string, error) {
-	// This is a simplified version. In production, use a proper JWT library.
-	// For now, return a placeholder that would be replaced with actual JWT generation.
-	return "jwt-placeholder", nil
+	// Create claims with required fields for GitHub App authentication.
+	now := time.Now()
+	claims := jwt.RegisteredClaims{
+		IssuedAt:  jwt.NewNumericDate(now),
+		ExpiresAt: jwt.NewNumericDate(now.Add(10 * time.Minute)), // GitHub allows max 10 minutes
+		Issuer:    c.appID,
+	}
+
+	// Create token with claims.
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+
+	// Sign with private key.
+	tokenString, err := token.SignedString(c.privateKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to sign JWT: %w", err)
+	}
+
+	return tokenString, nil
 }
 
-// GetPR gets pull request details with retry logic.
-func (c *Client) GetPR(ctx context.Context, owner, repo string, number int) (*github.PullRequest, error) {
+// PR gets pull request details with retry logic.
+func (c *Client) PR(ctx context.Context, owner, repo string, number int) (*github.PullRequest, error) {
+	// Validate inputs.
+	if owner == "" || repo == "" {
+		return nil, fmt.Errorf("invalid owner or repo: owner=%q, repo=%q", owner, repo)
+	}
+	if number <= 0 {
+		return nil, fmt.Errorf("invalid PR number: %d", number)
+	}
+
 	slog.Info("fetching PR", "owner", owner, "repo", repo, "number", number)
 
 	var pr *github.PullRequest
@@ -152,6 +259,7 @@ func (c *Client) GetPR(ctx context.Context, owner, repo string, number int) (*gi
 		retry.Delay(time.Second),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
 		retry.LastErrorOnly(true),
 		retry.Context(ctx),
 	)
@@ -161,8 +269,16 @@ func (c *Client) GetPR(ctx context.Context, owner, repo string, number int) (*gi
 	return pr, nil
 }
 
-// GetPRReviews gets reviews for a pull request with retry logic.
-func (c *Client) GetPRReviews(ctx context.Context, owner, repo string, number int) ([]*github.PullRequestReview, error) {
+// PRReviews gets reviews for a pull request with retry logic.
+func (c *Client) PRReviews(ctx context.Context, owner, repo string, number int) ([]*github.PullRequestReview, error) {
+	// Validate inputs.
+	if owner == "" || repo == "" {
+		return nil, fmt.Errorf("invalid owner or repo: owner=%q, repo=%q", owner, repo)
+	}
+	if number <= 0 {
+		return nil, fmt.Errorf("invalid PR number: %d", number)
+	}
+
 	slog.Info("fetching PR reviews", "owner", owner, "repo", repo, "number", number)
 
 	var reviews []*github.PullRequestReview
@@ -182,6 +298,7 @@ func (c *Client) GetPRReviews(ctx context.Context, owner, repo string, number in
 		retry.Delay(time.Second),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
 		retry.LastErrorOnly(true),
 		retry.Context(ctx),
 	)
@@ -193,11 +310,19 @@ func (c *Client) GetPRReviews(ctx context.Context, owner, repo string, number in
 	return reviews, nil
 }
 
-// GetPRChecks gets check runs for a pull request with retry logic.
-func (c *Client) GetPRChecks(ctx context.Context, owner, repo string, number int) (*github.ListCheckRunsResults, error) {
+// PRChecks gets check runs for a pull request with retry logic.
+func (c *Client) PRChecks(ctx context.Context, owner, repo string, number int) (*github.ListCheckRunsResults, error) {
+	// Validate inputs.
+	if owner == "" || repo == "" {
+		return nil, fmt.Errorf("invalid owner or repo: owner=%q, repo=%q", owner, repo)
+	}
+	if number <= 0 {
+		return nil, fmt.Errorf("invalid PR number: %d", number)
+	}
+
 	slog.Info("fetching PR checks", "owner", owner, "repo", repo, "number", number)
 
-	pr, err := c.GetPR(ctx, owner, repo, number)
+	pr, err := c.PR(ctx, owner, repo, number)
 	if err != nil {
 		return nil, err
 	}
@@ -225,6 +350,7 @@ func (c *Client) GetPRChecks(ctx context.Context, owner, repo string, number int
 		retry.Delay(time.Second),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
 		retry.LastErrorOnly(true),
 		retry.Context(ctx),
 	)
@@ -240,13 +366,17 @@ func (c *Client) GetPRChecks(ctx context.Context, owner, repo string, number int
 	return checkRuns, nil
 }
 
-// GetPRState determines the current state of a PR.
-func (c *Client) GetPRState(ctx context.Context, owner, repo string, number int) (string, []string, error) {
-	pr, err := c.GetPR(ctx, owner, repo, number)
+// PRState determines the current state of a PR.
+func (c *Client) PRState(ctx context.Context, owner, repo string, number int) (state string, blockedOn []string, err error) {
+	pr, err := c.PR(ctx, owner, repo, number)
 	if err != nil {
 		return "", nil, err
 	}
 
+	// Validate PR is not nil
+	if pr == nil {
+		return "", nil, errors.New("PR is nil")
+	}
 	// Check if merged or closed.
 	if pr.GetMerged() {
 		return "pray", nil, nil // Merged
@@ -256,7 +386,7 @@ func (c *Client) GetPRState(ctx context.Context, owner, repo string, number int)
 	}
 
 	// Get check runs.
-	checks, err := c.GetPRChecks(ctx, owner, repo, number)
+	checks, err := c.PRChecks(ctx, owner, repo, number)
 	if err != nil {
 		slog.Warn("failed to get checks for PR state",
 			"owner", owner, "repo", repo, "number", number, "error", err)
@@ -281,7 +411,7 @@ func (c *Client) GetPRState(ctx context.Context, owner, repo string, number int)
 	}
 
 	// Get reviews.
-	reviews, err := c.GetPRReviews(ctx, owner, repo, number)
+	reviews, err := c.PRReviews(ctx, owner, repo, number)
 	if err != nil {
 		slog.Warn("failed to get reviews for PR state",
 			"owner", owner, "repo", repo, "number", number, "error", err)
@@ -307,63 +437,34 @@ func (c *Client) GetPRState(ctx context.Context, owner, repo string, number int)
 	}
 
 	// Determine state and who it's blocked on.
-	var state string
-	var blockedOn []string
-
+	// Priority order: running tests > broken tests > needs changes > approved > waiting
 	if checksRunning {
-		state = "test_tube" // Tests running
-	} else if checksFailed {
-		state = "broken_heart"                        // Tests broken
-		blockedOn = []string{pr.GetUser().GetLogin()} // Blocked on author
-	} else if needsChanges {
-		state = "carpentry_saw"                       // Needs changes
-		blockedOn = []string{pr.GetUser().GetLogin()} // Blocked on author
-	} else if hasApproval {
-		state = "check"                               // Approved
-		blockedOn = []string{pr.GetUser().GetLogin()} // Author can merge
-	} else {
-		state = "hourglass" // Waiting for review
-		// Get requested reviewers.
-		for _, reviewer := range pr.RequestedReviewers {
-			blockedOn = append(blockedOn, reviewer.GetLogin())
-		}
-		for _, team := range pr.RequestedTeams {
-			blockedOn = append(blockedOn, "team:"+team.GetSlug())
-		}
+		return "test_tube", nil, nil // Tests running, no one blocked
 	}
 
-	return state, blockedOn, nil
-}
+	author := pr.GetUser().GetLogin()
 
-// WebhookHandler handles GitHub webhooks.
-func (c *Client) WebhookHandler(w http.ResponseWriter, r *http.Request) {
-	payload, err := github.ValidatePayload(r, []byte("")) // Would use webhook secret here
-	if err != nil {
-		slog.Warn("failed to validate webhook payload", "error", err)
-		w.WriteHeader(http.StatusBadRequest)
-		return
+	if checksFailed {
+		return "broken_heart", []string{author}, nil // Tests broken, blocked on author
 	}
 
-	event, err := github.ParseWebHook(github.WebHookType(r), payload)
-	if err != nil {
-		slog.Warn("failed to parse webhook", "error", err)
-		w.WriteHeader(http.StatusBadRequest)
-		return
+	if needsChanges {
+		return "carpentry_saw", []string{author}, nil // Changes requested, blocked on author
 	}
 
-	switch evt := event.(type) {
-	case *github.PullRequestEvent:
-		slog.Info("PR webhook event",
-			"repo", evt.GetRepo().GetFullName(),
-			"number", evt.GetNumber(),
-			"action", evt.GetAction())
-	case *github.PullRequestReviewEvent:
-		slog.Info("PR review webhook event",
-			"repo", evt.GetRepo().GetFullName(),
-			"number", evt.GetPullRequest().GetNumber())
+	if hasApproval {
+		return "check", []string{author}, nil // Approved, author can merge
 	}
 
-	w.WriteHeader(http.StatusOK)
+	// Waiting for review - collect all requested reviewers
+	for _, reviewer := range pr.RequestedReviewers {
+		blockedOn = append(blockedOn, reviewer.GetLogin())
+	}
+	for _, team := range pr.RequestedTeams {
+		blockedOn = append(blockedOn, "team:"+team.GetSlug())
+	}
+
+	return "hourglass", blockedOn, nil
 }
 
 // PRInfo contains simplified PR information.
@@ -380,7 +481,40 @@ type PRInfo struct {
 	Number    int
 }
 
-// GetClient returns the underlying GitHub client.
-func (c *Client) GetClient() *github.Client {
+// Client returns the underlying GitHub client.
+func (c *Client) Client() *github.Client {
 	return c.client
+}
+
+// RefreshToken forces a token refresh.
+func (c *Client) RefreshToken(ctx context.Context) error {
+	slog.Info("forcing GitHub token refresh")
+	return c.authenticate(ctx)
+}
+
+// InstallationToken returns the current installation token, refreshing if needed.
+func (c *Client) InstallationToken(ctx context.Context) string {
+	c.tokenMutex.RLock()
+	token := c.installationToken
+	expiry := c.tokenExpiry
+	c.tokenMutex.RUnlock()
+
+	// Check if token needs refresh.
+	if time.Now().After(expiry) {
+		slog.Info("GitHub installation token expired, refreshing",
+			"old_token_prefix", token[:min(10, len(token))]+"...",
+			"expiry_was", expiry)
+		if err := c.authenticate(ctx); err != nil {
+			slog.Error("failed to refresh GitHub token", "error", err)
+			// Return old token as fallback (might still work for a bit).
+			return token
+		}
+		c.tokenMutex.RLock()
+		token = c.installationToken
+		c.tokenMutex.RUnlock()
+		slog.Info("GitHub token refreshed successfully",
+			"new_token_prefix", token[:min(10, len(token))]+"...")
+	}
+
+	return token
 }

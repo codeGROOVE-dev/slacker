@@ -110,6 +110,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 		retry.Delay(time.Second),
 		retry.MaxDelay(30*time.Second),
 		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
 		retry.LastErrorOnly(true),
 		retry.Context(ctx),
 	)
@@ -151,16 +152,16 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 	return nil
 }
 
-// GetConfig returns the configuration for a GitHub org.
-func (m *Manager) GetConfig(org string) (*RepoConfig, bool) {
+// Config returns the configuration for a GitHub org.
+func (m *Manager) Config(org string) (*RepoConfig, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	config, exists := m.configs[org]
 	return config, exists
 }
 
-// GetChannelsForRepo returns the Slack channels configured for a specific repo.
-func (m *Manager) GetChannelsForRepo(org, repo string) []string {
+// ChannelsForRepo returns the Slack channels configured for a specific repo.
+func (m *Manager) ChannelsForRepo(org, repo string) []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -175,8 +176,8 @@ func (m *Manager) GetChannelsForRepo(org, repo string) []string {
 	return nil
 }
 
-// GetPrefix returns the prefix for messages in an org.
-func (m *Manager) GetPrefix(org string) string {
+// Prefix returns the prefix for messages in an org.
+func (m *Manager) Prefix(org string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
