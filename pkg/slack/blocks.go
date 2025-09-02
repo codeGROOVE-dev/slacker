@@ -39,11 +39,11 @@ func BuildDashboardBlocks(userID string, prs []*state.PRState) []slack.Block {
 
 	// Add blocked on you section.
 	if len(blockedOnYou) > 0 {
-		blocks = append(blocks, slack.NewDividerBlock())
-		blocks = append(blocks, slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn", "*🔥 Blocked on you:*", false, false),
-			nil, nil,
-		))
+		blocks = append(blocks, slack.NewDividerBlock(),
+			slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn", "*🔥 Blocked on you:*", false, false),
+				nil, nil,
+			))
 		for _, pr := range blockedOnYou {
 			blocks = append(blocks, createPRBlock(pr))
 		}
@@ -51,11 +51,11 @@ func BuildDashboardBlocks(userID string, prs []*state.PRState) []slack.Block {
 
 	// Add waiting on others section.
 	if len(waitingOnOthers) > 0 {
-		blocks = append(blocks, slack.NewDividerBlock())
-		blocks = append(blocks, slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn", "*⏳ Waiting on others:*", false, false),
-			nil, nil,
-		))
+		blocks = append(blocks, slack.NewDividerBlock(),
+			slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn", "*⏳ Waiting on others:*", false, false),
+				nil, nil,
+			))
 		for _, pr := range waitingOnOthers {
 			blocks = append(blocks, createPRBlock(pr))
 		}
@@ -63,26 +63,26 @@ func BuildDashboardBlocks(userID string, prs []*state.PRState) []slack.Block {
 
 	// Add other PRs.
 	if len(other) > 0 {
-		blocks = append(blocks, slack.NewDividerBlock())
-		blocks = append(blocks, slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn", "*Other PRs:*", false, false),
-			nil, nil,
-		))
+		blocks = append(blocks, slack.NewDividerBlock(),
+			slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn", "*Other PRs:*", false, false),
+				nil, nil,
+			))
 		for _, pr := range other {
 			blocks = append(blocks, createPRBlock(pr))
 		}
 	}
 
 	// Add footer with link to web dashboard.
-	blocks = append(blocks, slack.NewDividerBlock())
-	blocks = append(blocks, slack.NewContextBlock(
-		"",
-		slack.NewTextBlockObject("mrkdwn",
-			fmt.Sprintf("Last updated: %s | <https://dash.ready-to-review.dev/?user=%s|View web dashboard>",
-				time.Now().Format("3:04 PM"), userID),
-			false, false,
-		),
-	))
+	blocks = append(blocks, slack.NewDividerBlock(),
+		slack.NewContextBlock(
+			"",
+			slack.NewTextBlockObject("mrkdwn",
+				fmt.Sprintf("Last updated: %s | <https://dash.ready-to-review.dev/?user=%s|View web dashboard>",
+					time.Now().Format("3:04 PM"), userID),
+				false, false,
+			),
+		))
 
 	return blocks
 }

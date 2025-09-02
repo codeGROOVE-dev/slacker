@@ -41,7 +41,7 @@ func (m *Manager) Run(ctx context.Context) error {
 }
 
 // checkNotifications checks if any users need notifications.
-func (m *Manager) checkNotifications(ctx context.Context) {
+func (*Manager) checkNotifications(ctx context.Context) {
 	// This would iterate through workspaces and users.
 	// For now, we'll implement a simplified version.
 	slog.Debug("checking for pending notifications")
@@ -56,7 +56,7 @@ func (m *Manager) checkNotifications(ctx context.Context) {
 // NotifyUser sends a notification to a user about a PR.
 func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID string, pr *state.PRState) error {
 	// Get user preferences.
-	prefs := m.stateManager.GetUserPreferences(workspaceID, userID)
+	prefs := m.stateManager.UserPreferences(workspaceID, userID)
 
 	// Check if real-time notifications are enabled.
 	if !prefs.RealTimeNotifications {
@@ -91,7 +91,7 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID string, pr
 }
 
 // formatNotificationMessage formats a notification message for a PR.
-func (m *Manager) formatNotificationMessage(pr *state.PRState) string {
+func (*Manager) formatNotificationMessage(pr *state.PRState) string {
 	var action string
 	switch pr.State {
 	case "broken_heart":
@@ -118,7 +118,7 @@ func (m *Manager) formatNotificationMessage(pr *state.PRState) string {
 }
 
 // CheckDailyReminders checks and sends daily reminders.
-func (m *Manager) CheckDailyReminders(ctx context.Context, workspaceID string) error {
+func (*Manager) CheckDailyReminders(ctx context.Context, workspaceID string) error {
 	// This would be called periodically to send daily reminders.
 	// It would check each user's timezone and preferences.
 	slog.Debug("checking daily reminders", "workspace", workspaceID)

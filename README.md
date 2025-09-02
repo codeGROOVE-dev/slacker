@@ -36,9 +36,6 @@ SLACK_SIGNING_SECRET=...
 GITHUB_APP_ID=...
 GITHUB_PRIVATE_KEY=...
 GITHUB_INSTALLATION_ID=...
-SPRINKLER_URL=wss://hook.g.robot-army.dev/ws  # optional
-PORT=9119                                       # optional
-DATA_DIR=./data                                 # optional
 ```
 
 Configure repos by adding `.github/codeGROOVE/slack.yaml`:
@@ -53,10 +50,6 @@ repos:
 ```
 
 ## Usage
-
-```bash
-make run-server
-```
 
 Slack commands:
 - `/r2r dashboard` - View your PR dashboard
@@ -78,7 +71,3 @@ make build      # Build binary
 
 - [sprinkler](https://github.com/codeGROOVE-dev/sprinkler) - WebSocket hub for GitHub webhooks
 - [turnclient](https://github.com/codeGROOVE-dev/turnclient) - PR state analysis
-
-## License
-
-MIT

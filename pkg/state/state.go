@@ -62,8 +62,8 @@ func New(dataDir string) *Manager {
 		saveChan: make(chan string, 100),
 	}
 
-	// Create data directory if it doesn't exist.
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+	// Create data directory if it doesn't exist with restrictive permissions.
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		slog.Error("failed to create data directory", "error", err)
 	}
 
@@ -73,8 +73,8 @@ func New(dataDir string) *Manager {
 	return m
 }
 
-// GetUserPreferences returns user preferences.
-func (m *Manager) GetUserPreferences(workspaceID, userID string) UserPreferences {
+// UserPreferences returns user preferences.
+func (m *Manager) UserPreferences(workspaceID, userID string) UserPreferences {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -128,8 +128,8 @@ func (m *Manager) SetUserPreferences(workspaceID, userID string, prefs UserPrefe
 	}
 }
 
-// GetPRState returns the state of a PR.
-func (m *Manager) GetPRState(workspaceID, owner, repo string, number int) (*PRState, bool) {
+// PRState returns the state of a PR.
+func (m *Manager) PRState(workspaceID, owner, repo string, number int) (*PRState, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -184,8 +184,8 @@ func (m *Manager) SetPRState(workspaceID string, pr *PRState) {
 	}
 }
 
-// GetUserPRs returns PRs associated with a user.
-func (m *Manager) GetUserPRs(workspaceID, userID string) []*PRState {
+// UserPRs returns PRs associated with a user.
+func (m *Manager) UserPRs(workspaceID, userID string) []*PRState {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -265,7 +265,14 @@ func (m *Manager) loadWorkspaceData(workspaceID string) {
 
 // loadWorkspaceDataLocked loads workspace data from disk (must hold lock).
 func (m *Manager) loadWorkspaceDataLocked(workspaceID string) *WorkspaceData {
-	filename := filepath.Join(m.dataDir, fmt.Sprintf("%s.json.gz", workspaceID))
+	// Sanitize workspaceID to prevent path traversal.
+	safeID := filepath.Base(workspaceID)
+	if safeID != workspaceID || safeID == "." || safeID == ".." {
+		slog.Error("invalid workspace ID", "workspace_id", workspaceID)
+		return nil
+	}
+
+	filename := filepath.Join(m.dataDir, fmt.Sprintf("%s.json.gz", safeID))
 
 	file, err := os.Open(filename)
 	if err != nil {
@@ -346,10 +353,17 @@ func (m *Manager) saveWorkspaceData(workspaceID string) {
 		return
 	}
 
-	filename := filepath.Join(m.dataDir, fmt.Sprintf("%s.json.gz", workspaceID))
+	// Sanitize workspaceID to prevent path traversal.
+	safeID := filepath.Base(workspaceID)
+	if safeID != workspaceID || safeID == "." || safeID == ".." {
+		slog.Error("invalid workspace ID", "workspace_id", workspaceID)
+		return
+	}
+
+	filename := filepath.Join(m.dataDir, fmt.Sprintf("%s.json.gz", safeID))
 	tempFile := filename + ".tmp"
 
-	file, err := os.Create(tempFile)
+	file, err := os.OpenFile(tempFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		slog.Error("failed to create temp file", "error", err)
 		return
