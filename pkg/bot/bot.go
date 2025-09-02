@@ -134,21 +134,48 @@ func (c *Coordinator) Run(ctx context.Context) error {
 			return fmt.Errorf("failed to connect to sprinkler after retries: %w", err)
 		}
 
-		// Read messages until connection fails
+		// Create a channel for messages
+		msgChan := make(chan SprinklerMessage, 1)
+		errChan := make(chan error, 1)
+		
+		// Start a goroutine to read messages
+		go func() {
+			for {
+				var msg SprinklerMessage
+				// Set read deadline - this will be reset by ping/pong handlers
+				if err := c.wsConn.SetReadDeadline(time.Now().Add(90 * time.Second)); err != nil {
+					slog.Debug("failed to set read deadline", "error", err)
+				}
+
+				if err := c.wsConn.ReadJSON(&msg); err != nil {
+					errChan <- err
+					return
+				}
+				msgChan <- msg
+			}
+		}()
+
+		// Read messages until connection fails or context is cancelled
 		for {
 			select {
 			case <-ctx.Done():
+				slog.Info("context cancelled, closing WebSocket")
+				// Close the WebSocket to stop the read goroutine
+				if c.wsConn != nil {
+					c.wsConn.Close()
+				}
 				return ctx.Err()
-			default:
-			}
+			case msg := <-msgChan:
+				// Successfully read a message, log it
+				slog.Debug("received WebSocket message", "event", msg.Event, "repo", msg.Repo, "has_payload", len(msg.Payload) > 0)
 
-			var msg SprinklerMessage
-			// Set read deadline - this will be reset by ping/pong handlers
-			if err := c.wsConn.SetReadDeadline(time.Now().Add(90 * time.Second)); err != nil {
-				slog.Debug("failed to set read deadline", "error", err)
-			}
-
-			if err := c.wsConn.ReadJSON(&msg); err != nil {
+				// Process the event asynchronously
+				go func(msg SprinklerMessage) {
+					if err := c.processEventSafely(ctx, msg); err != nil {
+						slog.Error("error processing event", "error", err, "event", msg.Event)
+					}
+				}(msg)
+			case err := <-errChan:
 				// Check for specific close codes
 				var closeErr *websocket.CloseError
 				if errors.As(err, &closeErr) {
@@ -196,16 +223,6 @@ func (c *Coordinator) Run(ctx context.Context) error {
 				}
 				break // Break inner loop to reconnect
 			}
-
-			// Successfully read a message, log it
-			slog.Debug("received WebSocket message", "event", msg.Event, "repo", msg.Repo, "has_payload", len(msg.Payload) > 0)
-
-			// Process the event asynchronously
-			go func(msg SprinklerMessage) {
-				if err := c.processEventSafely(ctx, msg); err != nil {
-					slog.Error("error processing event", "error", err, "event", msg.Event)
-				}
-			}(msg)
 		}
 	}
 }
@@ -386,32 +403,26 @@ func (c *Coordinator) connectToSprinkler(ctx context.Context) error {
 		"remote_addr", conn.RemoteAddr().String())
 
 	// Send subscription message to sprinkler
-	// The server expects us to tell it what repos we want to subscribe to
-	// Try to get list of repos from GitHub if possible
-	repos := []string{"*"} // Default to all repos
+	// The server expects us to tell it which organization we're subscribing to
+	organization := c.github.Organization()
+	if organization == "" {
+		slog.Error("failed to detect organization from GitHub installation")
+		return fmt.Errorf("organization not detected from GitHub installation")
+	}
 
 	// Log what we're subscribing to
 	slog.Info("preparing subscription",
-		"repos", repos,
-		"note", "Using wildcard '*' for all repos - server may require specific repo names")
+		"organization", organization)
 
 	subscription := map[string]interface{}{
-		"type": "subscribe",
-		"events": []string{
-			"pull_request",
-			"pull_request_review",
-			"check_run",
-			"check_suite",
-			"push",
-		},
-		"repos": repos,
+		"organization": organization,
 	}
 
 	if err := conn.WriteJSON(subscription); err != nil {
-		slog.Error("failed to send subscription", "error", err)
+		slog.Error("failed to send subscription", "error", err, "organization", organization)
 		return fmt.Errorf("failed to send subscription: %w", err)
 	}
-	slog.Info("sent subscription to sprinkler", "subscription", subscription)
+	slog.Info("sent subscription to sprinkler", "organization", organization)
 
 	// Try to read subscription response (but don't fail if none comes)
 	// Some servers might not send a response, just start sending events

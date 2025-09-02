@@ -28,6 +28,7 @@ type Client struct {
 	installationID    int64
 	installationToken string    // Store the installation token
 	tokenExpiry       time.Time // Track token expiration
+	organization      string    // Store the organization/account name
 	tokenMutex        sync.RWMutex
 }
 
@@ -164,6 +165,20 @@ func (c *Client) authenticate(ctx context.Context) error {
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create installation token after retries: %w", err)
+	}
+
+	// Get installation details to find the organization
+	installation, _, err := appClient.Apps.GetInstallation(ctx, c.installationID)
+	if err != nil {
+		slog.Warn("failed to get installation details", "error", err)
+		// Don't fail here, we can still work without knowing the org
+	} else if installation.Account != nil && installation.Account.Login != nil {
+		c.tokenMutex.Lock()
+		c.organization = *installation.Account.Login
+		c.tokenMutex.Unlock()
+		slog.Info("detected organization from installation", 
+			"organization", c.organization,
+			"installation_id", c.installationID)
 	}
 
 	// Create installation client with custom user-agent.
@@ -490,6 +505,13 @@ func (c *Client) Client() *github.Client {
 func (c *Client) RefreshToken(ctx context.Context) error {
 	slog.Info("forcing GitHub token refresh")
 	return c.authenticate(ctx)
+}
+
+// Organization returns the organization associated with this installation.
+func (c *Client) Organization() string {
+	c.tokenMutex.RLock()
+	defer c.tokenMutex.RUnlock()
+	return c.organization
 }
 
 // InstallationToken returns the current installation token, refreshing if needed.
