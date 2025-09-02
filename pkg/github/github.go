@@ -176,7 +176,7 @@ func (c *Client) authenticate(ctx context.Context) error {
 		c.tokenMutex.Lock()
 		c.organization = *installation.Account.Login
 		c.tokenMutex.Unlock()
-		slog.Info("detected organization from installation", 
+		slog.Info("detected organization from installation",
 			"organization", c.organization,
 			"installation_id", c.installationID)
 	}

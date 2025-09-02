@@ -41,7 +41,7 @@ func main() {
 		<-sigChan
 		slog.Info("received shutdown signal, gracefully stopping")
 		cancel()
-		
+
 		// Force exit after 10 seconds if graceful shutdown doesn't complete
 		time.Sleep(10 * time.Second)
 		slog.Error("graceful shutdown timeout, forcing exit")
@@ -69,6 +69,7 @@ func main() {
 	githubClient, err := github.New(ctx, cfg.GitHubAppID, cfg.GitHubPrivateKey, cfg.GitHubInstallationID)
 	if err != nil {
 		slog.Error("failed to initialize GitHub client", "error", err)
+		cancel() // Ensure cleanup happens before exit
 		os.Exit(1)
 	}
 
@@ -133,9 +134,9 @@ func main() {
 		return nil
 	})
 
-	// Start bot coordinator.
+	// Start bot coordinator using the sprinkler client library.
 	eg.Go(func() error {
-		return botCoordinator.Run(ctx)
+		return botCoordinator.RunWithSprinklerClient(ctx)
 	})
 
 	// Start notification scheduler.
