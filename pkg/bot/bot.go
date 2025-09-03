@@ -108,8 +108,8 @@ func (c *Coordinator) processEvent(ctx context.Context, msg SprinklerMessage) er
 		// This is simplified - in production, we'd need to map commits to PRs.
 		slog.Debug("received check event", "owner", owner, "repo", repo)
 	case "push":
-		// Check if this is a push to .github repo.
-		if repo == ".github" {
+		// Check if this is a push to .codeGROOVE repo.
+		if repo == ".codeGROOVE" {
 			slog.Info("reloading config", "org", owner)
 			if err := c.configManager.ReloadConfig(ctx, owner); err != nil {
 				slog.Warn("failed to reload config", "error", err)

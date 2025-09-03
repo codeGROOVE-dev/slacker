@@ -31,7 +31,7 @@ For dailly reminders: If it's between 8am-9am local time, and it's been more tha
 
 ## CHANNEL NOTIFICATIONS FEATURE
 ================================
-For a given GitHub org, there will be a YAML configuration file in their /.github repo, at codeGROOVE/slack.yaml; so for xyz org, you would find the YAML configuration file named: https://github.com/xyz/.github - in a file named /codeGROOVE/slack.yaml.
+For a given GitHub org, there will be a YAML configuration file in their /.codeGROOVE repo, at slack.yaml; so for xyz org, you would find the YAML configuration file named: https://github.com/xyz/.codeGROOVE - in a file named /slack.yaml.
 
 We'll read this file at startup, and whenever we see a PR merged to this repo. We can get those PR notifications using https://github.com/codeGROOVE-dev/sprinkler
 

@@ -36,7 +36,7 @@ Ready to Review is an elegant modern Slack bot written in Go that integrates wit
 - Format: `:postal_horn: Update README.md • goose#51 by @slackUser - waiting for your review`
 
 ### 4. Configuration
-- Read YAML config from `/.github/codeGROOVE/slack.yaml` in target repos
+- Read YAML config from `/.codeGROOVE/slack.yaml` in target repos
 - Config format:
 ```yaml
 global:

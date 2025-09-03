@@ -38,7 +38,7 @@ GITHUB_PRIVATE_KEY=...
 GITHUB_INSTALLATION_ID=...
 ```
 
-Configure repos by adding `.github/codeGROOVE/slack.yaml`:
+Configure repos by adding `.codeGROOVE/slack.yaml`:
 
 ```yaml
 global:

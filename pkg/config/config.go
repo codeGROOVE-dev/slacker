@@ -77,8 +77,8 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 			content, _, _, err = m.client.Repositories.GetContents(
 				ctx,
 				org,
-				".github",
-				"codeGROOVE/slack.yaml",
+				".codeGROOVE",
+				"slack.yaml",
 				nil,
 			)
 			if err != nil {
@@ -188,7 +188,7 @@ func (m *Manager) Prefix(org string) string {
 	return config.Global.Prefix
 }
 
-// ReloadConfig reloads the configuration for an org (e.g., when .github repo is updated).
+// ReloadConfig reloads the configuration for an org (e.g., when .codeGROOVE repo is updated).
 func (m *Manager) ReloadConfig(ctx context.Context, org string) error {
 	slog.Info("reloading config", "org", org)
 	return m.LoadConfig(ctx, org)
