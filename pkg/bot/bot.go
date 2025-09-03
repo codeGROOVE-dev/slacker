@@ -49,6 +49,16 @@ func New(
 	// Set GitHub client in config manager.
 	configManager.SetGitHubClient(githubClient.Client())
 
+	// Get workspace info and set in config manager for validation.
+	if teamInfo, err := slackClient.GetWorkspaceInfo(ctx); err == nil {
+		// Use the team domain as workspace identifier
+		workspaceName := teamInfo.Domain + ".slack.com"
+		configManager.SetWorkspaceName(workspaceName)
+		slog.Info("set workspace name for config validation", "workspace", workspaceName)
+	} else {
+		slog.Warn("failed to get workspace info, config validation disabled", "error", err)
+	}
+
 	return c
 }
 
@@ -146,17 +156,36 @@ func (c *Coordinator) handlePullRequestEvent(ctx context.Context, owner, repo st
 
 	// Get channels for this repo.
 	channels := c.configManager.ChannelsForRepo(owner, repo)
+	slog.Info("evaluating PR for channel notifications",
+		"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+		"action", event.Action,
+		"title", event.PullRequest.Title,
+		"author", event.PullRequest.User.Login,
+		"configured_channels", len(channels),
+		"channels", channels)
+
 	if len(channels) == 0 {
-		slog.Debug("no channels configured", "owner", owner, "repo", repo)
+		slog.Info("no channels configured for PR - skipping channel notifications",
+			"owner", owner,
+			"repo", repo,
+			"pr_number", event.Number)
 		return
 	}
 
 	// Get PR state.
 	prState, blockedOn, err := c.github.PRState(ctx, owner, repo, event.Number)
 	if err != nil {
-		slog.Warn("failed to get PR state", "error", err)
+		slog.Error("failed to get PR state - cannot process notifications",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+			"error", err)
 		return
 	}
+
+	slog.Info("retrieved PR state for notification processing",
+		"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+		"state", prState,
+		"blocked_on_users", len(blockedOn),
+		"blocked_on", blockedOn)
 
 	// For now, use a default workspace ID.
 	// In production, this would map channels to workspaces.
@@ -182,53 +211,143 @@ func (c *Coordinator) handlePullRequestEvent(ctx context.Context, owner, repo st
 	}
 
 	// Handle based on action.
+	slog.Info("processing PR action",
+		"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+		"action", event.Action,
+		"will_process", true)
+
 	switch event.Action {
 	case "opened", "reopened":
+		slog.Info("creating channel notifications for new/reopened PR",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+			"channels_to_notify", len(channels),
+			"channels", channels)
+
 		// Create threads in configured channels.
 		for _, channel := range channels {
 			if pr.ThreadTS != "" {
+				slog.Debug("PR already has thread, skipping channel",
+					"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+					"channel", channel,
+					"existing_thread", pr.ThreadTS)
 				continue
 			}
+
+			slog.Info("creating thread in channel",
+				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+				"channel", channel,
+				"pr_title", event.PullRequest.Title,
+				"pr_author", event.PullRequest.User.Login)
+
 			// Create new thread.
 			threadTS, err := c.createPRThread(ctx, channel, owner, repo, event.Number, event.PullRequest)
 			if err != nil {
-				slog.Warn("failed to create thread", "channel", channel, "error", err)
+				slog.Error("failed to create thread in channel",
+					"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+					"channel", channel,
+					"error", err,
+					"will_try_next_channel", true)
 				continue
 			}
 			pr.ThreadTS = threadTS
 			pr.ChannelID = channel
-			slog.Info("created thread", "channel", channel, "owner", owner, "repo", repo, "number", event.Number)
+
+			// Track that we notified users in this channel
+			c.stateManager.UpdateChannelNotification(workspaceID, owner, repo, event.Number)
+
+			slog.Info("successfully created channel notification thread",
+				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+				"channel", channel,
+				"thread_ts", threadTS,
+				"channel_notification_tracked", true,
+				"users_will_be_delayed_for_dms", true)
 		}
 
 	case "closed":
+		slog.Info("updating PR state for closed PR",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+			"has_thread", pr.ThreadTS != "",
+			"channel", pr.ChannelID)
+
 		// Update state in existing thread.
 		if pr.ThreadTS != "" {
 			if err := c.slack.UpdateReactions(ctx, pr.ChannelID, pr.ThreadTS, prState); err != nil {
-				slog.Warn("failed to update reaction", "error", err)
+				slog.Error("failed to update reaction for closed PR",
+					"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+					"channel", pr.ChannelID,
+					"thread_ts", pr.ThreadTS,
+					"error", err)
+			} else {
+				slog.Info("updated channel thread for closed PR",
+					"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+					"channel", pr.ChannelID,
+					"new_state", prState)
 			}
 		}
 
 	case "synchronize", "edited":
+		slog.Info("updating PR state for synchronized/edited PR",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+			"has_thread", pr.ThreadTS != "",
+			"channel", pr.ChannelID,
+			"new_state", prState)
+
 		// Update state.
 		if pr.ThreadTS != "" {
 			if err := c.slack.UpdateReactions(ctx, pr.ChannelID, pr.ThreadTS, prState); err != nil {
-				slog.Warn("failed to update reaction", "error", err)
+				slog.Error("failed to update reaction for synchronized/edited PR",
+					"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+					"channel", pr.ChannelID,
+					"thread_ts", pr.ThreadTS,
+					"error", err)
+			} else {
+				slog.Info("updated channel thread for synchronized/edited PR",
+					"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+					"channel", pr.ChannelID,
+					"new_state", prState)
 			}
 		}
 	default:
-		// Other PR actions are not handled
-		slog.Debug("unhandled PR action", "action", event.Action)
+		slog.Info("unhandled PR action - no processing required",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+			"action", event.Action,
+			"ignored", true)
 	}
 
 	// Save PR state.
 	c.stateManager.SetPRState(workspaceID, pr)
 
+	slog.Info("PR state updated and saved",
+		"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+		"workspace", workspaceID,
+		"final_state", prState,
+		"thread_ts", pr.ThreadTS,
+		"channel", pr.ChannelID)
+
 	// Check if we need to notify blocked users.
-	for _, userID := range blockedOn {
-		// In production, map GitHub username to Slack user ID.
-		// Then update their app home view.
-		slog.Info("PR blocked on user", "owner", owner, "repo", repo, "number", event.Number, "user", userID)
-		// Would call: c.updateUserHome(ctx, workspaceID, slackUserID)
+	if len(blockedOn) > 0 {
+		slog.Info("processing blocked users for PR notifications",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+			"blocked_users_count", len(blockedOn),
+			"blocked_users", blockedOn,
+			"pr_state", prState)
+
+		for _, userID := range blockedOn {
+			// In production, map GitHub username to Slack user ID.
+			// Then update their app home view.
+			slog.Info("user is blocking PR - potential notification candidate",
+				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+				"github_user", userID,
+				"pr_state", prState,
+				"pr_author", event.PullRequest.User.Login,
+				"needs_slack_mapping", true)
+			// Would call: c.updateUserHome(ctx, workspaceID, slackUserID)
+			// Would also call: c.notifier.NotifyUser(ctx, workspaceID, slackUserID, pr.ChannelID, pr)
+		}
+	} else {
+		slog.Info("no users blocking PR - no notifications needed",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+			"pr_state", prState)
 	}
 }
 

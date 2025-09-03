@@ -35,21 +35,34 @@ For a given GitHub org, there will be a YAML configuration file in their /.codeG
 
 We'll read this file at startup, and whenever we see a PR merged to this repo. We can get those PR notifications using https://github.com/codeGROOVE-dev/sprinkler
 
-This file will contain a notification map:
+This file will contain a notification map. By default, repositories automatically map to Slack channels with the same name (e.g., repo "goose" → channel "#goose"), unless explicitly configured otherwise:
 
 ```yaml
 global:
-    prefix: ":postal_horn"
+    prefix: ":postal_horn:"
+    slack: codegroove-workspace.slack.com
 
-repos:
+channels:
+    # Mute the auto-discovered #goose channel
     goose:
-        channels:
-            - #goose
-    .github:
-        channels:
-            - #goose
-            - #eng
+        mute: true
+
+    # Wildcard catch-all for repos without specific channels  
+    all-codegroove:
+        repos:
+            - "*"
+
+    # Override auto-discovery - explicit channel mapping
+    social:
+        repos:
+            - sprinkler
+            - slacker
 ```
+
+Auto-discovery works as follows:
+- Repository `goose` automatically maps to `#goose` unless overridden
+- Repository `api-server` automatically maps to `#api-server` unless overridden  
+- Override by adding repo to explicit channel mapping or muting the auto-discovered channel
 
 Here's what a thread starter would look like:
 

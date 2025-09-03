@@ -35,6 +35,15 @@ func New(token, signingSecret string) *Client {
 	}
 }
 
+// GetWorkspaceInfo returns information about the current workspace.
+func (c *Client) GetWorkspaceInfo(ctx context.Context) (*slack.TeamInfo, error) {
+	teamInfo, err := c.api.GetTeamInfoContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get team info: %w", err)
+	}
+	return teamInfo, nil
+}
+
 // PostThread creates a new thread in a channel for a PR with retry logic.
 func (c *Client) PostThread(ctx context.Context, channelID, text string, attachments []slack.Attachment) (string, error) {
 	slog.Info("posting thread to channel", "channel", channelID)

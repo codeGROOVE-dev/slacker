@@ -22,13 +22,13 @@ import (
 
 // Client wraps the GitHub API client.
 type Client struct {
+	tokenExpiry       time.Time
 	privateKey        *rsa.PrivateKey
 	client            *github.Client
 	appID             string
+	installationToken string
+	organization      string
 	installationID    int64
-	installationToken string    // Store the installation token
-	tokenExpiry       time.Time // Track token expiration
-	organization      string    // Store the organization/account name
 	tokenMutex        sync.RWMutex
 }
 

@@ -12,38 +12,37 @@ import (
 	"time"
 )
 
-// UserPreferences holds user notification preferences.
-type UserPreferences struct {
-	LastNotified          time.Time     `json:"last_notified"`
-	Timezone              string        `json:"timezone"`
-	ChannelNotifyDelay    time.Duration `json:"channel_notify_delay"`
-	RealTimeNotifications bool          `json:"real_time_notifications"`
-	DailyReminders        bool          `json:"daily_reminders"`
+// NotificationState tracks when users were last notified.
+type NotificationState struct {
+	LastChannelNotification time.Time `json:"last_channel_notification"`
+	LastDMNotification      time.Time `json:"last_dm_notification"`
+	LastDailyReminder       time.Time `json:"last_daily_reminder"`
 }
 
 // PRState represents the current state of a PR.
 type PRState struct {
-	LastUpdated  time.Time `json:"last_updated"`
-	LastNotified time.Time `json:"last_notified"`
-	Owner        string    `json:"owner"`
-	Repo         string    `json:"repo"`
-	Title        string    `json:"title"`
-	Author       string    `json:"author"`
-	State        string    `json:"state"`
-	ThreadTS     string    `json:"thread_ts"`
-	ChannelID    string    `json:"channel_id"`
-	BlockedOn    []string  `json:"blocked_on"`
-	Reviewers    []string  `json:"reviewers"`
-	Number       int       `json:"number"`
+	LastUpdated             time.Time         `json:"last_updated"`
+	LastChannelNotification time.Time         `json:"last_channel_notification"`
+	UserNotifications       map[string]string `json:"user_notifications"`
+	State                   string            `json:"state"`
+	Title                   string            `json:"title"`
+	Author                  string            `json:"author"`
+	Repo                    string            `json:"repo"`
+	ThreadTS                string            `json:"thread_ts"`
+	ChannelID               string            `json:"channel_id"`
+	Owner                   string            `json:"owner"`
+	BlockedOn               []string          `json:"blocked_on"`
+	Reviewers               []string          `json:"reviewers"`
+	Number                  int               `json:"number"`
 }
 
 // WorkspaceData holds data for a Slack workspace.
 type WorkspaceData struct {
-	LastUpdated time.Time                  `json:"last_updated"`
-	Users       map[string]UserPreferences `json:"users"`
-	PRs         map[string]*PRState        `json:"prs"`
-	UserPRs     map[string][]string        `json:"user_prs"`
-	WorkspaceID string                     `json:"workspace_id"`
+	LastUpdated       time.Time                    `json:"last_updated"`
+	UserNotifications map[string]NotificationState `json:"user_notifications"`
+	PRs               map[string]*PRState          `json:"prs"`
+	UserPRs           map[string][]string          `json:"user_prs"`
+	WorkspaceID       string                       `json:"workspace_id"`
 }
 
 // Manager manages application state with file persistence.
@@ -73,51 +72,61 @@ func New(dataDir string) *Manager {
 	return m
 }
 
-// UserPreferences returns user preferences.
-func (m *Manager) UserPreferences(workspaceID, userID string) UserPreferences {
+// GetNotificationState returns notification state for a user.
+func (m *Manager) GetNotificationState(workspaceID, userID string) NotificationState {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	// Load workspace data if not in memory.
 	if _, exists := m.data[workspaceID]; !exists {
+		slog.Debug("workspace not in memory, loading from disk",
+			"workspace", workspaceID,
+			"user", userID)
 		m.mu.RUnlock()
 		m.loadWorkspaceData(workspaceID)
 		m.mu.RLock()
 	}
 
 	workspace, exists := m.data[workspaceID]
-	if !exists || workspace.Users == nil {
-		// Return defaults.
-		return UserPreferences{
-			RealTimeNotifications: true,
-			ChannelNotifyDelay:    30 * time.Minute,
-			DailyReminders:        true,
-		}
+	if !exists || workspace.UserNotifications == nil {
+		slog.Debug("returning empty notification state - no workspace data",
+			"workspace", workspaceID,
+			"user", userID,
+			"workspace_exists", exists,
+			"has_notifications", workspace != nil && workspace.UserNotifications != nil)
+		return NotificationState{}
 	}
 
-	prefs, exists := workspace.Users[userID]
+	state, exists := workspace.UserNotifications[userID]
 	if !exists {
-		// Return defaults.
-		return UserPreferences{
-			RealTimeNotifications: true,
-			ChannelNotifyDelay:    30 * time.Minute,
-			DailyReminders:        true,
-		}
+		slog.Debug("returning empty notification state - user not found",
+			"workspace", workspaceID,
+			"user", userID,
+			"total_users_in_workspace", len(workspace.UserNotifications))
+		return NotificationState{}
 	}
 
-	return prefs
+	slog.Debug("retrieved user notification state",
+		"workspace", workspaceID,
+		"user", userID,
+		"last_dm", state.LastDMNotification,
+		"last_daily", state.LastDailyReminder,
+		"has_dm_history", !state.LastDMNotification.IsZero(),
+		"has_daily_history", !state.LastDailyReminder.IsZero())
+
+	return state
 }
 
-// SetUserPreferences updates user preferences.
-func (m *Manager) SetUserPreferences(workspaceID, userID string, prefs UserPreferences) {
+// SetNotificationState updates notification state for a user.
+func (m *Manager) SetNotificationState(workspaceID, userID string, state NotificationState) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	workspace := m.ensureWorkspace(workspaceID)
-	if workspace.Users == nil {
-		workspace.Users = make(map[string]UserPreferences)
+	if workspace.UserNotifications == nil {
+		workspace.UserNotifications = make(map[string]NotificationState)
 	}
-	workspace.Users[userID] = prefs
+	workspace.UserNotifications[userID] = state
 	workspace.LastUpdated = time.Now()
 
 	// Queue save.
@@ -208,24 +217,124 @@ func (m *Manager) UserPRs(workspaceID, userID string) []*PRState {
 	return prs
 }
 
-// UpdateLastNotified updates the last notified time for a user.
-func (m *Manager) UpdateLastNotified(workspaceID, userID string) {
+// UpdateDMNotification updates the last DM notification time for a user.
+func (m *Manager) UpdateDMNotification(workspaceID, userID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	workspace := m.ensureWorkspace(workspaceID)
-	if workspace.Users == nil {
-		workspace.Users = make(map[string]UserPreferences)
+	if workspace.UserNotifications == nil {
+		workspace.UserNotifications = make(map[string]NotificationState)
 	}
 
-	prefs := workspace.Users[userID]
-	prefs.LastNotified = time.Now()
-	workspace.Users[userID] = prefs
+	previousState := workspace.UserNotifications[userID]
+	state := workspace.UserNotifications[userID]
+	state.LastDMNotification = time.Now()
+	workspace.UserNotifications[userID] = state
+
+	slog.Info("updated user DM notification timestamp",
+		"workspace", workspaceID,
+		"user", userID,
+		"previous_dm_time", previousState.LastDMNotification,
+		"new_dm_time", state.LastDMNotification,
+		"last_daily_reminder", state.LastDailyReminder,
+		"state_saved", true)
 
 	// Queue save.
 	select {
 	case m.saveChan <- workspaceID:
+		slog.Debug("queued workspace state save",
+			"workspace", workspaceID,
+			"trigger", "dm_notification_update")
 	default:
+		slog.Debug("save channel full - save will happen soon",
+			"workspace", workspaceID,
+			"trigger", "dm_notification_update")
+	}
+}
+
+// UpdateDailyReminder updates the last daily reminder time for a user.
+func (m *Manager) UpdateDailyReminder(workspaceID, userID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	workspace := m.ensureWorkspace(workspaceID)
+	if workspace.UserNotifications == nil {
+		workspace.UserNotifications = make(map[string]NotificationState)
+	}
+
+	previousState := workspace.UserNotifications[userID]
+	state := workspace.UserNotifications[userID]
+	state.LastDailyReminder = time.Now()
+	workspace.UserNotifications[userID] = state
+
+	slog.Info("updated user daily reminder timestamp",
+		"workspace", workspaceID,
+		"user", userID,
+		"previous_daily_time", previousState.LastDailyReminder,
+		"new_daily_time", state.LastDailyReminder,
+		"last_dm_notification", state.LastDMNotification,
+		"state_saved", true)
+
+	// Queue save.
+	select {
+	case m.saveChan <- workspaceID:
+		slog.Debug("queued workspace state save",
+			"workspace", workspaceID,
+			"trigger", "daily_reminder_update")
+	default:
+		slog.Debug("save channel full - save will happen soon",
+			"workspace", workspaceID,
+			"trigger", "daily_reminder_update")
+	}
+}
+
+// UpdateChannelNotification updates the last channel notification time for a PR.
+func (m *Manager) UpdateChannelNotification(workspaceID, owner, repo string, number int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := fmt.Sprintf("%s/%s#%d", owner, repo, number)
+	workspace := m.ensureWorkspace(workspaceID)
+
+	if workspace.PRs == nil {
+		workspace.PRs = make(map[string]*PRState)
+	}
+
+	if pr, exists := workspace.PRs[key]; exists {
+		previousTime := pr.LastChannelNotification
+		pr.LastChannelNotification = time.Now()
+		workspace.LastUpdated = time.Now()
+
+		slog.Info("updated PR channel notification timestamp",
+			"workspace", workspaceID,
+			"pr", key,
+			"previous_channel_time", previousTime,
+			"new_channel_time", pr.LastChannelNotification,
+			"pr_state", pr.State,
+			"channel", pr.ChannelID,
+			"thread_ts", pr.ThreadTS,
+			"will_delay_dm_notifications", true)
+
+		// Queue save.
+		select {
+		case m.saveChan <- workspaceID:
+			slog.Debug("queued workspace state save",
+				"workspace", workspaceID,
+				"trigger", "channel_notification_update",
+				"pr", key)
+		default:
+			slog.Debug("save channel full - save will happen soon",
+				"workspace", workspaceID,
+				"trigger", "channel_notification_update",
+				"pr", key)
+		}
+	} else {
+		slog.Warn("attempted to update channel notification for non-existent PR",
+			"workspace", workspaceID,
+			"pr", key,
+			"pr_exists", false,
+			"total_prs_in_workspace", len(workspace.PRs))
 	}
 }
 
@@ -243,11 +352,11 @@ func (m *Manager) ensureWorkspace(workspaceID string) *WorkspaceData {
 
 	// Create new.
 	workspace := &WorkspaceData{
-		WorkspaceID: workspaceID,
-		Users:       make(map[string]UserPreferences),
-		PRs:         make(map[string]*PRState),
-		UserPRs:     make(map[string][]string),
-		LastUpdated: time.Now(),
+		WorkspaceID:       workspaceID,
+		UserNotifications: make(map[string]NotificationState),
+		PRs:               make(map[string]*PRState),
+		UserPRs:           make(map[string][]string),
+		LastUpdated:       time.Now(),
 	}
 	m.data[workspaceID] = workspace
 	return workspace
@@ -304,7 +413,7 @@ func (m *Manager) loadWorkspaceDataLocked(workspaceID string) *WorkspaceData {
 		return nil
 	}
 
-	slog.Info("loaded state", "workspace", workspaceID, "users", len(data.Users), "prs", len(data.PRs))
+	slog.Info("loaded state", "workspace", workspaceID, "notifications", len(data.UserNotifications), "prs", len(data.PRs))
 	return &data
 }
 
