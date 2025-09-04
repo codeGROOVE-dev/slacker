@@ -42,8 +42,8 @@ func main() {
 		slog.Info("received shutdown signal, gracefully stopping")
 		cancel()
 
-		// Force exit after 10 seconds if graceful shutdown doesn't complete
-		time.Sleep(10 * time.Second)
+		// Force exit after 5 seconds if graceful shutdown doesn't complete
+		time.Sleep(5 * time.Second)
 		slog.Error("graceful shutdown timeout, forcing exit")
 		os.Exit(1)
 	}()
@@ -136,15 +136,22 @@ func main() {
 
 	// Start bot coordinator using the sprinkler client library.
 	eg.Go(func() error {
-		return botCoordinator.RunWithSprinklerClient(ctx)
+		slog.Debug("starting bot coordinator goroutine")
+		err := botCoordinator.RunWithSprinklerClient(ctx)
+		slog.Debug("bot coordinator goroutine ended", "error", err)
+		return err
 	})
 
 	// Start notification scheduler.
 	eg.Go(func() error {
-		return notifier.Run(ctx)
+		slog.Debug("starting notifier goroutine")
+		err := notifier.Run(ctx)
+		slog.Debug("notifier goroutine ended", "error", err)
+		return err
 	})
 
 	// Wait for all services.
+	slog.Debug("waiting for all services to complete")
 	if err := eg.Wait(); err != nil {
 		slog.Error("server error", "error", err)
 	}

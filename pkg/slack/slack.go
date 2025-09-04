@@ -46,7 +46,27 @@ func (c *Client) GetWorkspaceInfo(ctx context.Context) (*slack.TeamInfo, error) 
 
 // PostThread creates a new thread in a channel for a PR with retry logic.
 func (c *Client) PostThread(ctx context.Context, channelID, text string, attachments []slack.Attachment) (string, error) {
-	slog.Info("posting thread to channel", "channel", channelID)
+	slog.Info("posting thread to channel",
+		"channel_id", channelID,
+		"text_preview", func() string {
+			if len(text) > 100 {
+				return text[:100] + "..."
+			}
+			return text
+		}(),
+		"attachments_count", len(attachments))
+
+	// Check if bot is in the channel before attempting to post
+	if !c.isBotInChannel(ctx, channelID) {
+		// Try to determine if channel exists by attempting to get channel info
+		_, err := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{
+			ChannelID: channelID,
+		})
+		if err != nil && strings.Contains(err.Error(), "channel_not_found") {
+			return "", fmt.Errorf("channel %s does not exist - please create the channel first", channelID)
+		}
+		return "", fmt.Errorf("bot is not a member of channel %s - please invite the bot to the channel first", channelID)
+	}
 
 	// Disable unfurling for GitHub links.
 	options := []slack.MsgOption{
@@ -88,7 +108,17 @@ func (c *Client) PostThread(ctx context.Context, channelID, text string, attachm
 		return "", fmt.Errorf("failed to post message after retries: %w", err)
 	}
 
-	slog.Info("successfully posted thread", "thread", timestamp, "channel", channelID)
+	slog.Info("successfully posted thread",
+		"thread_timestamp", timestamp,
+		"channel_id", channelID,
+		"channel_id_format", func() string {
+			if channelID != "" && channelID[0] == 'C' {
+				return "slack_channel_id"
+			} else if channelID != "" && channelID[0] == '#' {
+				return "channel_name_with_hash"
+			}
+			return "channel_name_without_hash"
+		}())
 	return timestamp, nil
 }
 
@@ -149,6 +179,7 @@ func (c *Client) AddReaction(ctx context.Context, channelID, timestamp, emoji st
 			if err != nil {
 				// Ignore "already_reacted" errors - not really an error
 				if strings.Contains(err.Error(), "already_reacted") {
+					slog.Debug("reaction already exists, skipping", "emoji", emoji)
 					return nil
 				}
 				if isRateLimitError(err) {
@@ -158,9 +189,23 @@ func (c *Client) AddReaction(ctx context.Context, channelID, timestamp, emoji st
 				// Don't retry on message_not_found
 				if strings.Contains(err.Error(), "message_not_found") ||
 					strings.Contains(err.Error(), "no_reaction") {
+					slog.Error("permanent error adding reaction",
+						"emoji", emoji,
+						"error", err,
+						"error_type", fmt.Sprintf("%T", err),
+						"error_string", err.Error(),
+						"channel_id", channelID,
+						"timestamp", timestamp)
 					return retry.Unrecoverable(err)
 				}
-				slog.Debug("failed to add reaction, retrying", "emoji", emoji, "error", err)
+				// Log detailed error info for any other failures
+				slog.Warn("failed to add reaction, will retry",
+					"emoji", emoji,
+					"error", err,
+					"error_type", fmt.Sprintf("%T", err),
+					"error_string", err.Error(),
+					"channel_id", channelID,
+					"timestamp", timestamp)
 				return err
 			}
 			return nil
@@ -234,7 +279,7 @@ func (c *Client) UpdateReactions(ctx context.Context, channelID, timestamp, newS
 		"hourglass":     "hourglass",
 		"carpentry_saw": "carpentry_saw",
 		"check":         "white_check_mark",
-		"pray":          "pray",
+		"merged":        "rocket",
 		"face_palm":     "face_palm",
 	}
 
@@ -258,7 +303,7 @@ func (c *Client) UpdateReactionsWithPrevious(ctx context.Context, channelID, tim
 		"hourglass":     "hourglass",
 		"carpentry_saw": "carpentry_saw",
 		"check":         "white_check_mark",
-		"pray":          "pray",
+		"merged":        "rocket",
 		"face_palm":     "face_palm",
 	}
 
@@ -689,7 +734,19 @@ func (c *Client) GetChannelHistory(ctx context.Context, channelID string, oldest
 		Latest:    latest,
 	}
 
-	return c.api.GetConversationHistoryContext(ctx, params)
+	result, err := c.api.GetConversationHistoryContext(ctx, params)
+	if err != nil {
+		slog.Debug("GetChannelHistory failed with detailed error info",
+			"error", err,
+			"error_type", fmt.Sprintf("%T", err),
+			"error_string", err.Error(),
+			"channel_id", channelID,
+			"oldest", oldest,
+			"latest", latest,
+			"limit", limit,
+			"api_method", "GetConversationHistoryContext")
+	}
+	return result, err
 }
 
 // GetBotInfo returns information about the authenticated bot user.
@@ -700,24 +757,50 @@ func (c *Client) GetBotInfo(ctx context.Context) (*slack.AuthTestResponse, error
 // ResolveChannelID resolves a channel name (e.g., "all-codegroove" or "#all-codegroove") to a channel ID.
 // Returns the channel ID if found, or the original input if it's already an ID or can't be resolved.
 func (c *Client) ResolveChannelID(ctx context.Context, channelName string) string {
+	originalChannelName := channelName
+	slog.Debug("attempting to resolve channel name to ID",
+		"input", originalChannelName)
+
 	// If it's already a channel ID (starts with C), return as-is
 	if channelName != "" && channelName[0] == 'C' {
+		slog.Debug("input is already a channel ID", "channel_id", channelName)
 		return channelName
 	}
 
 	// Remove # prefix if present
 	if channelName != "" && channelName[0] == '#' {
 		channelName = channelName[1:]
+		slog.Debug("removed # prefix", "original", originalChannelName, "cleaned", channelName)
 	}
 
-	// Try to find the channel
+	// Try to find the channel - first try public and private channels
 	channels, cursor, err := c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
 		Types: []string{"public_channel", "private_channel"},
 		Limit: 200,
 	})
 	if err != nil {
-		slog.Warn("failed to get conversations for channel resolution", "error", err, "channel", channelName)
-		return channelName // Return original name if we can't resolve
+		slog.Warn("failed to get public+private conversations, trying public only",
+			"error", err,
+			"error_type", fmt.Sprintf("%T", err),
+			"channel", channelName)
+
+		// Fallback: try public channels only (might not have private channel permissions)
+		channels, cursor, err = c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
+			Types: []string{"public_channel"},
+			Limit: 200,
+		})
+		if err != nil {
+			slog.Error("failed to get conversations for channel resolution",
+				"error", err,
+				"error_type", fmt.Sprintf("%T", err),
+				"error_string", err.Error(),
+				"channel", channelName,
+				"attempted_types", []string{"public_channel", "private_channel"},
+				"fallback_types", []string{"public_channel"},
+				"api_method", "GetConversationsContext")
+			return channelName // Return original name if we can't resolve
+		}
+		slog.Debug("successfully retrieved public channels only", "channel", channelName, "count", len(channels))
 	}
 
 	// Search through channels
@@ -752,4 +835,60 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 
 	slog.Warn("could not resolve channel name to ID", "channel", channelName)
 	return channelName // Return original if not found
+}
+
+// isBotInChannel checks if the bot is a member of the specified channel.
+func (c *Client) isBotInChannel(ctx context.Context, channelID string) bool {
+	// Get bot user info first
+	authTest, err := c.api.AuthTestContext(ctx)
+	if err != nil {
+		slog.Error("failed to get bot user info for channel membership check",
+			"error", err,
+			"channel_id", channelID)
+		return false
+	}
+
+	// Get channel members
+	members, _, err := c.api.GetUsersInConversationContext(ctx, &slack.GetUsersInConversationParameters{
+		ChannelID: channelID,
+		Limit:     200,
+	})
+	if err != nil {
+		// Check if it's a channel not found error
+		if strings.Contains(err.Error(), "channel_not_found") {
+			slog.Info("channel does not exist",
+				"channel_id", channelID,
+				"action_required", "create channel or check channel name")
+			return false
+		}
+		// Check if it's a not_in_channel error
+		if strings.Contains(err.Error(), "not_in_channel") {
+			slog.Info("bot is not a member of channel",
+				"channel_id", channelID,
+				"bot_user_id", authTest.UserID,
+				"action_required", "invite bot to channel")
+			return false
+		}
+		slog.Warn("failed to get channel members - unknown error",
+			"error", err,
+			"error_type", fmt.Sprintf("%T", err),
+			"error_string", err.Error(),
+			"channel_id", channelID)
+		return false
+	}
+
+	// Check if bot user ID is in the members list
+	for _, member := range members {
+		if member == authTest.UserID {
+			slog.Debug("bot is a member of channel", "channel_id", channelID, "bot_user_id", authTest.UserID)
+			return true
+		}
+	}
+
+	slog.Info("bot is not a member of channel",
+		"channel_id", channelID,
+		"bot_user_id", authTest.UserID,
+		"total_members", len(members),
+		"action_required", "invite bot to channel")
+	return false
 }

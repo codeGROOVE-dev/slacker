@@ -394,7 +394,7 @@ func (c *Client) PRState(ctx context.Context, owner, repo string, number int) (s
 	}
 	// Check if merged or closed.
 	if pr.GetMerged() {
-		return "pray", nil, nil // Merged
+		return "merged", nil, nil // Merged
 	}
 	if pr.GetState() == "closed" {
 		return "face_palm", nil, nil // Closed but not merged

@@ -79,7 +79,7 @@ Based on the current state of the PR, this thread starter will have a reaction e
 - :hourglass: - PR is waiting on a review
 - :carpentry_saw: - PR has been approved but still needs work (blocked on author)
 - :check: - PR has been reviewed & approved (blocked on author)
-- :pray: - PR has been merged
+- :rocket: - PR has been merged
 - :face_palm: - PR has been closed, but not merged
 
 When reviewers are assigned to the PR, there shoud be a follow-up comment to the thread:
