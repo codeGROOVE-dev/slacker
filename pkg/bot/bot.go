@@ -130,7 +130,7 @@ func New(
 // getChannelDisplayInfo returns both channel ID and name for logging purposes.
 func (c *Coordinator) getChannelDisplayInfo(ctx context.Context, channelName string) (channelID, displayName string) {
 	channelID = c.slack.ResolveChannelID(ctx, channelName)
-	
+
 	// For display purposes, show both name and ID
 	if channelID != channelName {
 		// Successfully resolved - show name and ID
@@ -142,7 +142,7 @@ func (c *Coordinator) getChannelDisplayInfo(ctx context.Context, channelName str
 		// Couldn't resolve - just show the name
 		displayName = fmt.Sprintf("#%s (unresolved)", channelName)
 	}
-	
+
 	return channelID, displayName
 }
 
@@ -360,6 +360,14 @@ func (c *Coordinator) processEvent(ctx context.Context, msg SprinklerMessage) er
 	// Handle different event types.
 	switch msg.Event {
 	case "pull_request":
+		// Special handling for .codeGROOVE repo pull requests
+		if repo == ".codeGROOVE" {
+			slog.Info("received pull request event for .codeGROOVE repo",
+				"org", owner,
+				"pr", msg.PRNumber,
+				"will_invalidate_cache_on_merge", true)
+			// Note: Cache will be invalidated on push event when PR is merged
+		}
 		c.handlePullRequestFromSprinkler(ctx, owner, repo, msg.PRNumber, msg.URL, msg.Timestamp)
 	case "pull_request_review":
 		c.handlePullRequestReviewFromSprinkler(ctx, owner, repo, msg.PRNumber, msg.URL, msg.Timestamp)
@@ -370,7 +378,9 @@ func (c *Coordinator) processEvent(ctx context.Context, msg SprinklerMessage) er
 	case "push":
 		// Check if this is a push to .codeGROOVE repo.
 		if repo == ".codeGROOVE" {
-			slog.Info("reloading config", "org", owner)
+			slog.Info("reloading config due to push to .codeGROOVE repo",
+				"org", owner,
+				"invalidating_cache", true)
 			if err := c.configManager.ReloadConfig(ctx, owner); err != nil {
 				slog.Warn("failed to reload config", "error", err)
 			}
@@ -659,7 +669,7 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 		} `json:"user"`
 	} `json:"pull_request"`
 }, checkResult *turn.CheckResponse, githubPR interface{}) {
-	
+
 	prNumber := event.Number
 
 	slog.Info("PR event with pre-fetched data",
@@ -750,26 +760,26 @@ func (c *Coordinator) extractStateFromTurnclient(checkResult *turn.CheckResponse
 		}
 		return "face_palm"
 	}
-	
+
 	if checkResult.PRState.Draft {
 		return "test_tube" // Draft PRs
 	}
-	
+
 	if checkResult.PRState.Checks.Failing > 0 {
 		return "broken_heart" // Tests failing
 	}
-	
+
 	if checkResult.PRState.Checks.Pending > 0 || checkResult.PRState.Checks.Waiting > 0 {
 		return "test_tube" // Tests running
 	}
-	
+
 	if checkResult.PRState.Approved {
 		if checkResult.PRState.UnresolvedComments > 0 {
 			return "carpentry_saw" // Approved but has unresolved comments
 		}
 		return "check" // Approved and ready
 	}
-	
+
 	return "hourglass" // Default: waiting for review
 }
 
@@ -795,7 +805,7 @@ func (c *Coordinator) processChannelsInParallel(ctx context.Context, owner, repo
 		} `json:"user"`
 	} `json:"pull_request"`
 }, channels []string, workspaceID string) {
-	
+
 	slog.Info("processing PR for all configured channels",
 		"workspace", c.workspaceName,
 		"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
@@ -823,10 +833,10 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 		} `json:"user"`
 	} `json:"pull_request"`
 }, channelName, workspaceID string) {
-	
+
 	// Resolve channel name to ID for API calls and get display info
 	channelID, channelDisplay := c.getChannelDisplayInfo(ctx, channelName)
-	
+
 	slog.Info("processing PR for individual channel",
 		"workspace", c.workspaceName,
 		"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),

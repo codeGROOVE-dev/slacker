@@ -40,18 +40,99 @@ type RepoConfig struct {
 	// Default: true
 }
 
+// configCacheEntry represents a cached configuration entry.
+type configCacheEntry struct {
+	config    *RepoConfig
+	timestamp time.Time
+}
+
+// configCache manages configuration caching with TTL and thread safety.
+type configCache struct {
+	mu      sync.RWMutex
+	entries map[string]configCacheEntry
+	ttl     time.Duration
+	hits    int64
+	misses  int64
+}
+
+// newConfigCache creates a new configuration cache with specified TTL.
+func newConfigCache(ttl time.Duration) *configCache {
+	return &configCache{
+		entries: make(map[string]configCacheEntry),
+		ttl:     ttl,
+	}
+}
+
+// get retrieves a cached configuration if it exists and is not expired.
+func (c *configCache) get(org string) (*RepoConfig, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	entry, exists := c.entries[org]
+	if !exists {
+		c.misses++
+		return nil, false
+	}
+
+	if time.Since(entry.timestamp) > c.ttl {
+		c.misses++
+		return nil, false
+	}
+
+	c.hits++
+	return entry.config, true
+}
+
+// set stores a configuration in the cache.
+func (c *configCache) set(org string, config *RepoConfig) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.entries[org] = configCacheEntry{
+		config:    config,
+		timestamp: time.Now(),
+	}
+}
+
+// invalidate removes a specific organization's config from the cache.
+func (c *configCache) invalidate(org string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	delete(c.entries, org)
+	slog.Info("invalidated config cache for organization", "org", org)
+}
+
+// invalidateAll clears the entire cache.
+func (c *configCache) invalidateAll() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.entries = make(map[string]configCacheEntry)
+	slog.Info("invalidated entire config cache")
+}
+
+// stats returns cache statistics.
+func (c *configCache) stats() (hits, misses int64) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.hits, c.misses
+}
+
 // Manager manages repository configurations.
 type Manager struct {
 	configs       map[string]*RepoConfig
 	client        *github.Client
 	workspaceName string
 	mu            sync.RWMutex
+	cache         *configCache
 }
 
 // New creates a new config manager.
 func New(ctx context.Context) *Manager {
 	return &Manager{
 		configs: make(map[string]*RepoConfig),
+		cache:   newConfigCache(20 * time.Minute), // 20-minute TTL as requested
 	}
 }
 
@@ -71,11 +152,27 @@ func (m *Manager) SetGitHubClient(client *github.Client) {
 
 // LoadConfig loads the configuration for a GitHub org with retry logic.
 func (m *Manager) LoadConfig(ctx context.Context, org string) error {
+	// Check cache first
+	if cachedConfig, found := m.cache.get(org); found {
+		hits, misses := m.cache.stats()
+		slog.Debug("using cached config for organization",
+			"org", org,
+			"cache_hits", hits,
+			"cache_misses", misses,
+			"cache_hit_ratio", float64(hits)/float64(hits+misses))
+
+		m.mu.Lock()
+		m.configs[org] = cachedConfig
+		m.mu.Unlock()
+		return nil
+	}
+
 	slog.Info("starting config load for organization",
 		"org", org,
 		"config_repo", ".codeGROOVE",
 		"config_file", "slack.yaml",
-		"workspace_validation", m.workspaceName != "")
+		"workspace_validation", m.workspaceName != "",
+		"cache_miss", true)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -156,14 +253,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 	)
 	if err != nil {
 		// Use default empty config if not found
-		slog.Info("using default configuration for org",
-			"org", org,
-			"reason", "config_load_failed",
-			"error", err,
-			"default_prefix", ":postal_horn:",
-			"default_delay_mins", 60,
-			"default_daily_reminders", true)
-		m.configs[org] = &RepoConfig{
+		defaultConfig := &RepoConfig{
 			Global: struct {
 				Prefix                 string `yaml:"prefix"`
 				Slack                  string `yaml:"slack"`
@@ -180,6 +270,20 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 				Mute  bool     `yaml:"mute"`
 			}),
 		}
+		m.configs[org] = defaultConfig
+		m.cache.set(org, defaultConfig)
+
+		hits, misses := m.cache.stats()
+		slog.Info("using default configuration for org",
+			"org", org,
+			"reason", "config_load_failed",
+			"error", err,
+			"default_prefix", ":postal_horn:",
+			"default_delay_mins", 60,
+			"default_daily_reminders", true,
+			"cached", true,
+			"cache_hits", hits,
+			"cache_misses", misses)
 		return nil // Graceful degradation
 	}
 
@@ -190,12 +294,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 
 	var config RepoConfig
 	if err := yaml.Unmarshal([]byte(configContent), &config); err != nil {
-		slog.Error("failed to parse YAML configuration - using defaults",
-			"org", org,
-			"yaml_error", err,
-			"config_preview", configContent[:min(len(configContent), 100)],
-			"will_use_defaults", true)
-		m.configs[org] = &RepoConfig{
+		defaultConfig := &RepoConfig{
 			Global: struct {
 				Prefix                 string `yaml:"prefix"`
 				Slack                  string `yaml:"slack"`
@@ -212,6 +311,18 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 				Mute  bool     `yaml:"mute"`
 			}),
 		}
+		m.configs[org] = defaultConfig
+		m.cache.set(org, defaultConfig)
+
+		hits, misses := m.cache.stats()
+		slog.Error("failed to parse YAML configuration - using defaults",
+			"org", org,
+			"yaml_error", err,
+			"config_preview", configContent[:min(len(configContent), 100)],
+			"will_use_defaults", true,
+			"cached", true,
+			"cache_hits", hits,
+			"cache_misses", misses)
 		return nil // Graceful degradation
 	}
 
@@ -230,15 +341,8 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 			"validation_enabled", true)
 
 		if config.Global.Slack != m.workspaceName {
-			slog.Warn("workspace mismatch - config is for different Slack workspace",
-				"org", org,
-				"config_workspace", config.Global.Slack,
-				"actual_workspace", m.workspaceName,
-				"action", "skipping_config",
-				"will_use_empty_config", true,
-				"notifications_will_be_disabled", true)
 			// Return empty config for workspace mismatch
-			m.configs[org] = &RepoConfig{
+			emptyConfig := &RepoConfig{
 				Global: struct {
 					Prefix                 string `yaml:"prefix"`
 					Slack                  string `yaml:"slack"`
@@ -255,6 +359,20 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 					Mute  bool     `yaml:"mute"`
 				}),
 			}
+			m.configs[org] = emptyConfig
+			m.cache.set(org, emptyConfig)
+
+			hits, misses := m.cache.stats()
+			slog.Warn("workspace mismatch - config is for different Slack workspace",
+				"org", org,
+				"config_workspace", config.Global.Slack,
+				"actual_workspace", m.workspaceName,
+				"action", "skipping_config",
+				"will_use_empty_config", true,
+				"notifications_will_be_disabled", true,
+				"cached", true,
+				"cache_hits", hits,
+				"cache_misses", misses)
 			return nil
 		}
 
@@ -334,6 +452,10 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 
 	m.configs[org] = &config
 
+	// Cache the configuration
+	m.cache.set(org, &config)
+
+	hits, misses := m.cache.stats()
 	slog.Info("configuration successfully loaded and validated",
 		"org", org,
 		"final_config", map[string]interface{}{
@@ -346,7 +468,10 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 			"wildcard_channels":         wildcardChannels,
 			"total_repo_mappings":       totalRepos,
 			"defaults_applied":          defaultsApplied,
-		})
+		},
+		"cached", true,
+		"cache_hits", hits,
+		"cache_misses", misses)
 
 	return nil
 }
@@ -535,5 +660,24 @@ func (m *Manager) DailyRemindersEnabled(org string) bool {
 // ReloadConfig reloads the configuration for an org (e.g., when .codeGROOVE repo is updated).
 func (m *Manager) ReloadConfig(ctx context.Context, org string) error {
 	slog.Info("reloading config", "org", org)
+	// Invalidate cache first to force fresh load
+	m.cache.invalidate(org)
 	return m.LoadConfig(ctx, org)
+}
+
+// InvalidateConfig removes the cached configuration for a specific organization.
+// This is used when .codeGROOVE repository events are received to ensure fresh config loading.
+func (m *Manager) InvalidateConfig(org string) {
+	m.cache.invalidate(org)
+}
+
+// InvalidateAllConfigs removes all cached configurations.
+// This can be useful during testing or major configuration changes.
+func (m *Manager) InvalidateAllConfigs() {
+	m.cache.invalidateAll()
+}
+
+// CacheStats returns cache hit and miss statistics for monitoring performance.
+func (m *Manager) CacheStats() (hits, misses int64) {
+	return m.cache.stats()
 }
