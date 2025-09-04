@@ -396,22 +396,43 @@ func (m *Manager) ChannelsForRepo(org, repo string) []string {
 		}
 	}
 
-	// If no explicit configuration found, try auto-discovery
-	if !explicitlyConfigured {
-		autoChannels := m.autoDiscoverChannels(org, repo)
+	// ALWAYS try auto-discovery for the repo-named channel unless explicitly muted
+	autoChannels := m.autoDiscoverChannels(org, repo)
+	for _, autoChannel := range autoChannels {
+		// Check if this channel is already included in explicit config
+		alreadyIncluded := false
+		for _, existingChannel := range channels {
+			if existingChannel == autoChannel {
+				alreadyIncluded = true
+				break
+			}
+		}
+
+		if alreadyIncluded {
+			slog.Debug("auto-discovered channel already included via explicit config",
+				"org", org,
+				"repo", repo,
+				"channel", autoChannel)
+			continue
+		}
 
 		// Check if auto-discovered channel is explicitly muted
-		for _, autoChannel := range autoChannels {
-			if channelConfig, exists := config.Channels[autoChannel]; exists && channelConfig.Mute {
-				slog.Info("auto-discovered channel is explicitly muted in config",
-					"org", org,
-					"repo", repo,
-					"channel", autoChannel,
-					"muted", true)
-				continue
-			}
-			channels = append(channels, autoChannel)
+		if channelConfig, exists := config.Channels[autoChannel]; exists && channelConfig.Mute {
+			slog.Info("auto-discovered channel is explicitly muted in config",
+				"org", org,
+				"repo", repo,
+				"channel", autoChannel,
+				"muted", true)
+			continue
 		}
+
+		// Add the auto-discovered channel
+		channels = append(channels, autoChannel)
+		slog.Debug("added auto-discovered channel",
+			"org", org,
+			"repo", repo,
+			"channel", autoChannel,
+			"reason", "repo name matches channel name")
 	}
 
 	if len(channels) > 0 {
@@ -419,8 +440,8 @@ func (m *Manager) ChannelsForRepo(org, repo string) []string {
 			"org", org,
 			"repo", repo,
 			"channels", channels,
-			"explicitly_configured", explicitlyConfigured,
-			"auto_discovered", !explicitlyConfigured)
+			"has_explicit_config", explicitlyConfigured,
+			"includes_auto_discovery", true)
 	}
 
 	return channels

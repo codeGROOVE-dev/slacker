@@ -701,12 +701,12 @@ func (c *Client) GetBotInfo(ctx context.Context) (*slack.AuthTestResponse, error
 // Returns the channel ID if found, or the original input if it's already an ID or can't be resolved.
 func (c *Client) ResolveChannelID(ctx context.Context, channelName string) string {
 	// If it's already a channel ID (starts with C), return as-is
-	if len(channelName) > 0 && channelName[0] == 'C' {
+	if channelName != "" && channelName[0] == 'C' {
 		return channelName
 	}
 
 	// Remove # prefix if present
-	if len(channelName) > 0 && channelName[0] == '#' {
+	if channelName != "" && channelName[0] == '#' {
 		channelName = channelName[1:]
 	}
 
@@ -721,7 +721,8 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 	}
 
 	// Search through channels
-	for _, channel := range channels {
+	for i := range channels {
+		channel := &channels[i]
 		if channel.Name == channelName {
 			slog.Debug("resolved channel name to ID", "name", channelName, "id", channel.ID)
 			return channel.ID
@@ -740,7 +741,8 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 			break
 		}
 
-		for _, channel := range channels {
+		for i := range channels {
+			channel := &channels[i]
 			if channel.Name == channelName {
 				slog.Debug("resolved channel name to ID", "name", channelName, "id", channel.ID)
 				return channel.ID

@@ -20,8 +20,8 @@ import (
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
 
-// min returns the minimum of two integers.
-func min(a, b int) int {
+// minInt returns the minimum of two integers.
+func minInt(a, b int) int {
 	if a < b {
 		return a
 	}
@@ -244,7 +244,8 @@ func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL st
 		"oldest_requested", oldestTimestamp)
 
 	// Look through messages for bot-posted threads containing the PR URL
-	for _, msg := range history.Messages {
+	for i := range history.Messages {
+		msg := &history.Messages[i]
 		// Only check messages from our bot
 		if msg.User != botInfo.UserID {
 			continue
