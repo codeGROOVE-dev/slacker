@@ -522,7 +522,13 @@ func (c *Coordinator) handlePullRequestEvent(ctx context.Context, owner, repo st
 		"pr_state", prState)
 
 	// Process each configured channel
-	for _, channelID := range channels {
+	for _, channelName := range channels {
+		// Resolve channel name to ID for API calls
+		channelID := c.slack.ResolveChannelID(ctx, channelName)
+		if channelID != channelName {
+			slog.Debug("resolved channel name to ID", "name", channelName, "id", channelID)
+		}
+
 		oldState := ""
 
 		// Check cache for existing thread info to get old state
@@ -548,20 +554,38 @@ func (c *Coordinator) handlePullRequestEvent(ctx context.Context, owner, repo st
 			pr.ChannelID = channelID
 		}
 
-		// Update reactions for current state
-		if err := c.slack.UpdateReactions(ctx, channelID, threadTS, prState); err != nil {
-			slog.Error("failed to update reaction for PR state",
+		// Update reactions for current state - only change if state actually changed
+		if oldState != prState {
+			slog.Debug("updating reactions for state change",
 				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
-				"channel", channelID,
+				"channel_name", channelName,
+				"channel_id", channelID,
 				"thread_ts", threadTS,
-				"pr_state", prState,
-				"error", err)
+				"old_state", oldState,
+				"new_state", prState)
+			
+			if err := c.slack.UpdateReactionsWithPrevious(ctx, channelID, threadTS, oldState, prState); err != nil {
+				slog.Error("failed to update reaction for PR state",
+					"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+					"channel_name", channelName,
+					"channel_id", channelID,
+					"thread_ts", threadTS,
+					"old_state", oldState,
+					"new_state", prState,
+					"error", err)
+			} else {
+				slog.Debug("updated PR reaction successfully",
+					"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+					"channel_id", channelID,
+					"thread_ts", threadTS,
+					"old_state", oldState,
+					"new_state", prState)
+			}
 		} else {
-			slog.Debug("updated PR reaction successfully",
+			slog.Debug("PR state unchanged, skipping reaction update",
 				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
-				"channel", channelID,
-				"thread_ts", threadTS,
-				"pr_state", prState)
+				"channel_id", channelID,
+				"state", prState)
 		}
 
 		// Post state change message if state has changed
@@ -695,8 +719,19 @@ func (c *Coordinator) handlePullRequestFromSprinkler(ctx context.Context, owner,
 		"checks_state", fmt.Sprintf("%+v", checkResult.PRState.Checks),
 		"last_activity", checkResult.PRState.LastActivity)
 
-	// For now, create a synthetic webhook event to reuse existing logic
-	// In the future, we could enhance this to use the rich turnclient data directly
+	// Fetch actual PR details from GitHub to get title and author
+	// TODO: Once turnclient provides PR title and author, we can use that instead of this GitHub API call
+	pr, err := c.github.PR(ctx, owner, repo, prNumber)
+	if err != nil {
+		slog.Error("failed to fetch PR details from GitHub",
+			"owner", owner,
+			"repo", repo,
+			"pr_number", prNumber,
+			"error", err)
+		return
+	}
+
+	// Create a synthetic webhook event to reuse existing logic with real PR data
 	event := struct {
 		Action      string `json:"action"`
 		Number      int    `json:"number"`
@@ -720,12 +755,12 @@ func (c *Coordinator) handlePullRequestFromSprinkler(ctx context.Context, owner,
 			} `json:"user"`
 		}{
 			Number:  prNumber,
-			Title:   fmt.Sprintf("PR #%d", prNumber), // Placeholder since turnclient doesn't return title
-			HTMLURL: prURL,
+			Title:   pr.GetTitle(),
+			HTMLURL: pr.GetHTMLURL(),
 			User: struct {
 				Login string `json:"login"`
 			}{
-				Login: "unknown", // Placeholder since turnclient doesn't return author
+				Login: pr.GetUser().GetLogin(),
 			},
 		},
 	}
@@ -802,14 +837,20 @@ func (c *Coordinator) handlePullRequestReviewEvent(ctx context.Context, owner, r
 	// Update PR state.
 	prState, blockedOn, err := c.github.PRState(ctx, owner, repo, event.PullRequest.Number)
 	if err == nil {
+		oldState := pr.State
 		pr.State = prState
 		pr.BlockedOn = blockedOn
 		pr.LastUpdated = time.Now()
 		c.stateManager.SetPRState(workspaceID, pr)
 
-		// Update reaction.
-		if pr.ThreadTS != "" {
-			if err := c.slack.UpdateReactions(ctx, pr.ChannelID, pr.ThreadTS, prState); err != nil {
+		// Update reaction only if state changed.
+		if pr.ThreadTS != "" && oldState != prState {
+			slog.Debug("updating reaction for PR review state change",
+				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.PullRequest.Number),
+				"old_state", oldState,
+				"new_state", prState,
+				"review_action", event.Action)
+			if err := c.slack.UpdateReactionsWithPrevious(ctx, pr.ChannelID, pr.ThreadTS, oldState, prState); err != nil {
 				slog.Warn("failed to update reaction", "error", err)
 			}
 		}
@@ -831,11 +872,10 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 
 	// Format message.
 	text := fmt.Sprintf(
-		"%s %s • <%s|%s/%s#%d> by @%s",
+		"%s %s • <%s|%s#%d> by @%s",
 		prefix,
 		pr.Title,
 		pr.HTMLURL,
-		owner,
 		repo,
 		number,
 		pr.User.Login,
@@ -850,8 +890,13 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 	// Add initial reaction based on state.
 	prState, _, err := c.github.PRState(ctx, owner, repo, number)
 	if err == nil {
+		slog.Debug("adding initial reaction for new thread",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, number),
+			"channel", channel,
+			"thread_ts", threadTS,
+			"pr_state", prState)
 		if err := c.slack.UpdateReactions(ctx, channel, threadTS, prState); err != nil {
-			slog.Warn("failed to add initial reaction", "error", err)
+			slog.Warn("failed to add initial reaction", "error", err, "channel", channel, "thread_ts", threadTS, "pr_state", prState)
 		}
 	}
 
