@@ -305,11 +305,12 @@ func (c *Coordinator) postStateChangeUpdate(ctx context.Context, channelID, thre
 
 // SprinklerMessage represents a message from sprinkler.
 type SprinklerMessage struct {
-	Type     string `json:"type,omitempty"`      // Message type (e.g., "ping", "event")
-	Event    string `json:"event,omitempty"`     // GitHub event type
-	Repo     string `json:"repo,omitempty"`      // Repository name
-	PRNumber int    `json:"pr_number,omitempty"` // PR number extracted from URL
-	URL      string `json:"url,omitempty"`       // GitHub URL for reference
+	Type      string    `json:"type,omitempty"`      // Message type (e.g., "ping", "event")
+	Event     string    `json:"event,omitempty"`     // GitHub event type
+	Repo      string    `json:"repo,omitempty"`      // Repository name
+	PRNumber  int       `json:"pr_number,omitempty"` // PR number extracted from URL
+	URL       string    `json:"url,omitempty"`       // GitHub URL for reference
+	Timestamp time.Time `json:"timestamp,omitempty"` // Event timestamp from sprinkler
 }
 
 // processEvent processes a GitHub webhook event.
@@ -352,9 +353,9 @@ func (c *Coordinator) processEvent(ctx context.Context, msg SprinklerMessage) er
 	// Handle different event types.
 	switch msg.Event {
 	case "pull_request":
-		c.handlePullRequestFromSprinkler(ctx, owner, repo, msg.PRNumber, msg.URL)
+		c.handlePullRequestFromSprinkler(ctx, owner, repo, msg.PRNumber, msg.URL, msg.Timestamp)
 	case "pull_request_review":
-		c.handlePullRequestReviewFromSprinkler(ctx, owner, repo, msg.PRNumber, msg.URL)
+		c.handlePullRequestReviewFromSprinkler(ctx, owner, repo, msg.PRNumber, msg.URL, msg.Timestamp)
 	case "check_run", "check_suite":
 		// Parse to get PR number.
 		// This is simplified - in production, we'd need to map commits to PRs.
@@ -632,7 +633,7 @@ func (c *Coordinator) handlePullRequestEvent(ctx context.Context, owner, repo st
 }
 
 // handlePullRequestFromSprinkler handles pull request events from sprinkler by fetching PR data from GitHub API.
-func (c *Coordinator) handlePullRequestFromSprinkler(ctx context.Context, owner, repo string, prNumber int, sprinklerURL string) {
+func (c *Coordinator) handlePullRequestFromSprinkler(ctx context.Context, owner, repo string, prNumber int, sprinklerURL string, eventTimestamp time.Time) {
 	slog.Info("handling PR event from sprinkler using turnclient",
 		"owner", owner,
 		"repo", repo,
@@ -673,7 +674,7 @@ func (c *Coordinator) handlePullRequestFromSprinkler(ctx context.Context, owner,
 
 	// Use the turnclient to check the PR - this gives us rich PR state analysis
 	prURL := fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, prNumber)
-	checkResult, err := turnClient.Check(ctx, prURL, botUsername, time.Time{})
+	checkResult, err := turnClient.Check(ctx, prURL, botUsername, eventTimestamp)
 	if err != nil {
 		slog.Error("failed to check PR with turnclient",
 			"owner", owner,
@@ -745,7 +746,7 @@ func (c *Coordinator) handlePullRequestFromSprinkler(ctx context.Context, owner,
 }
 
 // handlePullRequestReviewFromSprinkler handles PR review events from sprinkler.
-func (c *Coordinator) handlePullRequestReviewFromSprinkler(ctx context.Context, owner, repo string, prNumber int, sprinklerURL string) {
+func (c *Coordinator) handlePullRequestReviewFromSprinkler(ctx context.Context, owner, repo string, prNumber int, sprinklerURL string, eventTimestamp time.Time) {
 	slog.Info("handling PR review event from sprinkler",
 		"owner", owner,
 		"repo", repo,
