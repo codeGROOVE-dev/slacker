@@ -130,11 +130,12 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 			}
 
 			msg := SprinklerMessage{
-				Type:     event.Type,
-				Event:    event.Type,
-				Repo:     repo,
-				PRNumber: prNumber,
-				URL:      event.URL,
+				Type:      event.Type,
+				Event:     event.Type,
+				Repo:      repo,
+				PRNumber:  prNumber,
+				URL:       event.URL,
+				Timestamp: event.Timestamp,
 			}
 
 			if err := c.processEvent(ctx, msg); err != nil {
