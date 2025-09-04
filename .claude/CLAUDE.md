@@ -117,9 +117,22 @@ slacker/
 - Use Events API for real-time updates
 - Handle app_home_opened events to update dashboard
 - Build dashboard using Block Kit components
-- Handle interactive components for settings
 - Cache user timezone and presence information
 - Disable link previews for GitHub URLs in messages
+
+### Required Slack Bot Scopes
+- `app_mentions:read` - Read mentions of the app
+- `channels:history` - View messages in public channels
+- `channels:read` - View basic information about public channels
+- `chat:write` - Send messages as the bot
+- `chat:write.public` - Send messages to channels the bot isn't a member of
+- `commands` - Add shortcuts and/or slash commands
+- `im:history` - View messages in direct messages
+- `im:read` - View basic information about direct messages
+- `im:write` - Start direct messages with people
+- `reactions:write` - Add and edit emoji reactions
+- `team:read` - **View workspace name and domain (required for workspace validation)**
+- `users:read` - View people in the workspace
 
 ### State Management
 - Track PR states and transitions for notification logic

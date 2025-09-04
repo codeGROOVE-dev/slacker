@@ -27,7 +27,33 @@ cd slacker
 make build
 ```
 
-## Configuration
+## Slack App Configuration
+
+### Required Bot Token Scopes
+Your Slack app needs these OAuth scopes:
+
+**Bot Token Scopes:**
+- `app_mentions:read` - Read mentions of the app
+- `channels:history` - View messages in public channels
+- `channels:read` - View basic information about public channels
+- `chat:write` - Send messages as the bot
+- `chat:write.public` - Send messages to channels the bot isn't a member of
+- `commands` - Add shortcuts and/or slash commands
+- `im:history` - View messages in direct messages
+- `im:read` - View basic information about direct messages
+- `im:write` - Start direct messages with people
+- `reactions:write` - Add and edit emoji reactions
+- `team:read` - View workspace name and domain (required for workspace validation)
+- `users:read` - View people in the workspace
+
+### Event Subscriptions
+Enable these events:
+- `app_home_opened` - User opened the app home
+- `app_mention` - App was mentioned
+- `message.channels` - Message posted to channel
+- `message.im` - Message posted to direct message
+
+## Environment Configuration
 
 Set environment variables:
 
