@@ -477,21 +477,15 @@ func (m *Manager) saveWorkspaceData(workspaceID string) {
 		slog.Error("failed to create temp file", "error", err)
 		return
 	}
-	defer func() {
-		if err := file.Close(); err != nil {
-			slog.Error("failed to close file", "error", err)
-		}
-	}()
+	// Remove defer - we'll close explicitly to handle errors properly
 
 	gz := gzip.NewWriter(file)
-	defer func() {
-		if err := gz.Close(); err != nil {
-			slog.Error("failed to close gzip reader", "error", err)
-		}
-	}()
+	// Remove defer - we'll close explicitly to handle errors properly
 
 	if err := json.NewEncoder(gz).Encode(data); err != nil {
 		slog.Error("failed to encode state data", "error", err)
+		gz.Close() // Best effort cleanup
+		file.Close() // Best effort cleanup
 		if err := os.Remove(tempFile); err != nil {
 			slog.Error("failed to remove temp file", "error", err)
 		}
@@ -500,6 +494,7 @@ func (m *Manager) saveWorkspaceData(workspaceID string) {
 
 	if err := gz.Close(); err != nil {
 		slog.Error("failed to close gzip writer", "error", err)
+		file.Close() // Best effort cleanup
 		if err := os.Remove(tempFile); err != nil {
 			slog.Error("failed to remove temp file", "error", err)
 		}
