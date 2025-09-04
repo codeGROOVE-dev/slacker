@@ -150,7 +150,7 @@ func (c *Client) PostThread(ctx context.Context, channelID, text string, attachm
 		"attachments_count", len(attachments))
 
 	// Check if bot is in the channel before attempting to post
-	if !c.isBotInChannel(ctx, channelID) {
+	if !c.IsBotInChannel(ctx, channelID) {
 		// Try to determine if channel exists by attempting to get channel info
 		_, err := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{
 			ChannelID: channelID,
@@ -987,8 +987,8 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 	return channelName // Return original if not found
 }
 
-// isBotInChannel checks if the bot is a member of the specified channel with adaptive caching.
-func (c *Client) isBotInChannel(ctx context.Context, channelID string) bool {
+// IsBotInChannel checks if the bot is a member of the specified channel with adaptive caching.
+func (c *Client) IsBotInChannel(ctx context.Context, channelID string) bool {
 	// Check cache first
 	cacheKey := fmt.Sprintf("bot_in_channel_%s", channelID)
 	if cached, found := c.cache.get(cacheKey); found {

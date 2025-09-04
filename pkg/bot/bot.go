@@ -18,6 +18,7 @@ import (
 	slackpkg "github.com/codeGROOVE-dev/slacker/pkg/slack"
 	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
+	"golang.org/x/sync/errgroup"
 )
 
 // Common logging constants.
@@ -825,9 +826,48 @@ func (c *Coordinator) processChannelsInParallel(ctx context.Context, owner, repo
 		"channels", channels,
 		"pr_state", prState)
 
-	// Process channels sequentially for now (can be made parallel later if needed)
+	// Pre-filter channels to only those where the bot is a member (performance optimization)
+	var validChannels []string
 	for _, channelName := range channels {
-		c.processPRForChannel(ctx, owner, repo, prNumber, prState, event, channelName, workspaceID)
+		channelID := c.slack.ResolveChannelID(ctx, channelName)
+		if c.slack.IsBotInChannel(ctx, channelID) {
+			validChannels = append(validChannels, channelName)
+		} else {
+			slog.Warn("skipping channel - bot not a member",
+				"channel", channelName,
+				"channel_id", channelID,
+				"action_required", "invite bot to channel")
+		}
+	}
+
+	if len(validChannels) == 0 {
+		slog.Info("no valid channels to process - bot not in any configured channels",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+			"total_channels", len(channels),
+			"valid_channels", 0)
+		return
+	}
+
+	slog.Info("filtered channels for processing",
+		"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+		"total_channels", len(channels),
+		"valid_channels", len(validChannels),
+		"filtered_out", len(channels)-len(validChannels))
+
+	// Process channels in parallel for better performance
+	g, gCtx := errgroup.WithContext(ctx)
+
+	for _, channelName := range validChannels {
+		channelName := channelName // Capture loop variable
+		g.Go(func() error {
+			c.processPRForChannel(gCtx, owner, repo, prNumber, prState, event, channelName, workspaceID)
+			return nil // Don't fail the entire group if one channel fails
+		})
+	}
+
+	// Wait for all channels to complete
+	if err := g.Wait(); err != nil {
+		slog.Error("error in parallel channel processing", "error", err)
 	}
 }
 
