@@ -83,6 +83,7 @@ type Coordinator struct {
 	notifier      *notify.Manager
 	sprinklerURL  string
 	threadCache   *ThreadCache
+	workspaceName string // Track workspace name for better logging
 }
 
 // New creates a new bot coordinator.
@@ -112,13 +113,37 @@ func New(
 	if teamInfo, err := slackClient.GetWorkspaceInfo(ctx); err == nil {
 		// Use the team domain as workspace identifier
 		workspaceName := teamInfo.Domain + ".slack.com"
+		c.workspaceName = workspaceName
 		configManager.SetWorkspaceName(workspaceName)
-		slog.Info("set workspace name for config validation", "workspace", workspaceName)
+		slog.Info("initialized bot coordinator",
+			"workspace", workspaceName,
+			"workspace_id", teamInfo.ID,
+			"workspace_domain", teamInfo.Domain,
+			"ready_for_events", true)
 	} else {
 		slog.Warn("failed to get workspace info, config validation disabled", "error", err)
 	}
 
 	return c
+}
+
+// getChannelDisplayInfo returns both channel ID and name for logging purposes.
+func (c *Coordinator) getChannelDisplayInfo(ctx context.Context, channelName string) (channelID, displayName string) {
+	channelID = c.slack.ResolveChannelID(ctx, channelName)
+	
+	// For display purposes, show both name and ID
+	if channelID != channelName {
+		// Successfully resolved - show name and ID
+		displayName = fmt.Sprintf("#%s (%s)", channelName, channelID)
+	} else if channelName != "" && channelName[0] == 'C' {
+		// Already an ID - try to get the name for display
+		displayName = fmt.Sprintf("%s", channelID)
+	} else {
+		// Couldn't resolve - just show the name
+		displayName = fmt.Sprintf("#%s (unresolved)", channelName)
+	}
+	
+	return channelID, displayName
 }
 
 // findOrCreatePRThread finds an existing thread or creates a new one for a PR.
@@ -621,6 +646,293 @@ func (c *Coordinator) handlePullRequestEvent(ctx context.Context, owner, repo st
 	}
 }
 
+// handlePullRequestEventWithData handles pull request events with pre-fetched data to avoid redundant API calls.
+func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner, repo string, event struct {
+	Action      string `json:"action"`
+	Number      int    `json:"number"`
+	PullRequest struct {
+		Number  int    `json:"number"`
+		Title   string `json:"title"`
+		HTMLURL string `json:"html_url"`
+		User    struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	} `json:"pull_request"`
+}, checkResult *turn.CheckResponse, githubPR interface{}) {
+	
+	prNumber := event.Number
+
+	slog.Info("PR event with pre-fetched data",
+		"owner", owner,
+		"repo", repo,
+		"number", prNumber,
+		"action", event.Action)
+
+	// Load workspace and organization configuration
+	workspaceID := "default"
+	if err := c.configManager.LoadConfig(ctx, owner); err != nil {
+		slog.Error("failed to load config for org",
+			"org", owner,
+			"error", err)
+		return
+	}
+
+	// Get channels for this PR
+	channels := c.configManager.ChannelsForRepo(owner, repo)
+
+	slog.Info("evaluating PR for channel notifications",
+		"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+		"action", event.Action,
+		"title", event.PullRequest.Title,
+		"author", event.PullRequest.User.Login,
+		"configured_channels", len(channels),
+		"channels", channels)
+
+	if len(channels) == 0 {
+		slog.Info("no channels configured for PR - skipping channel notifications",
+			"owner", owner,
+			"repo", repo,
+			"pr_number", prNumber)
+		return
+	}
+
+	// Extract state from turnclient response instead of making additional API calls
+	prState := c.extractStateFromTurnclient(checkResult)
+	blockedOn := c.extractBlockedUsersFromTurnclient(checkResult)
+
+	slog.Info("retrieved PR state for notification processing",
+		"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+		"state", prState,
+		"blocked_on_users", len(blockedOn),
+		"blocked_on", blockedOn)
+
+	// Update or create PR state
+	prStateObj := &state.PRState{
+		Owner:       owner,
+		Repo:        repo,
+		Number:      prNumber,
+		Title:       event.PullRequest.Title,
+		Author:      event.PullRequest.User.Login,
+		State:       prState,
+		BlockedOn:   blockedOn,
+		LastUpdated: time.Now(),
+	}
+
+	c.stateManager.SetPRState(workspaceID, prStateObj)
+
+	// Process channels in parallel for better performance
+	c.processChannelsInParallel(ctx, owner, repo, prNumber, prState, event, channels, workspaceID)
+
+	// Handle user notifications (same as before)
+	if len(blockedOn) > 0 {
+		for _, userID := range blockedOn {
+			slog.Debug("user is blocking PR - would check for notification timing",
+				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+				"github_user", userID,
+				"pr_state", prState,
+				"pr_author", event.PullRequest.User.Login,
+				"needs_slack_mapping", true)
+		}
+	} else {
+		slog.Info("no users blocking PR - no notifications needed",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+			"pr_state", prState)
+	}
+}
+
+// extractStateFromTurnclient extracts PR state from turnclient response without additional API calls.
+func (c *Coordinator) extractStateFromTurnclient(checkResult *turn.CheckResponse) string {
+	// Use turnclient's state analysis instead of making GitHub API calls
+	// This maps turnclient states to our emoji reactions
+	if checkResult.PRState.State == "closed" {
+		if checkResult.PRState.ReadyToMerge { // This might need adjustment based on actual turnclient fields
+			return "merged"
+		}
+		return "face_palm"
+	}
+	
+	if checkResult.PRState.Draft {
+		return "test_tube" // Draft PRs
+	}
+	
+	if checkResult.PRState.Checks.Failing > 0 {
+		return "broken_heart" // Tests failing
+	}
+	
+	if checkResult.PRState.Checks.Pending > 0 || checkResult.PRState.Checks.Waiting > 0 {
+		return "test_tube" // Tests running
+	}
+	
+	if checkResult.PRState.Approved {
+		if checkResult.PRState.UnresolvedComments > 0 {
+			return "carpentry_saw" // Approved but has unresolved comments
+		}
+		return "check" // Approved and ready
+	}
+	
+	return "hourglass" // Default: waiting for review
+}
+
+// extractBlockedUsersFromTurnclient extracts blocked users from turnclient response.
+func (c *Coordinator) extractBlockedUsersFromTurnclient(checkResult *turn.CheckResponse) []string {
+	var blockedUsers []string
+	for user := range checkResult.PRState.UnblockAction {
+		blockedUsers = append(blockedUsers, user)
+	}
+	return blockedUsers
+}
+
+// processChannelsInParallel processes multiple channels concurrently for better performance.
+func (c *Coordinator) processChannelsInParallel(ctx context.Context, owner, repo string, prNumber int, prState string, event struct {
+	Action      string `json:"action"`
+	Number      int    `json:"number"`
+	PullRequest struct {
+		Number  int    `json:"number"`
+		Title   string `json:"title"`
+		HTMLURL string `json:"html_url"`
+		User    struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	} `json:"pull_request"`
+}, channels []string, workspaceID string) {
+	
+	slog.Info("processing PR for all configured channels",
+		"workspace", c.workspaceName,
+		"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+		"action", event.Action,
+		"channels_to_process", len(channels),
+		"channels", channels,
+		"pr_state", prState)
+
+	// Process channels sequentially for now (can be made parallel later if needed)
+	for _, channelName := range channels {
+		c.processPRForChannel(ctx, owner, repo, prNumber, prState, event, channelName, workspaceID)
+	}
+}
+
+// processPRForChannel handles PR processing for a single channel (extracted from the main loop).
+func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo string, prNumber int, prState string, event struct {
+	Action      string `json:"action"`
+	Number      int    `json:"number"`
+	PullRequest struct {
+		Number  int    `json:"number"`
+		Title   string `json:"title"`
+		HTMLURL string `json:"html_url"`
+		User    struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	} `json:"pull_request"`
+}, channelName, workspaceID string) {
+	
+	// Resolve channel name to ID for API calls and get display info
+	channelID, channelDisplay := c.getChannelDisplayInfo(ctx, channelName)
+	
+	slog.Info("processing PR for individual channel",
+		"workspace", c.workspaceName,
+		"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+		"channel", channelDisplay,
+		"channel_id", channelID,
+		"pr_state", prState,
+		"action", event.Action)
+
+	oldState := ""
+
+	// Check cache for existing thread info to get old state
+	prKey := fmt.Sprintf("%s/%s#%d", owner, repo, prNumber)
+	if threadInfo, exists := c.threadCache.Get(prKey); exists && threadInfo.ChannelID == channelID {
+		oldState = threadInfo.LastState
+	}
+
+	// Find or create thread for this PR in this channel
+	// Convert to the expected struct format
+	pullRequestStruct := struct {
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+		User   struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		HTMLURL string `json:"html_url"`
+	}{
+		Number:  event.PullRequest.Number,
+		Title:   event.PullRequest.Title,
+		User:    event.PullRequest.User,
+		HTMLURL: event.PullRequest.HTMLURL,
+	}
+	threadTS, err := c.findOrCreatePRThread(ctx, channelID, owner, repo, prNumber, prState, pullRequestStruct)
+	if err != nil {
+		slog.Error("failed to find or create PR thread",
+			"workspace", c.workspaceName,
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+			"channel", channelDisplay,
+			"channel_id", channelID,
+			"error", err,
+			"will_continue_with_next_channel", true)
+		return
+	}
+
+	// Update PR state to use the first successful thread (for backwards compatibility)
+	pr, exists := c.stateManager.PRState(workspaceID, owner, repo, prNumber)
+	if exists && pr != nil && pr.ThreadTS == "" {
+		pr.ThreadTS = threadTS
+		pr.ChannelID = channelID
+	}
+
+	// Update reactions only if state changed
+	if oldState != "" && oldState != prState {
+		slog.Debug("updating reactions for state change",
+			"workspace", c.workspaceName,
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+			"channel", channelDisplay,
+			"channel_id", channelID,
+			"thread_ts", threadTS,
+			"old_state", oldState,
+			"new_state", prState)
+
+		if err := c.slack.UpdateReactionsWithPrevious(ctx, channelID, threadTS, oldState, prState); err != nil {
+			slog.Error("failed to update reaction for PR state",
+				"workspace", c.workspaceName,
+				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+				"channel", channelDisplay,
+				"channel_id", channelID,
+				"thread_ts", threadTS,
+				"old_state", oldState,
+				"new_state", prState,
+				"error", err)
+		} else {
+			slog.Debug("updated PR reaction successfully",
+				"workspace", c.workspaceName,
+				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+				"channel", channelDisplay,
+				"channel_id", channelID,
+				"thread_ts", threadTS,
+				"old_state", oldState,
+				"new_state", prState)
+		}
+	} else {
+		slog.Debug("PR state unchanged, skipping reaction update",
+			"workspace", c.workspaceName,
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+			"channel", channelDisplay,
+			"channel_id", channelID,
+			"state", prState)
+	}
+
+	// State changes are communicated via emoji reactions only
+
+	// Track that we notified users in this channel for DM delay logic
+	c.stateManager.UpdateChannelNotification(workspaceID, owner, repo, prNumber)
+
+	slog.Info("successfully processed PR in channel",
+		"workspace", c.workspaceName,
+		"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+		"channel", channelDisplay,
+		"channel_id", channelID,
+		"thread_ts", threadTS,
+		"action", event.Action,
+		"pr_state", prState,
+		"had_state_change", oldState != "" && oldState != prState)
+}
+
 // handlePullRequestFromSprinkler handles pull request events from sprinkler by fetching PR data from GitHub API.
 func (c *Coordinator) handlePullRequestFromSprinkler(ctx context.Context, owner, repo string, prNumber int, sprinklerURL string, eventTimestamp time.Time) {
 	slog.Info("handling PR event from sprinkler using turnclient",
@@ -730,19 +1042,8 @@ func (c *Coordinator) handlePullRequestFromSprinkler(ctx context.Context, owner,
 		},
 	}
 
-	// Convert to JSON payload to reuse existing handlePullRequestEvent logic
-	payload, err := json.Marshal(event)
-	if err != nil {
-		slog.Error("failed to marshal synthetic PR event",
-			"owner", owner,
-			"repo", repo,
-			"pr_number", prNumber,
-			"error", err)
-		return
-	}
-
-	// Call the existing handler with the synthetic payload
-	c.handlePullRequestEvent(ctx, owner, repo, payload)
+	// Call optimized handler with pre-fetched data to avoid redundant API calls
+	c.handlePullRequestEventWithData(ctx, owner, repo, event, checkResult, pr)
 }
 
 // handlePullRequestReviewFromSprinkler handles PR review events from sprinkler.
