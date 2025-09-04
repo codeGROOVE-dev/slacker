@@ -150,7 +150,10 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 
 	// Search Slack for existing thread by this bot
 	prURL := fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, prNumber)
-	threadTS, err := c.searchForPRThread(ctx, channelID, prURL)
+	// Use a reasonable search window - last 30 days or creation time if available
+	// TODO: Once we have PR creation date in the struct, use that instead
+	searchFrom := time.Now().AddDate(0, 0, -30) // 30 days fallback
+	threadTS, err := c.searchForPRThread(ctx, channelID, prURL, searchFrom)
 	if err != nil {
 		slog.Warn("failed to search for existing PR thread",
 			"pr", prKey,
@@ -203,7 +206,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 // This approach uses channels:history permission instead of search:read which isn't available to bots.
 // Note: This is more expensive than search API but works reliably with basic bot permissions.
 // Results are cached by the calling code to minimize API calls.
-func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL string) (string, error) {
+func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL string, prCreatedAt time.Time) (string, error) {
 	slog.Debug("searching for existing PR thread using channel history",
 		"channel", channelID,
 		"pr_url", prURL)
@@ -211,37 +214,41 @@ func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL st
 	// Get bot info to identify our messages
 	botInfo, err := c.slack.GetBotInfo(ctx)
 	if err != nil {
-		slog.Warn("failed to get bot info, cannot filter to bot messages",
+		slog.Warn("failed to get bot info, cannot search for existing threads",
 			"channel", channelID,
 			"error", err)
-		return "", err
+		// Return empty string to indicate no thread found, not an error
+		return "", nil
 	}
 
-	// Search last 10 days of channel history
+	// Search from PR creation date (more efficient than arbitrary 10 days)
 	// Slack timestamps are in seconds since epoch
-	tenDaysAgo := time.Now().AddDate(0, 0, -10).Unix()
-	oldestTimestamp := strconv.FormatInt(tenDaysAgo, 10)
+	prCreatedTimestamp := prCreatedAt.Unix()
+	oldestTimestamp := strconv.FormatInt(prCreatedTimestamp, 10)
 
 	slog.Debug("searching channel history for bot messages",
 		"channel", channelID,
 		"bot_user_id", botInfo.UserID,
 		"oldest_timestamp", oldestTimestamp,
+		"pr_created_at", prCreatedAt.Format(time.RFC3339),
 		"looking_for_url", prURL)
 
 	// Get channel history - limit to 1000 messages for performance
-	// This should cover most cases since we're only looking at last 10 days
 	history, err := c.slack.GetChannelHistory(ctx, channelID, oldestTimestamp, "", 1000)
 	if err != nil {
 		slog.Warn("failed to get channel history",
 			"channel", channelID,
 			"error", err)
-		return "", err
+		// Return empty string to indicate no thread found, not an error
+		// This allows graceful fallback to creating new threads
+		return "", nil
 	}
 
 	slog.Debug("retrieved messages from channel history",
 		"channel", channelID,
 		"messages_count", len(history.Messages),
-		"oldest_requested", oldestTimestamp)
+		"search_from", prCreatedAt.Format(time.RFC3339),
+		"oldest_timestamp", oldestTimestamp)
 
 	// Look through messages for bot-posted threads containing the PR URL
 	for i := range history.Messages {
@@ -908,8 +915,16 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 		pr.User.Login,
 	)
 
-	// Create thread.
-	threadTS, err := c.slack.PostThread(ctx, channel, text, nil)
+	// Resolve channel name to ID for consistent API calls
+	resolvedChannel := c.slack.ResolveChannelID(ctx, channel)
+	if resolvedChannel != channel {
+		slog.Debug("resolved channel for thread creation", "original", channel, "resolved", resolvedChannel)
+	} else {
+		slog.Debug("channel resolution did not change value", "channel", channel, "might_be_channel_id_already", resolvedChannel[0] == 'C')
+	}
+
+	// Create thread with resolved channel ID.
+	threadTS, err := c.slack.PostThread(ctx, resolvedChannel, text, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to post thread: %w", err)
 	}
@@ -919,11 +934,11 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 	if err == nil {
 		slog.Debug("adding initial reaction for new thread",
 			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, number),
-			"channel", channel,
+			"channel", resolvedChannel,
 			"thread_ts", threadTS,
 			"pr_state", prState)
-		if err := c.slack.UpdateReactions(ctx, channel, threadTS, prState); err != nil {
-			slog.Warn("failed to add initial reaction", "error", err, "channel", channel, "thread_ts", threadTS, "pr_state", prState)
+		if err := c.slack.UpdateReactions(ctx, resolvedChannel, threadTS, prState); err != nil {
+			slog.Warn("failed to add initial reaction", "error", err, "channel", resolvedChannel, "thread_ts", threadTS, "pr_state", prState)
 		}
 	}
 

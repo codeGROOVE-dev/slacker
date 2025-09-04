@@ -46,7 +46,15 @@ func (c *Client) GetWorkspaceInfo(ctx context.Context) (*slack.TeamInfo, error) 
 
 // PostThread creates a new thread in a channel for a PR with retry logic.
 func (c *Client) PostThread(ctx context.Context, channelID, text string, attachments []slack.Attachment) (string, error) {
-	slog.Info("posting thread to channel", "channel", channelID)
+	slog.Info("posting thread to channel",
+		"channel_id", channelID,
+		"text_preview", func() string {
+			if len(text) > 100 {
+				return text[:100] + "..."
+			}
+			return text
+		}(),
+		"attachments_count", len(attachments))
 
 	// Disable unfurling for GitHub links.
 	options := []slack.MsgOption{
@@ -88,7 +96,17 @@ func (c *Client) PostThread(ctx context.Context, channelID, text string, attachm
 		return "", fmt.Errorf("failed to post message after retries: %w", err)
 	}
 
-	slog.Info("successfully posted thread", "thread", timestamp, "channel", channelID)
+	slog.Info("successfully posted thread",
+		"thread_timestamp", timestamp,
+		"channel_id", channelID,
+		"channel_id_format", func() string {
+			if channelID != "" && channelID[0] == 'C' {
+				return "slack_channel_id"
+			} else if channelID != "" && channelID[0] == '#' {
+				return "channel_name_with_hash"
+			}
+			return "channel_name_without_hash"
+		}())
 	return timestamp, nil
 }
 
@@ -149,6 +167,7 @@ func (c *Client) AddReaction(ctx context.Context, channelID, timestamp, emoji st
 			if err != nil {
 				// Ignore "already_reacted" errors - not really an error
 				if strings.Contains(err.Error(), "already_reacted") {
+					slog.Debug("reaction already exists, skipping", "emoji", emoji)
 					return nil
 				}
 				if isRateLimitError(err) {
@@ -158,9 +177,23 @@ func (c *Client) AddReaction(ctx context.Context, channelID, timestamp, emoji st
 				// Don't retry on message_not_found
 				if strings.Contains(err.Error(), "message_not_found") ||
 					strings.Contains(err.Error(), "no_reaction") {
+					slog.Error("permanent error adding reaction",
+						"emoji", emoji,
+						"error", err,
+						"error_type", fmt.Sprintf("%T", err),
+						"error_string", err.Error(),
+						"channel_id", channelID,
+						"timestamp", timestamp)
 					return retry.Unrecoverable(err)
 				}
-				slog.Debug("failed to add reaction, retrying", "emoji", emoji, "error", err)
+				// Log detailed error info for any other failures
+				slog.Warn("failed to add reaction, will retry",
+					"emoji", emoji,
+					"error", err,
+					"error_type", fmt.Sprintf("%T", err),
+					"error_string", err.Error(),
+					"channel_id", channelID,
+					"timestamp", timestamp)
 				return err
 			}
 			return nil
@@ -689,7 +722,19 @@ func (c *Client) GetChannelHistory(ctx context.Context, channelID string, oldest
 		Latest:    latest,
 	}
 
-	return c.api.GetConversationHistoryContext(ctx, params)
+	result, err := c.api.GetConversationHistoryContext(ctx, params)
+	if err != nil {
+		slog.Debug("GetChannelHistory failed with detailed error info",
+			"error", err,
+			"error_type", fmt.Sprintf("%T", err),
+			"error_string", err.Error(),
+			"channel_id", channelID,
+			"oldest", oldest,
+			"latest", latest,
+			"limit", limit,
+			"api_method", "GetConversationHistoryContext")
+	}
+	return result, err
 }
 
 // GetBotInfo returns information about the authenticated bot user.
@@ -700,24 +745,50 @@ func (c *Client) GetBotInfo(ctx context.Context) (*slack.AuthTestResponse, error
 // ResolveChannelID resolves a channel name (e.g., "all-codegroove" or "#all-codegroove") to a channel ID.
 // Returns the channel ID if found, or the original input if it's already an ID or can't be resolved.
 func (c *Client) ResolveChannelID(ctx context.Context, channelName string) string {
+	originalChannelName := channelName
+	slog.Debug("attempting to resolve channel name to ID",
+		"input", originalChannelName)
+
 	// If it's already a channel ID (starts with C), return as-is
 	if channelName != "" && channelName[0] == 'C' {
+		slog.Debug("input is already a channel ID", "channel_id", channelName)
 		return channelName
 	}
 
 	// Remove # prefix if present
 	if channelName != "" && channelName[0] == '#' {
 		channelName = channelName[1:]
+		slog.Debug("removed # prefix", "original", originalChannelName, "cleaned", channelName)
 	}
 
-	// Try to find the channel
+	// Try to find the channel - first try public and private channels
 	channels, cursor, err := c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
 		Types: []string{"public_channel", "private_channel"},
 		Limit: 200,
 	})
 	if err != nil {
-		slog.Warn("failed to get conversations for channel resolution", "error", err, "channel", channelName)
-		return channelName // Return original name if we can't resolve
+		slog.Warn("failed to get public+private conversations, trying public only",
+			"error", err,
+			"error_type", fmt.Sprintf("%T", err),
+			"channel", channelName)
+
+		// Fallback: try public channels only (might not have private channel permissions)
+		channels, cursor, err = c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
+			Types: []string{"public_channel"},
+			Limit: 200,
+		})
+		if err != nil {
+			slog.Error("failed to get conversations for channel resolution",
+				"error", err,
+				"error_type", fmt.Sprintf("%T", err),
+				"error_string", err.Error(),
+				"channel", channelName,
+				"attempted_types", []string{"public_channel", "private_channel"},
+				"fallback_types", []string{"public_channel"},
+				"api_method", "GetConversationsContext")
+			return channelName // Return original name if we can't resolve
+		}
+		slog.Debug("successfully retrieved public channels only", "channel", channelName, "count", len(channels))
 	}
 
 	// Search through channels
