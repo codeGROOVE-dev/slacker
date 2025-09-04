@@ -20,6 +20,16 @@ import (
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
 
+// Common logging constants.
+const (
+	logFieldPR      = "pr"
+	logFieldRepo    = "repo"
+	logFieldOwner   = "owner"
+	logFieldChannel = "channel"
+	prFormatString  = "%s/%s#%d"
+	historyPageSize = 1000
+)
+
 // minInt returns the minimum of two integers.
 func minInt(a, b int) int {
 	if a < b {
@@ -132,13 +142,14 @@ func (c *Coordinator) getChannelDisplayInfo(ctx context.Context, channelName str
 	channelID = c.slack.ResolveChannelID(ctx, channelName)
 
 	// For display purposes, show both name and ID
-	if channelID != channelName {
+	switch {
+	case channelID != channelName:
 		// Successfully resolved - show name and ID
 		displayName = fmt.Sprintf("#%s (%s)", channelName, channelID)
-	} else if channelName != "" && channelName[0] == 'C' {
+	case channelName != "" && channelName[0] == 'C':
 		// Already an ID - try to get the name for display
-		displayName = fmt.Sprintf("%s", channelID)
-	} else {
+		displayName = channelID
+	default:
 		// Couldn't resolve - just show the name
 		displayName = fmt.Sprintf("#%s (unresolved)", channelName)
 	}
@@ -259,7 +270,7 @@ func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL st
 		"looking_for_url", prURL)
 
 	// Get channel history - limit to 1000 messages for performance
-	history, err := c.slack.GetChannelHistory(ctx, channelID, oldestTimestamp, "", 1000)
+	history, err := c.slack.GetChannelHistory(ctx, channelID, oldestTimestamp, "", historyPageSize)
 	if err != nil {
 		slog.Warn("failed to get channel history",
 			"channel", channelID,
@@ -751,7 +762,7 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 }
 
 // extractStateFromTurnclient extracts PR state from turnclient response without additional API calls.
-func (c *Coordinator) extractStateFromTurnclient(checkResult *turn.CheckResponse) string {
+func (*Coordinator) extractStateFromTurnclient(checkResult *turn.CheckResponse) string {
 	// Use turnclient's state analysis instead of making GitHub API calls
 	// This maps turnclient states to our emoji reactions
 	if checkResult.PRState.State == "closed" {
@@ -784,7 +795,7 @@ func (c *Coordinator) extractStateFromTurnclient(checkResult *turn.CheckResponse
 }
 
 // extractBlockedUsersFromTurnclient extracts blocked users from turnclient response.
-func (c *Coordinator) extractBlockedUsersFromTurnclient(checkResult *turn.CheckResponse) []string {
+func (*Coordinator) extractBlockedUsersFromTurnclient(checkResult *turn.CheckResponse) []string {
 	var blockedUsers []string
 	for user := range checkResult.PRState.UnblockAction {
 		blockedUsers = append(blockedUsers, user)
@@ -1057,7 +1068,7 @@ func (c *Coordinator) handlePullRequestFromSprinkler(ctx context.Context, owner,
 }
 
 // handlePullRequestReviewFromSprinkler handles PR review events from sprinkler.
-func (c *Coordinator) handlePullRequestReviewFromSprinkler(ctx context.Context, owner, repo string, prNumber int, sprinklerURL string, eventTimestamp time.Time) {
+func (*Coordinator) handlePullRequestReviewFromSprinkler(ctx context.Context, owner, repo string, prNumber int, sprinklerURL string, eventTimestamp time.Time) {
 	slog.Info("handling PR review event from sprinkler",
 		"owner", owner,
 		"repo", repo,

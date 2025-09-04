@@ -23,6 +23,12 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// Server configuration constants.
+const (
+	serverReadTimeout  = 15 * time.Second
+	serverWriteTimeout = 15 * time.Second
+)
+
 func main() {
 	// Load configuration from environment.
 	cfg, err := loadConfig()
@@ -70,7 +76,7 @@ func main() {
 	if err != nil {
 		slog.Error("failed to initialize GitHub client", "error", err)
 		cancel() // Ensure cleanup happens before exit
-		os.Exit(1)
+		return   // Let main return naturally instead of os.Exit
 	}
 
 	// Initialize Slack client.
@@ -111,8 +117,8 @@ func main() {
 	server := &http.Server{
 		Addr:         ":" + port,
 		Handler:      router,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		ReadTimeout:  serverReadTimeout,
+		WriteTimeout: serverWriteTimeout,
 		IdleTimeout:  60 * time.Second,
 	}
 
@@ -126,7 +132,7 @@ func main() {
 
 	eg.Go(func() error {
 		<-ctx.Done()
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer shutdownCancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("server shutdown failed: %w", err)
