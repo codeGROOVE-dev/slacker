@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +18,6 @@ import (
 	slackpkg "github.com/codeGROOVE-dev/slacker/pkg/slack"
 	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
-	"github.com/slack-go/slack"
 )
 
 // min returns the minimum of two integers.
@@ -129,7 +129,8 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 		Login string `json:"login"`
 	} `json:"user"`
 	HTMLURL string `json:"html_url"`
-}) (string, error) {
+},
+) (string, error) {
 	prKey := fmt.Sprintf("%s/%s#%d", owner, repo, prNumber)
 
 	slog.Debug("finding or creating PR thread",
@@ -198,57 +199,82 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 	return newThreadTS, nil
 }
 
-// searchForPRThread searches for an existing PR thread in a channel.
+// searchForPRThread searches for an existing PR thread in a channel using channel history.
+// This approach uses channels:history permission instead of search:read which isn't available to bots.
+// Note: This is more expensive than search API but works reliably with basic bot permissions.
+// Results are cached by the calling code to minimize API calls.
 func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL string) (string, error) {
-	slog.Debug("searching for existing PR thread using Slack API",
+	slog.Debug("searching for existing PR thread using channel history",
 		"channel", channelID,
 		"pr_url", prURL)
 
-	// Use Slack's SearchMessagesContext to find messages containing the PR URL
-	// Search in the specific channel for messages from our bot
-	query := fmt.Sprintf("in:#%s %s", channelID, prURL)
-
-	searchParams := &slack.SearchParameters{
-		Count: 10, // Limit to 10 results
-		Sort:  "timestamp",
-	}
-
-	// Access the underlying Slack API client to use SearchMessagesContext
-	searchResult, err := c.searchSlackMessages(ctx, query, searchParams)
+	// Get bot info to identify our messages
+	botInfo, err := c.slack.GetBotInfo(ctx)
 	if err != nil {
-		slog.Warn("failed to search Slack messages",
+		slog.Warn("failed to get bot info, cannot filter to bot messages",
 			"channel", channelID,
-			"query", query,
 			"error", err)
 		return "", err
 	}
 
-	// Look for messages that contain the PR URL and are likely thread starters
-	for _, msg := range searchResult.Matches {
-		// Check if message contains PR URL and is from a bot (User is empty, Username is set)
-		if strings.Contains(msg.Text, prURL) && msg.User == "" && msg.Username != "" {
-			slog.Info("found existing PR thread via Slack search",
+	// Search last 10 days of channel history
+	// Slack timestamps are in seconds since epoch
+	tenDaysAgo := time.Now().AddDate(0, 0, -10).Unix()
+	oldestTimestamp := strconv.FormatInt(tenDaysAgo, 10)
+
+	slog.Debug("searching channel history for bot messages",
+		"channel", channelID,
+		"bot_user_id", botInfo.UserID,
+		"oldest_timestamp", oldestTimestamp,
+		"looking_for_url", prURL)
+
+	// Get channel history - limit to 1000 messages for performance
+	// This should cover most cases since we're only looking at last 10 days
+	history, err := c.slack.GetChannelHistory(ctx, channelID, oldestTimestamp, "", 1000)
+	if err != nil {
+		slog.Warn("failed to get channel history",
+			"channel", channelID,
+			"error", err)
+		return "", err
+	}
+
+	slog.Debug("retrieved messages from channel history",
+		"channel", channelID,
+		"messages_count", len(history.Messages),
+		"oldest_requested", oldestTimestamp)
+
+	// Look through messages for bot-posted threads containing the PR URL
+	for _, msg := range history.Messages {
+		// Only check messages from our bot
+		if msg.User != botInfo.UserID {
+			continue
+		}
+
+		// Check if this message contains the PR URL
+		if strings.Contains(msg.Text, prURL) {
+			// Parse timestamp to calculate message age
+			var messageAgeHours int
+			if ts, err := strconv.ParseFloat(msg.Timestamp, 64); err == nil {
+				messageAgeHours = int(time.Since(time.Unix(int64(ts), 0)).Hours())
+			}
+
+			slog.Info("found existing PR thread via channel history",
 				"channel", channelID,
 				"thread_ts", msg.Timestamp,
 				"pr_url", prURL,
-				"bot_username", msg.Username,
+				"message_age_hours", messageAgeHours,
 				"message_preview", msg.Text[:min(100, len(msg.Text))])
 			return msg.Timestamp, nil
 		}
 	}
 
-	slog.Debug("no existing PR thread found in search results",
+	slog.Debug("no existing PR thread found in channel history",
 		"channel", channelID,
 		"pr_url", prURL,
-		"messages_searched", len(searchResult.Matches))
+		"messages_searched", len(history.Messages),
+		"bot_user_id", botInfo.UserID)
 
 	return "", nil
-}
-
-// searchSlackMessages wraps the Slack API search functionality.
-func (c *Coordinator) searchSlackMessages(ctx context.Context, query string, params *slack.SearchParameters) (*slack.SearchMessages, error) {
-	// Delegate to the slack client to perform the search
-	return c.slack.SearchMessages(ctx, query, params)
 }
 
 // postStateChangeUpdate posts a follow-up message about a PR state change.
@@ -563,7 +589,7 @@ func (c *Coordinator) handlePullRequestEvent(ctx context.Context, owner, repo st
 				"thread_ts", threadTS,
 				"old_state", oldState,
 				"new_state", prState)
-			
+
 			if err := c.slack.UpdateReactionsWithPrevious(ctx, channelID, threadTS, oldState, prState); err != nil {
 				slog.Error("failed to update reaction for PR state",
 					"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),

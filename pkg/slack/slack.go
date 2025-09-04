@@ -139,7 +139,7 @@ func (c *Client) AddReaction(ctx context.Context, channelID, timestamp, emoji st
 		"channel_id", channelID,
 		"timestamp", timestamp,
 		"emoji", emoji)
-	
+
 	err := retry.Do(
 		func() error {
 			err := c.api.AddReactionContext(ctx, emoji, slack.ItemRef{
@@ -185,7 +185,7 @@ func (c *Client) RemoveReaction(ctx context.Context, channelID, timestamp, emoji
 		"channel_id", channelID,
 		"timestamp", timestamp,
 		"emoji", emoji)
-	
+
 	err := retry.Do(
 		func() error {
 			err := c.api.RemoveReactionContext(ctx, emoji, slack.ItemRef{
@@ -678,6 +678,23 @@ func (c *Client) PublishHomeView(userID string, blocks []slack.Block) error {
 // SearchMessages searches for messages using the Slack API.
 func (c *Client) SearchMessages(ctx context.Context, query string, params *slack.SearchParameters) (*slack.SearchMessages, error) {
 	return c.api.SearchMessagesContext(ctx, query, *params)
+}
+
+// GetChannelHistory retrieves channel message history with optional time filtering.
+func (c *Client) GetChannelHistory(ctx context.Context, channelID string, oldest, latest string, limit int) (*slack.GetConversationHistoryResponse, error) {
+	params := &slack.GetConversationHistoryParameters{
+		ChannelID: channelID,
+		Limit:     limit,
+		Oldest:    oldest,
+		Latest:    latest,
+	}
+
+	return c.api.GetConversationHistoryContext(ctx, params)
+}
+
+// GetBotInfo returns information about the authenticated bot user.
+func (c *Client) GetBotInfo(ctx context.Context) (*slack.AuthTestResponse, error) {
+	return c.api.AuthTestContext(ctx)
 }
 
 // ResolveChannelID resolves a channel name (e.g., "all-codegroove" or "#all-codegroove") to a channel ID.

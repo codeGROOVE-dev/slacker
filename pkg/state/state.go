@@ -484,7 +484,7 @@ func (m *Manager) saveWorkspaceData(workspaceID string) {
 
 	if err := json.NewEncoder(gz).Encode(data); err != nil {
 		slog.Error("failed to encode state data", "error", err)
-		gz.Close() // Best effort cleanup
+		gz.Close()   // Best effort cleanup
 		file.Close() // Best effort cleanup
 		if err := os.Remove(tempFile); err != nil {
 			slog.Error("failed to remove temp file", "error", err)
