@@ -58,6 +58,13 @@ func (c *Client) PostThread(ctx context.Context, channelID, text string, attachm
 
 	// Check if bot is in the channel before attempting to post
 	if !c.isBotInChannel(ctx, channelID) {
+		// Try to determine if channel exists by attempting to get channel info
+		_, err := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{
+			ChannelID: channelID,
+		})
+		if err != nil && strings.Contains(err.Error(), "channel_not_found") {
+			return "", fmt.Errorf("channel %s does not exist - please create the channel first", channelID)
+		}
 		return "", fmt.Errorf("bot is not a member of channel %s - please invite the bot to the channel first", channelID)
 	}
 
@@ -847,7 +854,22 @@ func (c *Client) isBotInChannel(ctx context.Context, channelID string) bool {
 		Limit:     200,
 	})
 	if err != nil {
-		slog.Warn("failed to get channel members - assuming bot is not in channel",
+		// Check if it's a channel not found error
+		if strings.Contains(err.Error(), "channel_not_found") {
+			slog.Info("channel does not exist",
+				"channel_id", channelID,
+				"action_required", "create channel or check channel name")
+			return false
+		}
+		// Check if it's a not_in_channel error
+		if strings.Contains(err.Error(), "not_in_channel") {
+			slog.Info("bot is not a member of channel",
+				"channel_id", channelID,
+				"bot_user_id", authTest.UserID,
+				"action_required", "invite bot to channel")
+			return false
+		}
+		slog.Warn("failed to get channel members - unknown error",
 			"error", err,
 			"error_type", fmt.Sprintf("%T", err),
 			"error_string", err.Error(),
