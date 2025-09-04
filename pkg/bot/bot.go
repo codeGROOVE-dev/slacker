@@ -663,21 +663,13 @@ func (c *Coordinator) handlePullRequestFromSprinkler(ctx context.Context, owner,
 	// Set GitHub token for authentication
 	turnClient.SetAuthToken(githubToken)
 
-	// Get the GitHub installation user for the turnclient user parameter
-	// This should be the bot user that GitHub automatically assigns to the integration
-	githubUser, _, err := c.github.Client().Users.Get(ctx, "")
-	if err != nil {
-		slog.Error("failed to get GitHub installation user",
-			"owner", owner,
-			"repo", repo,
-			"pr_number", prNumber,
-			"error", err)
-		return
-	}
-
-	botUsername := githubUser.GetLogin()
-	slog.Debug("using GitHub bot username for turnclient",
-		"bot_username", botUsername)
+	// Use the owner (organization name) as the username for turnclient
+	// This avoids the 403 error from trying to get the GitHub installation user
+	// which requires user-level permissions that GitHub App integrations don't have
+	botUsername := owner
+	slog.Debug("using owner as username for turnclient",
+		"bot_username", botUsername,
+		"owner", owner)
 
 	// Use the turnclient to check the PR - this gives us rich PR state analysis
 	prURL := fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, prNumber)
