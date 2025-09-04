@@ -30,10 +30,17 @@ type cacheEntry struct {
 
 // apiCache provides thread-safe caching for Slack API responses.
 type apiCache struct {
-	mu      sync.RWMutex
 	entries map[string]cacheEntry
+	mu      sync.RWMutex
 	hits    int64 // Cache hit counter
 	misses  int64 // Cache miss counter
+}
+
+// Client wraps the Slack API client with caching.
+type Client struct {
+	api           *slack.Client
+	signingSecret string
+	cache         *apiCache
 }
 
 // set stores a value in the cache with TTL.
@@ -91,13 +98,6 @@ func (c *Client) invalidateChannelCache(channelID string) {
 	slog.Debug("invalidated channel caches", "channel_id", channelID, "cleared", "membership")
 }
 
-// Client wraps the Slack API client with caching.
-type Client struct {
-	api           *slack.Client
-	signingSecret string
-	cache         *apiCache
-}
-
 // New creates a new Slack client with caching.
 func New(token, signingSecret string) *Client {
 	return &Client{
@@ -115,8 +115,12 @@ func (c *Client) GetWorkspaceInfo(ctx context.Context) (*slack.TeamInfo, error) 
 
 	// Try cache first
 	if cached, found := c.cache.get(cacheKey); found {
-		slog.Debug("using cached team info")
-		return cached.(*slack.TeamInfo), nil
+		if teamInfo, ok := cached.(*slack.TeamInfo); ok {
+			slog.Debug("using cached team info")
+			return teamInfo, nil
+		}
+		slog.Warn("cached team info has incorrect type, refreshing")
+		c.cache.invalidate(cacheKey)
 	}
 
 	// Fetch from API
@@ -857,8 +861,12 @@ func (c *Client) GetBotInfo(ctx context.Context) (*slack.AuthTestResponse, error
 
 	// Try cache first
 	if cached, found := c.cache.get(cacheKey); found {
-		slog.Debug("using cached bot auth info")
-		return cached.(*slack.AuthTestResponse), nil
+		if authTest, ok := cached.(*slack.AuthTestResponse); ok {
+			slog.Debug("using cached bot auth info")
+			return authTest, nil
+		}
+		slog.Warn("cached auth test has incorrect type, refreshing")
+		c.cache.invalidate(cacheKey)
 	}
 
 	// Fetch from API
@@ -897,9 +905,12 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 	// Check cache first (very important for performance)
 	cacheKey := fmt.Sprintf("channel_resolution_%s", channelName)
 	if cached, found := c.cache.get(cacheKey); found {
-		resolvedID := cached.(string)
-		slog.Debug("using cached channel resolution", "name", channelName, "id", resolvedID)
-		return resolvedID
+		if resolvedID, ok := cached.(string); ok {
+			slog.Debug("using cached channel resolution", "name", channelName, "id", resolvedID)
+			return resolvedID
+		}
+		slog.Warn("cached channel resolution has incorrect type, refreshing")
+		c.cache.invalidate(cacheKey)
 	}
 
 	slog.Debug("channel not in cache, fetching from Slack API", "channel", channelName)
@@ -981,9 +992,12 @@ func (c *Client) isBotInChannel(ctx context.Context, channelID string) bool {
 	// Check cache first
 	cacheKey := fmt.Sprintf("bot_in_channel_%s", channelID)
 	if cached, found := c.cache.get(cacheKey); found {
-		isMember := cached.(bool)
-		slog.Debug("using cached channel membership", "channel_id", channelID, "is_member", isMember)
-		return isMember
+		if isMember, ok := cached.(bool); ok {
+			slog.Debug("using cached channel membership", "channel_id", channelID, "is_member", isMember)
+			return isMember
+		}
+		slog.Warn("cached channel membership has incorrect type, refreshing")
+		c.cache.invalidate(cacheKey)
 	}
 
 	slog.Debug("channel membership not cached, checking via API", "channel_id", channelID)

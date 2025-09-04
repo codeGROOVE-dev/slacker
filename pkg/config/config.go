@@ -48,9 +48,9 @@ type configCacheEntry struct {
 
 // configCache manages configuration caching with TTL and thread safety.
 type configCache struct {
-	mu      sync.RWMutex
 	entries map[string]configCacheEntry
 	ttl     time.Duration
+	mu      sync.RWMutex
 	hits    int64
 	misses  int64
 }
@@ -123,9 +123,9 @@ func (c *configCache) stats() (hits, misses int64) {
 type Manager struct {
 	configs       map[string]*RepoConfig
 	client        *github.Client
+	cache         *configCache
 	workspaceName string
 	mu            sync.RWMutex
-	cache         *configCache
 }
 
 // New creates a new config manager.
