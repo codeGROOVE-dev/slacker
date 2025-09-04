@@ -12,6 +12,18 @@ import (
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
 )
 
+// getMapKeys returns the keys of a map[string]any for logging purposes.
+func getMapKeys(m map[string]any) []string {
+	if m == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 // RunWithSprinklerClient runs the bot using the official sprinkler client library.
 // This is the recommended approach as it handles all WebSocket complexity including ping/pong.
 func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
@@ -57,11 +69,35 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 				"url", event.URL,
 				"timestamp", event.Timestamp)
 
-			// Convert the raw event data to our SprinklerMessage format
-			// The event.Raw contains the GitHub webhook payload
+			// Log the raw event data for debugging
+			slog.Debug("sprinkler raw event data", "raw", event.Raw)
+
+			// The event.Raw should contain the GitHub webhook payload as map[string]any
 			var payload json.RawMessage
-			if payloadData, err := json.Marshal(event.Raw); err == nil {
-				payload = payloadData
+			if event.Raw != nil {
+				// Convert the map to JSON bytes
+				if payloadData, err := json.Marshal(event.Raw); err == nil {
+					payload = payloadData
+					slog.Debug("marshaled payload from sprinkler event",
+						"payload_size", len(payload),
+						"raw_type", fmt.Sprintf("%T", event.Raw))
+				} else {
+					slog.Error("failed to marshal event.Raw to JSON payload",
+						"error", err,
+						"raw_type", fmt.Sprintf("%T", event.Raw),
+						"event_type", event.Type,
+						"event_url", event.URL,
+						"raw_keys", getMapKeys(event.Raw))
+					return
+				}
+			} else {
+				slog.Warn("event.Raw is nil - no GitHub webhook payload available")
+				// If we don't have the full payload, we can't process this event properly
+				slog.Error("cannot process event without GitHub webhook payload",
+					"type", event.Type,
+					"url", event.URL,
+					"needs_full_webhook_data", true)
+				return
 			}
 
 			// Extract repo from URL if possible
@@ -72,6 +108,13 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 				if len(parts) >= 5 && parts[2] == "github.com" {
 					repo = parts[3] + "/" + parts[4]
 				}
+			}
+
+			if repo == "" {
+				slog.Error("could not extract repo from URL",
+					"url", event.URL,
+					"cannot_process_without_repo", true)
+				return
 			}
 
 			msg := SprinklerMessage{
@@ -85,7 +128,8 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 				slog.Error("error processing event",
 					"error", err,
 					"type", event.Type,
-					"url", event.URL)
+					"url", event.URL,
+					"repo", repo)
 			}
 		},
 	}
