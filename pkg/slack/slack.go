@@ -637,3 +637,8 @@ func (c *Client) PublishHomeView(userID string, blocks []slack.Block) error {
 	}
 	return nil
 }
+
+// SearchMessages searches for messages using the Slack API.
+func (c *Client) SearchMessages(ctx context.Context, query string, params *slack.SearchParameters) (*slack.SearchMessages, error) {
+	return c.api.SearchMessagesContext(ctx, query, *params)
+}
