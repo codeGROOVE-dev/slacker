@@ -77,7 +77,7 @@ func main() {
 	slackClient := slack.New(cfg.SlackToken, cfg.SlackSigningSecret)
 
 	// Initialize notification manager.
-	notifier := notify.New(slackClient, stateManager)
+	notifier := notify.New(slackClient, stateManager, configManager)
 
 	// Initialize bot coordinator.
 	botCoordinator := bot.New(

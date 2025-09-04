@@ -24,32 +24,51 @@ Ready to Review is an elegant modern Slack bot written in Go that integrates wit
 ### 2. User Dashboard
 - Native Slack app home tab with Block Kit UI showing incoming/outgoing PRs
 - Highlights PRs blocked on the user
-- User settings in app home:
-  - Enable real-time notifications [default: on]
-  - Notification delay after channel post [15min, 30min, 60min, 2hr] [default: 30min]
-  - Enable daily reminders [default: on]
+- Clean, settings-free interface focusing on PR status
 - Alternative web dashboard available at https://dash.ready-to-review.dev/
 
 ### 3. Smart Notifications
-- Real-time: Send DM when user is blocking a PR (respects channel notification delay and Slack active status)
-- Daily reminders: Send between 8-9am local time if >8 hours since last notification
+- **Smart DM Logic**: If user tagged in channel, delay DMs by configured time (default: 60min)
+- **Immediate DMs**: If user not in notification channel, send DM immediately
+- **Daily reminders**: Send between 8-9am local time if enabled and >8 hours since last notification
+- **Anti-spam**: Rate limit DMs to same user (30min minimum between DMs)
 - Format: `:postal_horn: Update README.md • goose#51 by @slackUser - waiting for your review`
 
 ### 4. Configuration
-- Read YAML config from `/.github/codeGROOVE/slack.yaml` in target repos
+- Read YAML config from `/.codeGROOVE/slack.yaml` in target repos
+- Only posts to Slack if workspace name matches
+- No user settings UI - all controlled via YAML config
+- **Auto-discovery**: Repos automatically map to channels with same name unless overridden
 - Config format:
 ```yaml
 global:
     prefix: ":postal_horn:"
-repos:
+    slack: codegroove-workspace.slack.com
+    channel_notify_delay_mins: 60
+    daily_reminders: true
+
+channels:
+    # Mute auto-discovered #goose channel
     goose:
-        channels:
-            - #goose
-    .github:
-        channels:
-            - #goose
-            - #eng
+        mute: true
+
+    # Catch-all for repos without specific channels
+    all-codegroove:
+        repos:
+            - "*"
+
+    # Override auto-discovery - explicit mapping
+    social:
+        repos:
+            - sprinkler
+            - slacker
 ```
+
+### 5. Channel Auto-Discovery
+- **Default behavior**: `codeGROOVE-dev/goose` → `#goose` channel
+- **Explicit override**: Add repo to channel's `repos` list
+- **Muting**: Set `mute: true` for auto-discovered channel name
+- **Wildcard fallback**: Use `"*"` to catch unmapped repos
 
 ## Development Commands
 
@@ -98,9 +117,22 @@ slacker/
 - Use Events API for real-time updates
 - Handle app_home_opened events to update dashboard
 - Build dashboard using Block Kit components
-- Handle interactive components for settings
 - Cache user timezone and presence information
 - Disable link previews for GitHub URLs in messages
+
+### Required Slack Bot Scopes
+- `app_mentions:read` - Read mentions of the app
+- `channels:history` - View messages in public channels
+- `channels:read` - View basic information about public channels
+- `chat:write` - Send messages as the bot
+- `chat:write.public` - Send messages to channels the bot isn't a member of
+- `commands` - Add shortcuts and/or slash commands
+- `im:history` - View messages in direct messages
+- `im:read` - View basic information about direct messages
+- `im:write` - Start direct messages with people
+- `reactions:write` - Add and edit emoji reactions
+- `team:read` - **View workspace name and domain (required for workspace validation)**
+- `users:read` - View people in the workspace
 
 ### State Management
 - Track PR states and transitions for notification logic

@@ -3,14 +3,26 @@ package bot
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
 )
+
+// getMapKeys returns the keys of a map[string]any for logging purposes.
+func getMapKeys(m map[string]any) []string {
+	if m == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
 
 // RunWithSprinklerClient runs the bot using the official sprinkler client library.
 // This is the recommended approach as it handles all WebSocket complexity including ping/pong.
@@ -57,11 +69,47 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 				"url", event.URL,
 				"timestamp", event.Timestamp)
 
-			// Convert the raw event data to our SprinklerMessage format
-			// The event.Raw contains the GitHub webhook payload
-			var payload json.RawMessage
-			if payloadData, err := json.Marshal(event.Raw); err == nil {
-				payload = payloadData
+			// Log the sprinkler event data for debugging
+			slog.Debug("sprinkler event metadata",
+				"type", event.Type,
+				"url", event.URL,
+				"timestamp", event.Timestamp,
+				"raw_keys", getMapKeys(event.Raw))
+
+			// Sprinkler only provides metadata - extract PR number from URL
+			prNumber := 0
+			if event.URL != "" {
+				// Parse URL like https://github.com/owner/repo/pull/123
+				parts := strings.Split(event.URL, "/")
+				if len(parts) >= 7 && parts[2] == "github.com" && parts[5] == "pull" {
+					if num, err := strconv.Atoi(parts[6]); err == nil {
+						prNumber = num
+						slog.Debug("extracted PR number from URL",
+							"pr_number", prNumber,
+							"url", event.URL)
+					} else {
+						slog.Error("failed to parse PR number from URL",
+							"url", event.URL,
+							"parse_error", err)
+						return
+					}
+				} else {
+					slog.Error("invalid GitHub URL format from sprinkler",
+						"url", event.URL,
+						"expected_format", "https://github.com/owner/repo/pull/123")
+					return
+				}
+			} else {
+				slog.Error("sprinkler event missing URL - cannot determine PR number",
+					"type", event.Type)
+				return
+			}
+
+			if prNumber == 0 {
+				slog.Error("invalid PR number extracted from sprinkler URL",
+					"url", event.URL,
+					"extracted_number", prNumber)
+				return
 			}
 
 			// Extract repo from URL if possible
@@ -74,18 +122,27 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 				}
 			}
 
+			if repo == "" {
+				slog.Error("could not extract repo from URL",
+					"url", event.URL,
+					"cannot_process_without_repo", true)
+				return
+			}
+
 			msg := SprinklerMessage{
-				Type:    event.Type,
-				Event:   event.Type,
-				Repo:    repo,
-				Payload: payload,
+				Type:     event.Type,
+				Event:    event.Type,
+				Repo:     repo,
+				PRNumber: prNumber,
+				URL:      event.URL,
 			}
 
 			if err := c.processEvent(ctx, msg); err != nil {
 				slog.Error("error processing event",
 					"error", err,
 					"type", event.Type,
-					"url", event.URL)
+					"url", event.URL,
+					"repo", repo)
 			}
 		},
 	}

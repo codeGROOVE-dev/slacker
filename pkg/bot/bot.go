@@ -17,6 +17,14 @@ import (
 	"github.com/codeGROOVE-dev/slacker/pkg/state"
 )
 
+// min returns the minimum of two integers.
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // Coordinator coordinates between GitHub, Slack, and notifications.
 type Coordinator struct {
 	slack         *slack.Client
@@ -49,15 +57,26 @@ func New(
 	// Set GitHub client in config manager.
 	configManager.SetGitHubClient(githubClient.Client())
 
+	// Get workspace info and set in config manager for validation.
+	if teamInfo, err := slackClient.GetWorkspaceInfo(ctx); err == nil {
+		// Use the team domain as workspace identifier
+		workspaceName := teamInfo.Domain + ".slack.com"
+		configManager.SetWorkspaceName(workspaceName)
+		slog.Info("set workspace name for config validation", "workspace", workspaceName)
+	} else {
+		slog.Warn("failed to get workspace info, config validation disabled", "error", err)
+	}
+
 	return c
 }
 
 // SprinklerMessage represents a message from sprinkler.
 type SprinklerMessage struct {
-	Type    string          `json:"type,omitempty"`    // Message type (e.g., "ping", "event")
-	Event   string          `json:"event,omitempty"`   // GitHub event type
-	Repo    string          `json:"repo,omitempty"`    // Repository name
-	Payload json.RawMessage `json:"payload,omitempty"` // Event payload
+	Type     string `json:"type,omitempty"`      // Message type (e.g., "ping", "event")
+	Event    string `json:"event,omitempty"`     // GitHub event type
+	Repo     string `json:"repo,omitempty"`      // Repository name
+	PRNumber int    `json:"pr_number,omitempty"` // PR number extracted from URL
+	URL      string `json:"url,omitempty"`       // GitHub URL for reference
 }
 
 // processEvent processes a GitHub webhook event.
@@ -100,16 +119,16 @@ func (c *Coordinator) processEvent(ctx context.Context, msg SprinklerMessage) er
 	// Handle different event types.
 	switch msg.Event {
 	case "pull_request":
-		c.handlePullRequestEvent(ctx, owner, repo, msg.Payload)
+		c.handlePullRequestFromSprinkler(ctx, owner, repo, msg.PRNumber, msg.URL)
 	case "pull_request_review":
-		c.handlePullRequestReviewEvent(ctx, owner, repo, msg.Payload)
+		c.handlePullRequestReviewFromSprinkler(ctx, owner, repo, msg.PRNumber, msg.URL)
 	case "check_run", "check_suite":
 		// Parse to get PR number.
 		// This is simplified - in production, we'd need to map commits to PRs.
 		slog.Debug("received check event", "owner", owner, "repo", repo)
 	case "push":
-		// Check if this is a push to .github repo.
-		if repo == ".github" {
+		// Check if this is a push to .codeGROOVE repo.
+		if repo == ".codeGROOVE" {
 			slog.Info("reloading config", "org", owner)
 			if err := c.configManager.ReloadConfig(ctx, owner); err != nil {
 				slog.Warn("failed to reload config", "error", err)
@@ -124,6 +143,12 @@ func (c *Coordinator) processEvent(ctx context.Context, msg SprinklerMessage) er
 
 // handlePullRequestEvent handles pull request events.
 func (c *Coordinator) handlePullRequestEvent(ctx context.Context, owner, repo string, payload json.RawMessage) {
+	slog.Debug("handling pull request event",
+		"owner", owner,
+		"repo", repo,
+		"payload_size", len(payload),
+		"payload_preview", string(payload[:min(len(payload), 200)]))
+
 	var event struct {
 		Action      string `json:"action"`
 		Number      int    `json:"number"`
@@ -138,25 +163,98 @@ func (c *Coordinator) handlePullRequestEvent(ctx context.Context, owner, repo st
 	}
 
 	if err := json.Unmarshal(payload, &event); err != nil {
-		slog.Warn("failed to unmarshal PR event", "error", err)
+		slog.Error("failed to unmarshal PR event - invalid GitHub webhook payload",
+			"owner", owner,
+			"repo", repo,
+			"error", err,
+			"payload_size", len(payload),
+			"payload_preview", string(payload[:min(len(payload), 500)]),
+			"unmarshal_failure", true,
+			"possible_causes", []string{"double-marshaled JSON", "invalid webhook format", "corrupted payload"})
 		return
 	}
 
-	slog.Info("PR event", "owner", owner, "repo", repo, "number", event.Number, "action", event.Action)
+	// Additional validation - check for completely empty structures
+	if event.Action == "" {
+		slog.Error("PR event missing action field - invalid GitHub webhook structure",
+			"owner", owner,
+			"repo", repo,
+			"payload_preview", string(payload[:min(len(payload), 300)]))
+		return
+	}
+
+	// Check that we have a pull_request object with basic required fields
+	if event.PullRequest.Title == "" && event.PullRequest.HTMLURL == "" {
+		slog.Error("PR event missing pull_request fields - webhook may be incomplete",
+			"owner", owner,
+			"repo", repo,
+			"action", event.Action,
+			"pr_has_title", event.PullRequest.Title != "",
+			"pr_has_url", event.PullRequest.HTMLURL != "",
+			"pr_has_user", event.PullRequest.User.Login != "")
+		return
+	}
+
+	// Validate we got the essential data
+	if event.Number == 0 && event.PullRequest.Number == 0 {
+		slog.Error("PR event missing number - payload does not contain valid GitHub webhook data",
+			"owner", owner,
+			"repo", repo,
+			"action", event.Action,
+			"event_number", event.Number,
+			"pr_number", event.PullRequest.Number,
+			"payload_sample", string(payload[:min(len(payload), 300)]))
+		return
+	}
+
+	// Use PR number from either location
+	prNumber := event.Number
+	if prNumber == 0 {
+		prNumber = event.PullRequest.Number
+	}
+
+	slog.Debug("successfully parsed PR event",
+		"owner", owner,
+		"repo", repo,
+		"pr_number", prNumber,
+		"action", event.Action,
+		"title", event.PullRequest.Title,
+		"author", event.PullRequest.User.Login)
+
+	slog.Info("PR event", "owner", owner, "repo", repo, "number", prNumber, "action", event.Action)
 
 	// Get channels for this repo.
 	channels := c.configManager.ChannelsForRepo(owner, repo)
+	slog.Info("evaluating PR for channel notifications",
+		"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+		"action", event.Action,
+		"title", event.PullRequest.Title,
+		"author", event.PullRequest.User.Login,
+		"configured_channels", len(channels),
+		"channels", channels)
+
 	if len(channels) == 0 {
-		slog.Debug("no channels configured", "owner", owner, "repo", repo)
+		slog.Info("no channels configured for PR - skipping channel notifications",
+			"owner", owner,
+			"repo", repo,
+			"pr_number", prNumber)
 		return
 	}
 
 	// Get PR state.
-	prState, blockedOn, err := c.github.PRState(ctx, owner, repo, event.Number)
+	prState, blockedOn, err := c.github.PRState(ctx, owner, repo, prNumber)
 	if err != nil {
-		slog.Warn("failed to get PR state", "error", err)
+		slog.Error("failed to get PR state - cannot process notifications",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+			"error", err)
 		return
 	}
+
+	slog.Info("retrieved PR state for notification processing",
+		"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+		"state", prState,
+		"blocked_on_users", len(blockedOn),
+		"blocked_on", blockedOn)
 
 	// For now, use a default workspace ID.
 	// In production, this would map channels to workspaces.
@@ -182,54 +280,241 @@ func (c *Coordinator) handlePullRequestEvent(ctx context.Context, owner, repo st
 	}
 
 	// Handle based on action.
+	slog.Info("processing PR action",
+		"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+		"action", event.Action,
+		"will_process", true)
+
 	switch event.Action {
 	case "opened", "reopened":
+		slog.Info("creating channel notifications for new/reopened PR",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, event.Number),
+			"channels_to_notify", len(channels),
+			"channels", channels)
+
 		// Create threads in configured channels.
 		for _, channel := range channels {
 			if pr.ThreadTS != "" {
+				slog.Debug("PR already has thread, skipping channel",
+					"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+					"channel", channel,
+					"existing_thread", pr.ThreadTS)
 				continue
 			}
+
+			slog.Info("creating thread in channel",
+				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+				"channel", channel,
+				"pr_title", event.PullRequest.Title,
+				"pr_author", event.PullRequest.User.Login)
+
 			// Create new thread.
-			threadTS, err := c.createPRThread(ctx, channel, owner, repo, event.Number, event.PullRequest)
+			threadTS, err := c.createPRThread(ctx, channel, owner, repo, prNumber, event.PullRequest)
 			if err != nil {
-				slog.Warn("failed to create thread", "channel", channel, "error", err)
+				slog.Error("failed to create thread in channel",
+					"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+					"channel", channel,
+					"error", err,
+					"will_try_next_channel", true)
 				continue
 			}
 			pr.ThreadTS = threadTS
 			pr.ChannelID = channel
-			slog.Info("created thread", "channel", channel, "owner", owner, "repo", repo, "number", event.Number)
+
+			// Track that we notified users in this channel
+			c.stateManager.UpdateChannelNotification(workspaceID, owner, repo, prNumber)
+
+			slog.Info("successfully created channel notification thread",
+				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+				"channel", channel,
+				"thread_ts", threadTS,
+				"channel_notification_tracked", true,
+				"users_will_be_delayed_for_dms", true)
 		}
 
 	case "closed":
+		slog.Info("updating PR state for closed PR",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+			"has_thread", pr.ThreadTS != "",
+			"channel", pr.ChannelID)
+
 		// Update state in existing thread.
 		if pr.ThreadTS != "" {
 			if err := c.slack.UpdateReactions(ctx, pr.ChannelID, pr.ThreadTS, prState); err != nil {
-				slog.Warn("failed to update reaction", "error", err)
+				slog.Error("failed to update reaction for closed PR",
+					"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+					"channel", pr.ChannelID,
+					"thread_ts", pr.ThreadTS,
+					"error", err)
+			} else {
+				slog.Info("updated channel thread for closed PR",
+					"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+					"channel", pr.ChannelID,
+					"new_state", prState)
 			}
 		}
 
 	case "synchronize", "edited":
+		slog.Info("updating PR state for synchronized/edited PR",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+			"has_thread", pr.ThreadTS != "",
+			"channel", pr.ChannelID,
+			"new_state", prState)
+
 		// Update state.
 		if pr.ThreadTS != "" {
 			if err := c.slack.UpdateReactions(ctx, pr.ChannelID, pr.ThreadTS, prState); err != nil {
-				slog.Warn("failed to update reaction", "error", err)
+				slog.Error("failed to update reaction for synchronized/edited PR",
+					"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+					"channel", pr.ChannelID,
+					"thread_ts", pr.ThreadTS,
+					"error", err)
+			} else {
+				slog.Info("updated channel thread for synchronized/edited PR",
+					"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+					"channel", pr.ChannelID,
+					"new_state", prState)
 			}
 		}
 	default:
-		// Other PR actions are not handled
-		slog.Debug("unhandled PR action", "action", event.Action)
+		slog.Info("unhandled PR action - no processing required",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+			"action", event.Action,
+			"ignored", true)
 	}
 
 	// Save PR state.
 	c.stateManager.SetPRState(workspaceID, pr)
 
+	slog.Info("PR state updated and saved",
+		"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+		"workspace", workspaceID,
+		"final_state", prState,
+		"thread_ts", pr.ThreadTS,
+		"channel", pr.ChannelID)
+
 	// Check if we need to notify blocked users.
-	for _, userID := range blockedOn {
-		// In production, map GitHub username to Slack user ID.
-		// Then update their app home view.
-		slog.Info("PR blocked on user", "owner", owner, "repo", repo, "number", event.Number, "user", userID)
-		// Would call: c.updateUserHome(ctx, workspaceID, slackUserID)
+	if len(blockedOn) > 0 {
+		slog.Info("processing blocked users for PR notifications",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+			"blocked_users_count", len(blockedOn),
+			"blocked_users", blockedOn,
+			"pr_state", prState)
+
+		for _, userID := range blockedOn {
+			// In production, map GitHub username to Slack user ID.
+			// Then update their app home view.
+			slog.Info("user is blocking PR - potential notification candidate",
+				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+				"github_user", userID,
+				"pr_state", prState,
+				"pr_author", event.PullRequest.User.Login,
+				"needs_slack_mapping", true)
+			// Would call: c.updateUserHome(ctx, workspaceID, slackUserID)
+			// Would also call: c.notifier.NotifyUser(ctx, workspaceID, slackUserID, pr.ChannelID, pr)
+		}
+	} else {
+		slog.Info("no users blocking PR - no notifications needed",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+			"pr_state", prState)
 	}
+}
+
+// handlePullRequestFromSprinkler handles pull request events from sprinkler by fetching PR data from GitHub API.
+func (c *Coordinator) handlePullRequestFromSprinkler(ctx context.Context, owner, repo string, prNumber int, sprinklerURL string) {
+	slog.Info("handling PR event from sprinkler - fetching data from GitHub API",
+		"owner", owner,
+		"repo", repo,
+		"pr_number", prNumber,
+		"sprinkler_url", sprinklerURL)
+
+	// Get GitHub installation token
+	githubToken := c.github.InstallationToken(ctx)
+	if githubToken == "" {
+		slog.Error("no GitHub token available for PR data fetch",
+			"owner", owner,
+			"repo", repo,
+			"pr_number", prNumber)
+		return
+	}
+
+	// Fetch basic PR data from GitHub API
+	prData, _, err := c.github.Client().PullRequests.Get(ctx, owner, repo, prNumber)
+	if err != nil {
+		slog.Error("failed to fetch PR data from GitHub API",
+			"owner", owner,
+			"repo", repo,
+			"pr_number", prNumber,
+			"error", err)
+		return
+	}
+
+	slog.Debug("successfully fetched PR data from GitHub API",
+		"owner", owner,
+		"repo", repo,
+		"pr_number", prNumber,
+		"pr_title", prData.GetTitle(),
+		"pr_state", prData.GetState(),
+		"pr_author", prData.GetUser().GetLogin())
+
+	// Create a synthetic webhook-like event structure
+	event := struct {
+		Action      string `json:"action"`
+		Number      int    `json:"number"`
+		PullRequest struct {
+			Number  int    `json:"number"`
+			Title   string `json:"title"`
+			HTMLURL string `json:"html_url"`
+			User    struct {
+				Login string `json:"login"`
+			} `json:"user"`
+		} `json:"pull_request"`
+	}{
+		Action: "synchronize", // Use synchronize as default for sprinkler notifications
+		Number: prNumber,
+		PullRequest: struct {
+			Number  int    `json:"number"`
+			Title   string `json:"title"`
+			HTMLURL string `json:"html_url"`
+			User    struct {
+				Login string `json:"login"`
+			} `json:"user"`
+		}{
+			Number:  prNumber,
+			Title:   prData.GetTitle(),
+			HTMLURL: prData.GetHTMLURL(),
+			User: struct {
+				Login string `json:"login"`
+			}{
+				Login: prData.GetUser().GetLogin(),
+			},
+		},
+	}
+
+	// Convert to JSON payload to reuse existing handlePullRequestEvent logic
+	payload, err := json.Marshal(event)
+	if err != nil {
+		slog.Error("failed to marshal synthetic PR event",
+			"owner", owner,
+			"repo", repo,
+			"pr_number", prNumber,
+			"error", err)
+		return
+	}
+
+	// Call the existing handler with the synthetic payload
+	c.handlePullRequestEvent(ctx, owner, repo, payload)
+}
+
+// handlePullRequestReviewFromSprinkler handles PR review events from sprinkler.
+func (c *Coordinator) handlePullRequestReviewFromSprinkler(ctx context.Context, owner, repo string, prNumber int, sprinklerURL string) {
+	slog.Info("handling PR review event from sprinkler",
+		"owner", owner,
+		"repo", repo,
+		"pr_number", prNumber,
+		"sprinkler_url", sprinklerURL,
+		"note", "review events not fully implemented yet")
+	// TODO: Implement review event handling if needed
 }
 
 // handlePullRequestReviewEvent handles PR review events.

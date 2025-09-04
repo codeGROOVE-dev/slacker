@@ -8,6 +8,8 @@ github.com/codeGROOVE-dev/retry v1.2.0 h1:xYpYPX2PQZmdHwuiQAGGzsBm392xIMl4nfMEFA
 github.com/codeGROOVE-dev/retry v1.2.0/go.mod h1:8OgefgV1XP7lzX2PdKlCXILsYKuz6b4ZpHa/20iLi8E=
 github.com/codeGROOVE-dev/sprinkler v0.0.0-20250902195126-4971ae933026 h1:NpN/VfzVeIGlnxesAMieaPBa3LEgD2XyzAYErl+g1tc=
 github.com/codeGROOVE-dev/sprinkler v0.0.0-20250902195126-4971ae933026/go.mod h1:F8FIfuDdk3rkslIaCASnEt61A2lU8F+9lTPiFzFlIQ8=
+github.com/codeGROOVE-dev/turnclient v0.0.0-20250828201540-c60d6197d60e h1:iCHAZV+4GK+LssYQ4C1KY2YcIBbnJtZprZKIC9X7a8w=
+github.com/codeGROOVE-dev/turnclient v0.0.0-20250828201540-c60d6197d60e/go.mod h1:1y5LaWP+H22xd7N9Yh+KfD5gFLhuVo4+C2ZfXl8o/E0=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/go-test/deep v1.0.4 h1:u2CU3YKy9I2pmu9pX0eq50wCgjfGIt539SqR7FbHiho=
@@ -34,6 +36,8 @@ github.com/gorilla/websocket v1.5.1 h1:gmztn0JnHVt9JZquRuzLw3g4wouNVzKL15iLr/zn/
 github.com/gorilla/websocket v1.5.1/go.mod h1:x3kM2JMyaluk02fnUJpQuwD2dCS5NDG2ZHL0uE0tcaY=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/ready-to-review/prx v0.0.0-20250804193100-bb59ba5e4919 h1:Y9Wbsa4XoAJkpLhVlwkyB9ie5LOEc60nqv0IdJwVqT8=
+github.com/ready-to-review/prx v0.0.0-20250804193100-bb59ba5e4919/go.mod h1:feCgHX30rIlQGX6m5LddaVll0KynIjTB/DbHENwAV3Q=
 github.com/slack-go/slack v0.12.3 h1:92/dfFU8Q5XP6Wp5rr5/T5JHLM5c5Smtn53fhToAP88=
 github.com/slack-go/slack v0.12.3/go.mod h1:hlGi5oXA+Gt+yWTPP0plCdRKmjsDxecdHxYQdlMQKOw=
 github.com/stretchr/testify v1.2.2 h1:bSDNvY7ZPG5RlJ8otE/7V6gMiyenm9RtJ7IUVIAoJ1w=
