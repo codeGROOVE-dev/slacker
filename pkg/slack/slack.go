@@ -56,6 +56,11 @@ func (c *Client) PostThread(ctx context.Context, channelID, text string, attachm
 		}(),
 		"attachments_count", len(attachments))
 
+	// Check if bot is in the channel before attempting to post
+	if !c.isBotInChannel(ctx, channelID) {
+		return "", fmt.Errorf("bot is not a member of channel %s - please invite the bot to the channel first", channelID)
+	}
+
 	// Disable unfurling for GitHub links.
 	options := []slack.MsgOption{
 		slack.MsgOptionText(text, false),
@@ -267,7 +272,7 @@ func (c *Client) UpdateReactions(ctx context.Context, channelID, timestamp, newS
 		"hourglass":     "hourglass",
 		"carpentry_saw": "carpentry_saw",
 		"check":         "white_check_mark",
-		"pray":          "pray",
+		"merged":        "rocket",
 		"face_palm":     "face_palm",
 	}
 
@@ -291,7 +296,7 @@ func (c *Client) UpdateReactionsWithPrevious(ctx context.Context, channelID, tim
 		"hourglass":     "hourglass",
 		"carpentry_saw": "carpentry_saw",
 		"check":         "white_check_mark",
-		"pray":          "pray",
+		"merged":        "rocket",
 		"face_palm":     "face_palm",
 	}
 
@@ -823,4 +828,45 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 
 	slog.Warn("could not resolve channel name to ID", "channel", channelName)
 	return channelName // Return original if not found
+}
+
+// isBotInChannel checks if the bot is a member of the specified channel.
+func (c *Client) isBotInChannel(ctx context.Context, channelID string) bool {
+	// Get bot user info first
+	authTest, err := c.api.AuthTestContext(ctx)
+	if err != nil {
+		slog.Error("failed to get bot user info for channel membership check",
+			"error", err,
+			"channel_id", channelID)
+		return false
+	}
+
+	// Get channel members
+	members, _, err := c.api.GetUsersInConversationContext(ctx, &slack.GetUsersInConversationParameters{
+		ChannelID: channelID,
+		Limit:     200,
+	})
+	if err != nil {
+		slog.Warn("failed to get channel members - assuming bot is not in channel",
+			"error", err,
+			"error_type", fmt.Sprintf("%T", err),
+			"error_string", err.Error(),
+			"channel_id", channelID)
+		return false
+	}
+
+	// Check if bot user ID is in the members list
+	for _, member := range members {
+		if member == authTest.UserID {
+			slog.Debug("bot is a member of channel", "channel_id", channelID, "bot_user_id", authTest.UserID)
+			return true
+		}
+	}
+
+	slog.Info("bot is not a member of channel",
+		"channel_id", channelID,
+		"bot_user_id", authTest.UserID,
+		"total_members", len(members),
+		"action_required", "invite bot to channel")
+	return false
 }

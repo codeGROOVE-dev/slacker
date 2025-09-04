@@ -285,58 +285,6 @@ func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL st
 	return "", nil
 }
 
-// postStateChangeUpdate posts a follow-up message about a PR state change.
-func (c *Coordinator) postStateChangeUpdate(ctx context.Context, channelID, threadTS, owner, repo string, prNumber int, oldState, newState string) error {
-	if oldState == newState {
-		return nil // No change
-	}
-
-	prKey := fmt.Sprintf("%s/%s#%d", owner, repo, prNumber)
-
-	// Create state change message
-	stateEmoji := map[string]string{
-		"test_tube":     "🧪", // tests running/pending
-		"broken_heart":  "💔", // tests broken
-		"hourglass":     "⏳", // waiting on review
-		"carpentry_saw": "🪚", // approved but needs work
-		"check":         "✅", // reviewed & approved
-		"pray":          "🙏", // merged
-		"face_palm":     "🤦", // closed but not merged
-	}
-
-	oldEmoji := stateEmoji[oldState]
-	if oldEmoji == "" {
-		oldEmoji = oldState
-	}
-
-	newEmoji := stateEmoji[newState]
-	if newEmoji == "" {
-		newEmoji = newState
-	}
-
-	message := fmt.Sprintf("🔄 **State changed**: %s → %s", oldEmoji, newEmoji)
-
-	slog.Info("posting state change update",
-		"pr", prKey,
-		"channel", channelID,
-		"thread_ts", threadTS,
-		"old_state", oldState,
-		"new_state", newState)
-
-	err := c.slack.PostThreadReply(ctx, channelID, threadTS, message)
-	if err != nil {
-		return fmt.Errorf("failed to post state change update: %w", err)
-	}
-
-	// Update cache with new state
-	c.threadCache.Update(prKey, func(info *ThreadInfo) bool {
-		info.LastState = newState
-		return true
-	})
-
-	return nil
-}
-
 // SprinklerMessage represents a message from sprinkler.
 type SprinklerMessage struct {
 	Type      string    `json:"type,omitempty"`      // Message type (e.g., "ping", "event")
@@ -622,24 +570,7 @@ func (c *Coordinator) handlePullRequestEvent(ctx context.Context, owner, repo st
 				"state", prState)
 		}
 
-		// Post state change message if state has changed
-		if oldState != "" && oldState != prState {
-			if err := c.postStateChangeUpdate(ctx, channelID, threadTS, owner, repo, prNumber, oldState, prState); err != nil {
-				slog.Error("failed to post state change update",
-					"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
-					"channel", channelID,
-					"thread_ts", threadTS,
-					"old_state", oldState,
-					"new_state", prState,
-					"error", err)
-			} else {
-				slog.Info("posted state change update",
-					"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
-					"channel", channelID,
-					"old_state", oldState,
-					"new_state", prState)
-			}
-		}
+		// State changes are communicated via emoji reactions only
 
 		// Track that we notified users in this channel for DM delay logic
 		c.stateManager.UpdateChannelNotification(workspaceID, owner, repo, prNumber)

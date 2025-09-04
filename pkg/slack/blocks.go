@@ -101,8 +101,8 @@ func createPRBlock(pr *state.PRState) slack.Block {
 		stateEmoji = "🪚"
 	case "check":
 		stateEmoji = "✅"
-	case "pray":
-		stateEmoji = "🙏"
+	case "merged":
+		stateEmoji = "🚀"
 	case "face_palm":
 		stateEmoji = "🤦"
 	default:
