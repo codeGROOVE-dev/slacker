@@ -3,10 +3,10 @@ package bot
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
@@ -69,34 +69,46 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 				"url", event.URL,
 				"timestamp", event.Timestamp)
 
-			// Log the raw event data for debugging
-			slog.Debug("sprinkler raw event data", "raw", event.Raw)
+			// Log the sprinkler event data for debugging
+			slog.Debug("sprinkler event metadata",
+				"type", event.Type,
+				"url", event.URL,
+				"timestamp", event.Timestamp,
+				"raw_keys", getMapKeys(event.Raw))
 
-			// The event.Raw should contain the GitHub webhook payload as map[string]any
-			var payload json.RawMessage
-			if event.Raw != nil {
-				// Convert the map to JSON bytes
-				if payloadData, err := json.Marshal(event.Raw); err == nil {
-					payload = payloadData
-					slog.Debug("marshaled payload from sprinkler event",
-						"payload_size", len(payload),
-						"raw_type", fmt.Sprintf("%T", event.Raw))
+			// Sprinkler only provides metadata - extract PR number from URL
+			prNumber := 0
+			if event.URL != "" {
+				// Parse URL like https://github.com/owner/repo/pull/123
+				parts := strings.Split(event.URL, "/")
+				if len(parts) >= 7 && parts[2] == "github.com" && parts[5] == "pull" {
+					if num, err := strconv.Atoi(parts[6]); err == nil {
+						prNumber = num
+						slog.Debug("extracted PR number from URL",
+							"pr_number", prNumber,
+							"url", event.URL)
+					} else {
+						slog.Error("failed to parse PR number from URL",
+							"url", event.URL,
+							"parse_error", err)
+						return
+					}
 				} else {
-					slog.Error("failed to marshal event.Raw to JSON payload",
-						"error", err,
-						"raw_type", fmt.Sprintf("%T", event.Raw),
-						"event_type", event.Type,
-						"event_url", event.URL,
-						"raw_keys", getMapKeys(event.Raw))
+					slog.Error("invalid GitHub URL format from sprinkler",
+						"url", event.URL,
+						"expected_format", "https://github.com/owner/repo/pull/123")
 					return
 				}
 			} else {
-				slog.Warn("event.Raw is nil - no GitHub webhook payload available")
-				// If we don't have the full payload, we can't process this event properly
-				slog.Error("cannot process event without GitHub webhook payload",
-					"type", event.Type,
+				slog.Error("sprinkler event missing URL - cannot determine PR number",
+					"type", event.Type)
+				return
+			}
+
+			if prNumber == 0 {
+				slog.Error("invalid PR number extracted from sprinkler URL",
 					"url", event.URL,
-					"needs_full_webhook_data", true)
+					"extracted_number", prNumber)
 				return
 			}
 
@@ -118,10 +130,11 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 			}
 
 			msg := SprinklerMessage{
-				Type:    event.Type,
-				Event:   event.Type,
-				Repo:    repo,
-				Payload: payload,
+				Type:     event.Type,
+				Event:    event.Type,
+				Repo:     repo,
+				PRNumber: prNumber,
+				URL:      event.URL,
 			}
 
 			if err := c.processEvent(ctx, msg); err != nil {

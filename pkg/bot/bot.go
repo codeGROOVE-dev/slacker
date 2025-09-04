@@ -72,10 +72,11 @@ func New(
 
 // SprinklerMessage represents a message from sprinkler.
 type SprinklerMessage struct {
-	Type    string          `json:"type,omitempty"`    // Message type (e.g., "ping", "event")
-	Event   string          `json:"event,omitempty"`   // GitHub event type
-	Repo    string          `json:"repo,omitempty"`    // Repository name
-	Payload json.RawMessage `json:"payload,omitempty"` // Event payload
+	Type     string `json:"type,omitempty"`      // Message type (e.g., "ping", "event")
+	Event    string `json:"event,omitempty"`     // GitHub event type
+	Repo     string `json:"repo,omitempty"`      // Repository name
+	PRNumber int    `json:"pr_number,omitempty"` // PR number extracted from URL
+	URL      string `json:"url,omitempty"`       // GitHub URL for reference
 }
 
 // processEvent processes a GitHub webhook event.
@@ -118,9 +119,9 @@ func (c *Coordinator) processEvent(ctx context.Context, msg SprinklerMessage) er
 	// Handle different event types.
 	switch msg.Event {
 	case "pull_request":
-		c.handlePullRequestEvent(ctx, owner, repo, msg.Payload)
+		c.handlePullRequestFromSprinkler(ctx, owner, repo, msg.PRNumber, msg.URL)
 	case "pull_request_review":
-		c.handlePullRequestReviewEvent(ctx, owner, repo, msg.Payload)
+		c.handlePullRequestReviewFromSprinkler(ctx, owner, repo, msg.PRNumber, msg.URL)
 	case "check_run", "check_suite":
 		// Parse to get PR number.
 		// This is simplified - in production, we'd need to map commits to PRs.
@@ -417,6 +418,103 @@ func (c *Coordinator) handlePullRequestEvent(ctx context.Context, owner, repo st
 			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
 			"pr_state", prState)
 	}
+}
+
+// handlePullRequestFromSprinkler handles pull request events from sprinkler by fetching PR data from GitHub API.
+func (c *Coordinator) handlePullRequestFromSprinkler(ctx context.Context, owner, repo string, prNumber int, sprinklerURL string) {
+	slog.Info("handling PR event from sprinkler - fetching data from GitHub API",
+		"owner", owner,
+		"repo", repo,
+		"pr_number", prNumber,
+		"sprinkler_url", sprinklerURL)
+
+	// Get GitHub installation token
+	githubToken := c.github.InstallationToken(ctx)
+	if githubToken == "" {
+		slog.Error("no GitHub token available for PR data fetch",
+			"owner", owner,
+			"repo", repo,
+			"pr_number", prNumber)
+		return
+	}
+
+	// Fetch basic PR data from GitHub API
+	prData, _, err := c.github.Client().PullRequests.Get(ctx, owner, repo, prNumber)
+	if err != nil {
+		slog.Error("failed to fetch PR data from GitHub API",
+			"owner", owner,
+			"repo", repo,
+			"pr_number", prNumber,
+			"error", err)
+		return
+	}
+
+	slog.Debug("successfully fetched PR data from GitHub API",
+		"owner", owner,
+		"repo", repo,
+		"pr_number", prNumber,
+		"pr_title", prData.GetTitle(),
+		"pr_state", prData.GetState(),
+		"pr_author", prData.GetUser().GetLogin())
+
+	// Create a synthetic webhook-like event structure
+	event := struct {
+		Action      string `json:"action"`
+		Number      int    `json:"number"`
+		PullRequest struct {
+			Number  int    `json:"number"`
+			Title   string `json:"title"`
+			HTMLURL string `json:"html_url"`
+			User    struct {
+				Login string `json:"login"`
+			} `json:"user"`
+		} `json:"pull_request"`
+	}{
+		Action: "synchronize", // Use synchronize as default for sprinkler notifications
+		Number: prNumber,
+		PullRequest: struct {
+			Number  int    `json:"number"`
+			Title   string `json:"title"`
+			HTMLURL string `json:"html_url"`
+			User    struct {
+				Login string `json:"login"`
+			} `json:"user"`
+		}{
+			Number:  prNumber,
+			Title:   prData.GetTitle(),
+			HTMLURL: prData.GetHTMLURL(),
+			User: struct {
+				Login string `json:"login"`
+			}{
+				Login: prData.GetUser().GetLogin(),
+			},
+		},
+	}
+
+	// Convert to JSON payload to reuse existing handlePullRequestEvent logic
+	payload, err := json.Marshal(event)
+	if err != nil {
+		slog.Error("failed to marshal synthetic PR event",
+			"owner", owner,
+			"repo", repo,
+			"pr_number", prNumber,
+			"error", err)
+		return
+	}
+
+	// Call the existing handler with the synthetic payload
+	c.handlePullRequestEvent(ctx, owner, repo, payload)
+}
+
+// handlePullRequestReviewFromSprinkler handles PR review events from sprinkler.
+func (c *Coordinator) handlePullRequestReviewFromSprinkler(ctx context.Context, owner, repo string, prNumber int, sprinklerURL string) {
+	slog.Info("handling PR review event from sprinkler",
+		"owner", owner,
+		"repo", repo,
+		"pr_number", prNumber,
+		"sprinkler_url", sprinklerURL,
+		"note", "review events not fully implemented yet")
+	// TODO: Implement review event handling if needed
 }
 
 // handlePullRequestReviewEvent handles PR review events.
