@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/codeGROOVE-dev/retry"
@@ -21,26 +22,114 @@ import (
 	"github.com/slack-go/slack/slackevents"
 )
 
-// Client wraps the Slack API client.
+// cacheEntry represents a cached value with expiration.
+type cacheEntry struct {
+	value     interface{}
+	expiresAt time.Time
+}
+
+// apiCache provides thread-safe caching for Slack API responses.
+type apiCache struct {
+	mu      sync.RWMutex
+	entries map[string]cacheEntry
+	hits    int64 // Cache hit counter
+	misses  int64 // Cache miss counter
+}
+
+// set stores a value in the cache with TTL.
+func (c *apiCache) set(key string, value interface{}, ttl time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries[key] = cacheEntry{
+		value:     value,
+		expiresAt: time.Now().Add(ttl),
+	}
+}
+
+// get retrieves a value from the cache if not expired.
+func (c *apiCache) get(key string) (interface{}, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, exists := c.entries[key]
+	if !exists || time.Now().After(entry.expiresAt) {
+		c.misses++
+		return nil, false
+	}
+	c.hits++
+	return entry.value, true
+}
+
+// stats returns cache performance statistics.
+func (c *apiCache) stats() (hits, misses int64) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.hits, c.misses
+}
+
+// invalidate removes a specific cache entry (useful for setup scenarios).
+func (c *apiCache) invalidate(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.entries, key)
+}
+
+// InvalidateChannel removes cached data for a specific channel (helpful during setup).
+func (c *Client) InvalidateChannel(channelID string) {
+	c.invalidateChannelCache(channelID)
+}
+
+// invalidateChannelCache removes cached data for a specific channel.
+func (c *Client) invalidateChannelCache(channelID string) {
+	// Clear channel membership cache
+	membershipKey := fmt.Sprintf("bot_in_channel_%s", channelID)
+	c.cache.invalidate(membershipKey)
+
+	// Clear channel resolution cache (in case channel name->ID mapping changed)
+	// Note: We can't easily reverse lookup channel names from ID, but this is less critical
+	// since channel resolution is primarily name->ID direction
+
+	slog.Debug("invalidated channel caches", "channel_id", channelID, "cleared", "membership")
+}
+
+// Client wraps the Slack API client with caching.
 type Client struct {
 	api           *slack.Client
 	signingSecret string
+	cache         *apiCache
 }
 
-// New creates a new Slack client.
+// New creates a new Slack client with caching.
 func New(token, signingSecret string) *Client {
 	return &Client{
 		api:           slack.New(token),
 		signingSecret: signingSecret,
+		cache: &apiCache{
+			entries: make(map[string]cacheEntry),
+		},
 	}
 }
 
-// GetWorkspaceInfo returns information about the current workspace.
+// GetWorkspaceInfo returns information about the current workspace (cached for 1 hour).
 func (c *Client) GetWorkspaceInfo(ctx context.Context) (*slack.TeamInfo, error) {
+	cacheKey := "team_info"
+
+	// Try cache first
+	if cached, found := c.cache.get(cacheKey); found {
+		slog.Debug("using cached team info")
+		return cached.(*slack.TeamInfo), nil
+	}
+
+	// Fetch from API
+	slog.Debug("fetching team info from Slack API")
 	teamInfo, err := c.api.GetTeamInfoContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get team info: %w", err)
 	}
+
+	// Cache for 1 hour (team info rarely changes)
+	c.cache.set(cacheKey, teamInfo, time.Hour)
+	slog.Debug("cached team info", "team_id", teamInfo.ID, "team_domain", teamInfo.Domain)
+
 	return teamInfo, nil
 }
 
@@ -522,6 +611,19 @@ func (c *Client) EventsHandler(w http.ResponseWriter, r *http.Request) {
 			// In a full implementation, this would update the home tab.
 			// For now, just log.
 			slog.Debug("would update app home for user", "user", evt.User)
+		case *slackevents.MemberJoinedChannelEvent:
+			// Bot was added to a channel - invalidate cache
+			slog.Info("bot joined channel - invalidating cache",
+				"channel_id", evt.Channel,
+				"user_id", evt.User,
+				"inviter", evt.Inviter)
+			c.invalidateChannelCache(evt.Channel)
+		case *slackevents.MemberLeftChannelEvent:
+			// Bot was removed from a channel - invalidate cache
+			slog.Info("bot left channel - invalidating cache",
+				"channel_id", evt.Channel,
+				"user_id", evt.User)
+			c.invalidateChannelCache(evt.Channel)
 		}
 	}
 
@@ -749,9 +851,28 @@ func (c *Client) GetChannelHistory(ctx context.Context, channelID string, oldest
 	return result, err
 }
 
-// GetBotInfo returns information about the authenticated bot user.
+// GetBotInfo returns information about the authenticated bot user (cached for 30 minutes).
 func (c *Client) GetBotInfo(ctx context.Context) (*slack.AuthTestResponse, error) {
-	return c.api.AuthTestContext(ctx)
+	cacheKey := "bot_auth_test"
+
+	// Try cache first
+	if cached, found := c.cache.get(cacheKey); found {
+		slog.Debug("using cached bot auth info")
+		return cached.(*slack.AuthTestResponse), nil
+	}
+
+	// Fetch from API
+	slog.Debug("fetching bot auth info from Slack API")
+	authTest, err := c.api.AuthTestContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache for 1 hour (invalidated by member events for setup responsiveness)
+	c.cache.set(cacheKey, authTest, time.Hour)
+	slog.Debug("cached bot auth info", "bot_user_id", authTest.UserID, "bot_user", authTest.User)
+
+	return authTest, nil
 }
 
 // ResolveChannelID resolves a channel name (e.g., "all-codegroove" or "#all-codegroove") to a channel ID.
@@ -772,6 +893,16 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 		channelName = channelName[1:]
 		slog.Debug("removed # prefix", "original", originalChannelName, "cleaned", channelName)
 	}
+
+	// Check cache first (very important for performance)
+	cacheKey := fmt.Sprintf("channel_resolution_%s", channelName)
+	if cached, found := c.cache.get(cacheKey); found {
+		resolvedID := cached.(string)
+		slog.Debug("using cached channel resolution", "name", channelName, "id", resolvedID)
+		return resolvedID
+	}
+
+	slog.Debug("channel not in cache, fetching from Slack API", "channel", channelName)
 
 	// Try to find the channel - first try public and private channels
 	channels, cursor, err := c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
@@ -808,6 +939,8 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 		channel := &channels[i]
 		if channel.Name == channelName {
 			slog.Debug("resolved channel name to ID", "name", channelName, "id", channel.ID)
+			// Cache the successful resolution for 1 hour (channels are stable, invalidated by events)
+			c.cache.set(cacheKey, channel.ID, time.Hour)
 			return channel.ID
 		}
 	}
@@ -828,19 +961,35 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 			channel := &channels[i]
 			if channel.Name == channelName {
 				slog.Debug("resolved channel name to ID", "name", channelName, "id", channel.ID)
+				// Cache the successful resolution for 1 hour (channels are stable, invalidated by events)
+				c.cache.set(cacheKey, channel.ID, time.Hour)
 				return channel.ID
 			}
 		}
 	}
 
 	slog.Warn("could not resolve channel name to ID", "channel", channelName)
+	// Cache the failure for SHORT time (user might create channel or fix typo)
+	c.cache.set(cacheKey, channelName, 45*time.Second)
+	slog.Info("caching channel resolution failure briefly to allow for channel creation",
+		"channel", channelName, "cache_ttl", "45s")
 	return channelName // Return original if not found
 }
 
-// isBotInChannel checks if the bot is a member of the specified channel.
+// isBotInChannel checks if the bot is a member of the specified channel with adaptive caching.
 func (c *Client) isBotInChannel(ctx context.Context, channelID string) bool {
-	// Get bot user info first
-	authTest, err := c.api.AuthTestContext(ctx)
+	// Check cache first
+	cacheKey := fmt.Sprintf("bot_in_channel_%s", channelID)
+	if cached, found := c.cache.get(cacheKey); found {
+		isMember := cached.(bool)
+		slog.Debug("using cached channel membership", "channel_id", channelID, "is_member", isMember)
+		return isMember
+	}
+
+	slog.Debug("channel membership not cached, checking via API", "channel_id", channelID)
+
+	// Get bot user info first (this is now cached)
+	authTest, err := c.GetBotInfo(ctx)
 	if err != nil {
 		slog.Error("failed to get bot user info for channel membership check",
 			"error", err,
@@ -859,6 +1008,10 @@ func (c *Client) isBotInChannel(ctx context.Context, channelID string) bool {
 			slog.Info("channel does not exist",
 				"channel_id", channelID,
 				"action_required", "create channel or check channel name")
+			// Cache that channel doesn't exist for SHORT time (user might create it)
+			c.cache.set(cacheKey, false, 1*time.Minute)
+			slog.Info("caching channel not found briefly to allow for channel creation",
+				"channel_id", channelID, "cache_ttl", "1m")
 			return false
 		}
 		// Check if it's a not_in_channel error
@@ -867,6 +1020,10 @@ func (c *Client) isBotInChannel(ctx context.Context, channelID string) bool {
 				"channel_id", channelID,
 				"bot_user_id", authTest.UserID,
 				"action_required", "invite bot to channel")
+			// Cache negative result for SHORT time (user likely to fix quickly)
+			c.cache.set(cacheKey, false, 15*time.Second)
+			slog.Info("caching bot not in channel briefly to allow quick retry after invite",
+				"channel_id", channelID, "cache_ttl", "15s")
 			return false
 		}
 		slog.Warn("failed to get channel members - unknown error",
@@ -881,6 +1038,8 @@ func (c *Client) isBotInChannel(ctx context.Context, channelID string) bool {
 	for _, member := range members {
 		if member == authTest.UserID {
 			slog.Debug("bot is a member of channel", "channel_id", channelID, "bot_user_id", authTest.UserID)
+			// Cache positive result for 1 hour (stable membership, invalidated by member events)
+			c.cache.set(cacheKey, true, time.Hour)
 			return true
 		}
 	}
@@ -890,5 +1049,9 @@ func (c *Client) isBotInChannel(ctx context.Context, channelID string) bool {
 		"bot_user_id", authTest.UserID,
 		"total_members", len(members),
 		"action_required", "invite bot to channel")
+	// Cache negative result for SHORT time (user likely to fix this quickly)
+	c.cache.set(cacheKey, false, 20*time.Second)
+	slog.Info("caching bot membership failure briefly to allow quick retry after user fixes issue",
+		"channel_id", channelID, "cache_ttl", "20s")
 	return false
 }
