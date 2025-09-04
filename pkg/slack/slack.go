@@ -135,6 +135,11 @@ func (c *Client) PostThreadReply(ctx context.Context, channelID, threadTS, text 
 
 // AddReaction adds a reaction emoji to a message with retry logic.
 func (c *Client) AddReaction(ctx context.Context, channelID, timestamp, emoji string) error {
+	slog.Debug("adding reaction to message",
+		"channel_id", channelID,
+		"timestamp", timestamp,
+		"emoji", emoji)
+	
 	err := retry.Do(
 		func() error {
 			err := c.api.AddReactionContext(ctx, emoji, slack.ItemRef{
@@ -176,6 +181,11 @@ func (c *Client) AddReaction(ctx context.Context, channelID, timestamp, emoji st
 
 // RemoveReaction removes a reaction emoji from a message with retry logic.
 func (c *Client) RemoveReaction(ctx context.Context, channelID, timestamp, emoji string) error {
+	slog.Debug("removing reaction from message",
+		"channel_id", channelID,
+		"timestamp", timestamp,
+		"emoji", emoji)
+	
 	err := retry.Do(
 		func() error {
 			err := c.api.RemoveReactionContext(ctx, emoji, slack.ItemRef{
@@ -215,6 +225,7 @@ func (c *Client) RemoveReaction(ctx context.Context, channelID, timestamp, emoji
 }
 
 // UpdateReactions updates the reaction on a message based on PR state.
+// This is optimized to only add the desired reaction without removing all others first.
 func (c *Client) UpdateReactions(ctx context.Context, channelID, timestamp, newState string) error {
 	// Map states to emojis.
 	stateEmojis := map[string]string{
@@ -227,17 +238,43 @@ func (c *Client) UpdateReactions(ctx context.Context, channelID, timestamp, newS
 		"face_palm":     "face_palm",
 	}
 
-	// Remove all existing reactions.
-	for _, emoji := range stateEmojis {
-		if err := c.RemoveReaction(ctx, channelID, timestamp, emoji); err != nil {
-			// Log but don't fail - reaction might not exist.
-			slog.Warn("failed to remove reaction", "emoji", emoji, "error", err)
+	// Simply add the new reaction for the current state.
+	// The Slack API will ignore duplicate reactions (already_reacted error is handled in AddReaction).
+	// We rely on the bot logic to not call this unnecessarily for the same state.
+	if emoji, ok := stateEmojis[newState]; ok {
+		return c.AddReaction(ctx, channelID, timestamp, emoji)
+	}
+
+	return nil
+}
+
+// UpdateReactionsWithPrevious updates the reaction on a message, removing the old state reaction and adding the new one.
+// This method is more efficient when you know the previous state.
+func (c *Client) UpdateReactionsWithPrevious(ctx context.Context, channelID, timestamp, oldState, newState string) error {
+	// Map states to emojis.
+	stateEmojis := map[string]string{
+		"test_tube":     "test_tube",
+		"broken_heart":  "broken_heart",
+		"hourglass":     "hourglass",
+		"carpentry_saw": "carpentry_saw",
+		"check":         "white_check_mark",
+		"pray":          "pray",
+		"face_palm":     "face_palm",
+	}
+
+	// Remove old reaction if it exists and is different from new state
+	if oldState != "" && oldState != newState {
+		if oldEmoji, ok := stateEmojis[oldState]; ok {
+			if err := c.RemoveReaction(ctx, channelID, timestamp, oldEmoji); err != nil {
+				// Log but don't fail - reaction might not exist
+				slog.Debug("failed to remove old reaction", "emoji", oldEmoji, "error", err)
+			}
 		}
 	}
 
-	// Add new reaction.
-	if emoji, ok := stateEmojis[newState]; ok {
-		return c.AddReaction(ctx, channelID, timestamp, emoji)
+	// Add new reaction
+	if newEmoji, ok := stateEmojis[newState]; ok {
+		return c.AddReaction(ctx, channelID, timestamp, newEmoji)
 	}
 
 	return nil
@@ -641,4 +678,59 @@ func (c *Client) PublishHomeView(userID string, blocks []slack.Block) error {
 // SearchMessages searches for messages using the Slack API.
 func (c *Client) SearchMessages(ctx context.Context, query string, params *slack.SearchParameters) (*slack.SearchMessages, error) {
 	return c.api.SearchMessagesContext(ctx, query, *params)
+}
+
+// ResolveChannelID resolves a channel name (e.g., "all-codegroove" or "#all-codegroove") to a channel ID.
+// Returns the channel ID if found, or the original input if it's already an ID or can't be resolved.
+func (c *Client) ResolveChannelID(ctx context.Context, channelName string) string {
+	// If it's already a channel ID (starts with C), return as-is
+	if len(channelName) > 0 && channelName[0] == 'C' {
+		return channelName
+	}
+
+	// Remove # prefix if present
+	if len(channelName) > 0 && channelName[0] == '#' {
+		channelName = channelName[1:]
+	}
+
+	// Try to find the channel
+	channels, cursor, err := c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
+		Types: []string{"public_channel", "private_channel"},
+		Limit: 200,
+	})
+	if err != nil {
+		slog.Warn("failed to get conversations for channel resolution", "error", err, "channel", channelName)
+		return channelName // Return original name if we can't resolve
+	}
+
+	// Search through channels
+	for _, channel := range channels {
+		if channel.Name == channelName {
+			slog.Debug("resolved channel name to ID", "name", channelName, "id", channel.ID)
+			return channel.ID
+		}
+	}
+
+	// If we have more pages, search them too
+	for cursor != "" {
+		channels, cursor, err = c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
+			Types:  []string{"public_channel", "private_channel"},
+			Limit:  200,
+			Cursor: cursor,
+		})
+		if err != nil {
+			slog.Warn("failed to get additional conversations for channel resolution", "error", err)
+			break
+		}
+
+		for _, channel := range channels {
+			if channel.Name == channelName {
+				slog.Debug("resolved channel name to ID", "name", channelName, "id", channel.ID)
+				return channel.ID
+			}
+		}
+	}
+
+	slog.Warn("could not resolve channel name to ID", "channel", channelName)
+	return channelName // Return original if not found
 }
