@@ -56,7 +56,7 @@ func (m *MockGitHubLookup) Guess(ctx context.Context, username, organization str
 func TestService_GetSlackHandle_Success(t *testing.T) {
 	mockSlack := &MockSlackAPI{}
 	mockGitHub := &MockGitHubLookup{}
-	
+
 	service := &Service{
 		slackClient:  mockSlack,
 		githubLookup: mockGitHub,
@@ -99,7 +99,7 @@ func TestService_GetSlackHandle_Success(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, "testuser.slack", result)
-	
+
 	// Verify mapping was cached
 	cachedMapping := service.getCachedMapping(githubUser)
 	if assert.NotNil(t, cachedMapping, "Expected cached mapping to exist") {
@@ -116,7 +116,7 @@ func TestService_GetSlackHandle_Success(t *testing.T) {
 func TestService_GetSlackHandle_FallbackToGitHub(t *testing.T) {
 	mockSlack := &MockSlackAPI{}
 	mockGitHub := &MockGitHubLookup{}
-	
+
 	service := &Service{
 		slackClient:  mockSlack,
 		githubLookup: mockGitHub,
@@ -135,11 +135,11 @@ func TestService_GetSlackHandle_FallbackToGitHub(t *testing.T) {
 		Addresses: []ghmailto.Address{}, // No emails found
 	}
 	mockGitHub.On("Lookup", ctx, githubUser, organization).Return(githubResult, nil)
-	
+
 	// Mock the Guess method in case it gets called
 	emptyGuessResult := &ghmailto.GuessResult{
-		Username: githubUser,
-		Guesses:  []string{},
+		Username:       githubUser,
+		Guesses:        []string{},
 		FoundAddresses: []ghmailto.Address{},
 	}
 	mockGitHub.On("Guess", mock.Anything, githubUser, organization, mock.Anything).Return(emptyGuessResult, nil)
@@ -183,7 +183,7 @@ func TestService_FormatUserMention_WithMapping(t *testing.T) {
 func TestService_FormatUserMention_NoMapping(t *testing.T) {
 	mockSlack := &MockSlackAPI{}
 	mockGitHub := &MockGitHubLookup{}
-	
+
 	service := &Service{
 		slackClient:  mockSlack,
 		githubLookup: mockGitHub,
@@ -201,11 +201,11 @@ func TestService_FormatUserMention_NoMapping(t *testing.T) {
 	organization := "testorg"
 	domain := "example.com"
 	mockGitHub.On("Lookup", mock.Anything, "unknownuser", organization).Return(githubResult, nil)
-	
+
 	// Mock the Guess method that will be called when no emails are found but domain is specified
 	guessResult := &ghmailto.GuessResult{
-		Username: "unknownuser",
-		Guesses:  []string{}, // No guesses either
+		Username:       "unknownuser",
+		Guesses:        []string{}, // No guesses either
 		FoundAddresses: []ghmailto.Address{},
 	}
 	mockGitHub.On("Guess", mock.Anything, "unknownuser", organization, ghmailto.GuessOptions{Domain: domain}).Return(guessResult, nil)
@@ -230,7 +230,7 @@ func TestService_FormatUserMentions_Mixed(t *testing.T) {
 
 	service.cacheMapping(&UserMapping{
 		GitHubUsername: "user2",
-		SlackUserID:    "U222222", 
+		SlackUserID:    "U222222",
 		SlackUsername:  "user2.slack",
 		Confidence:     70,
 		CachedAt:       time.Now(),
@@ -253,11 +253,11 @@ func TestService_FormatUserMentions_Mixed(t *testing.T) {
 	organization := "testorg"
 	domain := "example.com"
 	mockGitHub.On("Lookup", mock.Anything, "user3", organization).Return(githubResult, nil)
-	
+
 	// Mock the Guess method in case it gets called
 	emptyGuessResult := &ghmailto.GuessResult{
-		Username: "user3",
-		Guesses:  []string{},
+		Username:       "user3",
+		Guesses:        []string{},
 		FoundAddresses: []ghmailto.Address{},
 	}
 	mockGitHub.On("Guess", mock.Anything, "user3", organization, mock.Anything).Return(emptyGuessResult, nil)
@@ -286,7 +286,7 @@ func TestService_CacheExpiration(t *testing.T) {
 	// Add fresh mapping
 	freshMapping := &UserMapping{
 		GitHubUsername: "newuser",
-		SlackUsername:  "new.slack", 
+		SlackUsername:  "new.slack",
 		CachedAt:       time.Now(),
 	}
 	service.cacheMapping(freshMapping)
@@ -304,7 +304,7 @@ func TestService_CacheExpiration(t *testing.T) {
 func TestService_MultipleEmailMatches(t *testing.T) {
 	mockSlack := &MockSlackAPI{}
 	mockGitHub := &MockGitHubLookup{}
-	
+
 	service := &Service{
 		slackClient:  mockSlack,
 		githubLookup: mockGitHub,
@@ -314,7 +314,7 @@ func TestService_MultipleEmailMatches(t *testing.T) {
 
 	ctx := context.Background()
 	githubUser := "testuser"
-	organization := "testorg" 
+	organization := "testorg"
 	domain := "example.com"
 	email1 := "test1@example.com"
 	email2 := "test2@example.com"
@@ -332,7 +332,7 @@ func TestService_MultipleEmailMatches(t *testing.T) {
 	// Mock Slack users - user1 has primary email, user2 has secondary email
 	slackUser1 := &slack.User{ID: "U111111", Name: "user1", Profile: slack.UserProfile{Email: email1}, Deleted: false}
 	slackUser2 := &slack.User{ID: "U222222", Name: "user2", Profile: slack.UserProfile{Email: "different@example.com"}, Deleted: false}
-	
+
 	mockSlack.On("GetUserByEmailContext", ctx, email1).Return(slackUser1, nil)
 	mockSlack.On("GetUserByEmailContext", ctx, email2).Return(slackUser2, nil)
 
@@ -354,44 +354,44 @@ func TestService_ConfidenceScoring(t *testing.T) {
 	service := &Service{}
 
 	tests := []struct {
-		name           string
-		user           *slack.User
-		email          string
-		expectedMin    int
-		expectedMax    int
+		name        string
+		user        *slack.User
+		email       string
+		expectedMin int
+		expectedMax int
 	}{
 		{
 			name: "primary email match",
 			user: &slack.User{
-				ID:   "U123",
-				Name: "test",
+				ID:      "U123",
+				Name:    "test",
 				Profile: slack.UserProfile{Email: "test@example.com"},
 			},
-			email:          "test@example.com",
-			expectedMin:    70, // Base 50 + primary email 20
-			expectedMax:    70,
+			email:       "test@example.com",
+			expectedMin: 70, // Base 50 + primary email 20
+			expectedMax: 70,
 		},
 		{
 			name: "secondary email",
 			user: &slack.User{
-				ID:   "U123",
-				Name: "test",
+				ID:      "U123",
+				Name:    "test",
 				Profile: slack.UserProfile{Email: "primary@example.com"},
 			},
-			email:          "secondary@example.com",
-			expectedMin:    50, // Base 50 only
-			expectedMax:    50,
+			email:       "secondary@example.com",
+			expectedMin: 50, // Base 50 only
+			expectedMax: 50,
 		},
 		{
 			name: "generic email",
 			user: &slack.User{
-				ID:   "U123",
-				Name: "test", 
+				ID:      "U123",
+				Name:    "test",
 				Profile: slack.UserProfile{Email: "noreply@example.com"},
 			},
-			email:          "noreply@example.com",
-			expectedMin:    50, // Base 50 + primary 20 - generic 20
-			expectedMax:    50,
+			email:       "noreply@example.com",
+			expectedMin: 50, // Base 50 + primary 20 - generic 20
+			expectedMax: 50,
 		},
 	}
 
@@ -446,13 +446,13 @@ func TestService_CacheStats(t *testing.T) {
 		GitHubUsername: "user1",
 		CachedAt:       time.Now(),
 	})
-	
+
 	// Manually add expired entry to bypass cleanup
 	service.cache["user2"] = &UserMapping{
 		GitHubUsername: "user2",
 		CachedAt:       time.Now().Add(-25 * time.Hour), // Expired
 	}
-	
+
 	service.cacheMapping(&UserMapping{
 		GitHubUsername: "user3",
 		CachedAt:       time.Now().Add(-1 * time.Hour), // Fresh
@@ -460,7 +460,7 @@ func TestService_CacheStats(t *testing.T) {
 
 	// After the last cacheMapping call, expired entries should be cleaned up
 	total, expired := service.CacheStats()
-	assert.Equal(t, 2, total) // user1 and user3 (user2 was cleaned up)
+	assert.Equal(t, 2, total)   // user1 and user3 (user2 was cleaned up)
 	assert.Equal(t, 0, expired) // No expired entries remain
 }
 

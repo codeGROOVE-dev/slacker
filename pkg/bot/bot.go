@@ -18,6 +18,7 @@ import (
 	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
+	"github.com/slack-go/slack"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -153,6 +154,7 @@ func (c *Coordinator) getChannelDisplayInfo(ctx context.Context, channelName str
 }
 
 // findOrCreatePRThread finds an existing thread or creates a new one for a PR.
+// Returns (threadTS, wasNewlyCreated, error).
 func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner, repo string, prNumber int, prState string, pullRequest struct {
 	Number  int    `json:"number"`
 	HTMLURL string `json:"html_url"`
@@ -161,7 +163,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 		Login string `json:"login"`
 	} `json:"user"`
 },
-) (string, error) {
+) (string, bool, error) {
 	prKey := fmt.Sprintf("%s/%s#%d", owner, repo, prNumber)
 
 	slog.Debug("finding or creating PR thread",
@@ -176,7 +178,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 			"thread_ts", threadInfo.ThreadTS,
 			logFieldChannel, channelID,
 			"cached_state", threadInfo.LastState)
-		return threadInfo.ThreadTS, nil
+		return threadInfo.ThreadTS, false, nil
 	}
 
 	// Search Slack for existing thread by this bot
@@ -197,7 +199,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 			ChannelID: channelID,
 			LastState: prState,
 		})
-		return threadTS, nil
+		return threadTS, false, nil
 	}
 
 	// Create new thread
@@ -208,7 +210,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 
 	newThreadTS, err := c.createPRThread(ctx, channelID, owner, repo, prNumber, pullRequest)
 	if err != nil {
-		return "", fmt.Errorf("failed to create PR thread: %w", err)
+		return "", false, fmt.Errorf("failed to create PR thread: %w", err)
 	}
 
 	// Cache the new thread
@@ -224,7 +226,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 		logFieldChannel, channelID,
 		"initial_state", prState)
 
-	return newThreadTS, nil
+	return newThreadTS, true, nil
 }
 
 // searchForPRThread searches for an existing PR thread in a channel using channel history.
@@ -680,7 +682,7 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 		User:    event.PullRequest.User,
 		HTMLURL: event.PullRequest.HTMLURL,
 	}
-	threadTS, err := c.findOrCreatePRThread(ctx, channelID, owner, repo, prNumber, prState, pullRequestStruct)
+	threadTS, wasNewlyCreated, err := c.findOrCreatePRThread(ctx, channelID, owner, repo, prNumber, prState, pullRequestStruct)
 	if err != nil {
 		slog.Error("failed to find or create PR thread",
 			"workspace", c.workspaceName,
@@ -697,6 +699,82 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 	if exists && pr != nil && pr.ThreadTS == "" {
 		pr.ThreadTS = threadTS
 		pr.ChannelID = channelID
+	}
+
+	// Check if we need to update the thread title (for existing threads only)
+	if !wasNewlyCreated {
+		// Generate the expected thread title
+		expectedTitle, err := c.formatThreadTitle(ctx, owner, repo, prNumber, pullRequestStruct)
+		if err != nil {
+			slog.Warn("failed to format expected thread title, skipping title update",
+				"workspace", c.workspaceName,
+				logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+				"channel", channelDisplay,
+				"thread_ts", threadTS,
+				"error", err)
+		} else {
+			// Get the current message to compare
+			historyParams := &slack.GetConversationHistoryParameters{
+				ChannelID: channelID,
+				Latest:    threadTS,
+				Inclusive: true,
+				Limit:     1,
+			}
+
+			history, err := c.slack.API().GetConversationHistoryContext(ctx, historyParams)
+			if err != nil {
+				slog.Warn("failed to get current thread message for title comparison",
+					"workspace", c.workspaceName,
+					logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+					"channel", channelDisplay,
+					"thread_ts", threadTS,
+					"error", err)
+			} else if len(history.Messages) > 0 {
+				currentTitle := history.Messages[0].Text
+
+				// Update title if it's different
+				if currentTitle != expectedTitle {
+					slog.Info("updating thread title",
+						"workspace", c.workspaceName,
+						logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+						"channel", channelDisplay,
+						"thread_ts", threadTS,
+						"current_title_preview", func() string {
+							if len(currentTitle) > 100 {
+								return currentTitle[:100] + "..."
+							}
+							return currentTitle
+						}(),
+						"new_title_preview", func() string {
+							if len(expectedTitle) > 100 {
+								return expectedTitle[:100] + "..."
+							}
+							return expectedTitle
+						}())
+
+					if err := c.slack.UpdateMessage(ctx, channelID, threadTS, expectedTitle); err != nil {
+						slog.Error("failed to update thread title",
+							"workspace", c.workspaceName,
+							logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+							"channel", channelDisplay,
+							"thread_ts", threadTS,
+							"error", err)
+					} else {
+						slog.Debug("successfully updated thread title",
+							"workspace", c.workspaceName,
+							logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+							"channel", channelDisplay,
+							"thread_ts", threadTS)
+					}
+				} else {
+					slog.Debug("thread title unchanged, no update needed",
+						"workspace", c.workspaceName,
+						logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+						"channel", channelDisplay,
+						"thread_ts", threadTS)
+				}
+			}
+		}
 	}
 
 	// Update reactions only if state changed
@@ -891,39 +969,10 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 	} `json:"user"`
 },
 ) (string, error) {
-	// Get prefix for this org.
-	prefix := c.configManager.Prefix(owner)
-
-	// Get domain for user mapping
-	domain := c.configManager.Domain(owner)
-
-	// Get Slack handle for PR author
-	authorMention := c.userMapper.FormatUserMention(ctx, pr.User.Login, owner, domain)
-
-	// Get reviewers for the PR
-	reviewers, err := c.github.PRReviewers(ctx, owner, repo, number)
+	// Format the thread title consistently
+	text, err := c.formatThreadTitle(ctx, owner, repo, number, pr)
 	if err != nil {
-		slog.Warn("failed to get PR reviewers, continuing without reviewer mentions",
-			"owner", owner,
-			"repo", repo,
-			"pr_number", number,
-			"error", err)
-	}
-
-	// Format message with author and reviewers
-	text := fmt.Sprintf("%s %s • <%s|%s#%d> by %s",
-		prefix,
-		pr.Title,
-		pr.HTMLURL,
-		repo,
-		number,
-		authorMention,
-	)
-
-	// Add reviewers if we have any
-	if len(reviewers) > 0 {
-		reviewerMentions := c.userMapper.FormatUserMentions(ctx, reviewers, owner, domain)
-		text += fmt.Sprintf(" — reviewers: %s", reviewerMentions)
+		return "", fmt.Errorf("failed to format thread title: %w", err)
 	}
 
 	// Resolve channel name to ID for consistent API calls
@@ -954,4 +1003,51 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 	}
 
 	return threadTS, nil
+}
+
+// formatThreadTitle creates the thread title for a PR consistently.
+func (c *Coordinator) formatThreadTitle(ctx context.Context, owner, repo string, number int, pr struct {
+	Number  int    `json:"number"`
+	HTMLURL string `json:"html_url"`
+	Title   string `json:"title"`
+	User    struct {
+		Login string `json:"login"`
+	} `json:"user"`
+}) (string, error) {
+	// Get prefix for this org.
+	prefix := c.configManager.Prefix(owner)
+
+	// Get domain for user mapping
+	domain := c.configManager.Domain(owner)
+
+	// Get Slack handle for PR author
+	authorMention := c.userMapper.FormatUserMention(ctx, pr.User.Login, owner, domain)
+
+	// Get reviewers for the PR
+	reviewers, err := c.github.PRReviewers(ctx, owner, repo, number)
+	if err != nil {
+		slog.Warn("failed to get PR reviewers for thread title, continuing without reviewer mentions",
+			"owner", owner,
+			"repo", repo,
+			"pr_number", number,
+			"error", err)
+	}
+
+	// Format message with author and reviewers
+	text := fmt.Sprintf("%s %s • <%s|%s#%d> by %s",
+		prefix,
+		pr.Title,
+		pr.HTMLURL,
+		repo,
+		number,
+		authorMention,
+	)
+
+	// Add reviewers if we have any
+	if len(reviewers) > 0 {
+		reviewerMentions := c.userMapper.FormatUserMentions(ctx, reviewers, owner, domain)
+		text += fmt.Sprintf(" — reviewers: %s", reviewerMentions)
+	}
+
+	return text, nil
 }

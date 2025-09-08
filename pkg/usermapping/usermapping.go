@@ -16,12 +16,12 @@ import (
 const (
 	cacheTTL             = 24 * time.Hour // Cache mappings for 24 hours
 	maxConcurrentLookups = 5              // Limit concurrent email lookups
-	
+
 	// Confidence scoring constants
-	baseConfidence       = 50 // Base confidence for email match
-	channelMemberBonus   = 30 // Bonus for users in the target channel
-	primaryEmailBonus    = 20 // Bonus for primary email match
-	genericEmailPenalty  = 20 // Penalty for generic/shared emails
+	baseConfidence      = 50 // Base confidence for email match
+	channelMemberBonus  = 30 // Bonus for users in the target channel
+	primaryEmailBonus   = 20 // Bonus for primary email match
+	genericEmailPenalty = 20 // Penalty for generic/shared emails
 )
 
 // UserMapping represents a GitHub-to-Slack user mapping.
@@ -106,12 +106,12 @@ func (s *Service) GetSlackHandle(ctx context.Context, githubUsername, organizati
 		for i, addr := range result.Addresses {
 			emails[i] = addr.Email
 		}
-		
+
 		slog.Debug("found emails for GitHub user",
 			"github_user", githubUsername,
 			"email_count", len(emails),
 			"emails", emails)
-		
+
 		// Try finding Slack matches with all emails first
 		matches := s.findSlackMatches(ctx, githubUsername, emails)
 		if len(matches) > 0 {
@@ -125,7 +125,7 @@ func (s *Service) GetSlackHandle(ctx context.Context, githubUsername, organizati
 			return bestMatch.SlackUsername, nil
 		}
 	}
-	
+
 	// If no direct matches and domain is specified, try domain-specific approaches
 	if domain != "" {
 		// Try normalized emails within the target domain
@@ -134,18 +134,18 @@ func (s *Service) GetSlackHandle(ctx context.Context, githubUsername, organizati
 				Domain:    domain,
 				Normalize: true,
 			})
-			
+
 			if len(normalizedResult.Addresses) > 0 {
 				normalizedEmails := make([]string, len(normalizedResult.Addresses))
 				for i, addr := range normalizedResult.Addresses {
 					normalizedEmails[i] = addr.Email
 				}
-				
+
 				slog.Debug("trying normalized domain emails",
 					"github_user", githubUsername,
 					"domain", domain,
 					"normalized_emails", normalizedEmails)
-				
+
 				matches := s.findSlackMatches(ctx, githubUsername, normalizedEmails)
 				if len(matches) > 0 {
 					bestMatch := s.selectBestMatch(matches)
@@ -163,12 +163,12 @@ func (s *Service) GetSlackHandle(ctx context.Context, githubUsername, organizati
 		slog.Debug("trying intelligent email guessing",
 			"github_user", githubUsername,
 			"domain", domain)
-		
+
 		guessResult, err := s.githubLookup.Guess(ctx, githubUsername, organization, ghmailto.GuessOptions{
 			Domain: domain,
 		})
 		if err != nil {
-			slog.Warn("email guessing failed", 
+			slog.Warn("email guessing failed",
 				"github_user", githubUsername,
 				"domain", domain,
 				"error", err)
@@ -177,7 +177,7 @@ func (s *Service) GetSlackHandle(ctx context.Context, githubUsername, organizati
 				"github_user", githubUsername,
 				"domain", domain,
 				"guesses", guessResult.Guesses)
-				
+
 			matches := s.findSlackMatches(ctx, githubUsername, guessResult.Guesses)
 			if len(matches) > 0 {
 				bestMatch := s.selectBestMatch(matches)
@@ -198,7 +198,7 @@ func (s *Service) GetSlackHandle(ctx context.Context, githubUsername, organizati
 		"tried_direct_emails", len(emails) > 0,
 		"tried_domain_filtering", domain != "",
 		"tried_guessing", domain != "")
-		
+
 	// Cache negative result to avoid repeated lookups
 	s.cacheMapping(&UserMapping{
 		GitHubUsername: githubUsername,
@@ -355,11 +355,11 @@ func (s *Service) findSlackMatches(ctx context.Context, githubUsername string, e
 
 		mapping := &UserMapping{
 			GitHubUsername: githubUsername,
-			SlackUserID:   user.ID,
-			SlackUsername: user.Name,
-			MatchedEmail:  email,
-			Confidence:    confidence,
-			CachedAt:      time.Now(),
+			SlackUserID:    user.ID,
+			SlackUsername:  user.Name,
+			MatchedEmail:   email,
+			Confidence:     confidence,
+			CachedAt:       time.Now(),
 		}
 
 		matches = append(matches, mapping)
