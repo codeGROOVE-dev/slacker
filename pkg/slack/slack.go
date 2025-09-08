@@ -830,6 +830,11 @@ func (c *Client) SearchMessages(ctx context.Context, query string, params *slack
 	return c.api.SearchMessagesContext(ctx, query, *params)
 }
 
+// API returns the underlying Slack API client.
+func (c *Client) API() *slack.Client {
+	return c.api
+}
+
 // GetChannelHistory retrieves channel message history with optional time filtering.
 func (c *Client) GetChannelHistory(
 	ctx context.Context, channelID string, oldest, latest string, limit int,

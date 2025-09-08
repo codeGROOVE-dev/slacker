@@ -16,6 +16,7 @@ import (
 	"github.com/codeGROOVE-dev/slacker/pkg/notify"
 	slackpkg "github.com/codeGROOVE-dev/slacker/pkg/slack"
 	"github.com/codeGROOVE-dev/slacker/pkg/state"
+	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 	"golang.org/x/sync/errgroup"
 )
@@ -83,6 +84,7 @@ type Coordinator struct {
 	stateManager  *state.Manager
 	configManager *config.Manager
 	notifier      *notify.Manager
+	userMapper    *usermapping.Service
 	sprinklerURL  string
 	threadCache   *ThreadCache
 	workspaceName string // Track workspace name for better logging
@@ -104,6 +106,7 @@ func New(
 		stateManager:  stateManager,
 		configManager: configManager,
 		notifier:      notifier,
+		userMapper:    usermapping.New(slackClient.API(), githubClient.InstallationToken(ctx)),
 		sprinklerURL:  sprinklerURL,
 		threadCache:   NewThreadCache(),
 	}
@@ -891,16 +894,34 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 	// Get prefix for this org.
 	prefix := c.configManager.Prefix(owner)
 
-	// Format message.
-	text := fmt.Sprintf(
-		"%s %s • <%s|%s#%d> by @%s",
+	// Get Slack handle for PR author
+	authorMention := c.userMapper.FormatUserMention(ctx, pr.User.Login, channel)
+
+	// Get reviewers for the PR
+	reviewers, err := c.github.PRReviewers(ctx, owner, repo, number)
+	if err != nil {
+		slog.Warn("failed to get PR reviewers, continuing without reviewer mentions",
+			"owner", owner,
+			"repo", repo,
+			"pr_number", number,
+			"error", err)
+	}
+
+	// Format message with author and reviewers
+	text := fmt.Sprintf("%s %s • <%s|%s#%d> by %s",
 		prefix,
 		pr.Title,
 		pr.HTMLURL,
 		repo,
 		number,
-		pr.User.Login,
+		authorMention,
 	)
+
+	// Add reviewers if we have any
+	if len(reviewers) > 0 {
+		reviewerMentions := c.userMapper.FormatUserMentions(ctx, reviewers, channel)
+		text += fmt.Sprintf(" — reviewers: %s", reviewerMentions)
+	}
 
 	// Resolve channel name to ID for consistent API calls
 	resolvedChannel := c.slack.ResolveChannelID(ctx, channel)
