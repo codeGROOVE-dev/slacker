@@ -14,6 +14,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Constants for logging fields.
+const (
+	logFieldOrg = "org"
+)
+
 // ServerConfig holds the server configuration from environment variables.
 type ServerConfig struct {
 	DataDir              string
@@ -156,7 +161,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 	if cachedConfig, found := m.cache.get(org); found {
 		hits, misses := m.cache.stats()
 		slog.Debug("using cached config for organization",
-			"org", org,
+			logFieldOrg, org,
 			"cache_hits", hits,
 			"cache_misses", misses,
 			"cache_hit_ratio", float64(hits)/float64(hits+misses))
@@ -168,7 +173,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 	}
 
 	slog.Info("starting config load for organization",
-		"org", org,
+		logFieldOrg, org,
 		"config_repo", ".codeGROOVE",
 		"config_file", "slack.yaml",
 		"workspace_validation", m.workspaceName != "",
@@ -186,7 +191,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 
 	// Fetch the config file with retry
 	slog.Debug("fetching config file from GitHub",
-		"org", org,
+		logFieldOrg, org,
 		"repo", ".codeGROOVE",
 		"file", "slack.yaml",
 		"retry_attempts", 3)
@@ -206,14 +211,14 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 				var ghErr *github.ErrorResponse
 				if errors.As(err, &ghErr) && ghErr.Response.StatusCode == http.StatusNotFound {
 					slog.Info("config file not found - org has no configuration",
-						"org", org,
+						logFieldOrg, org,
 						"repo", ".codeGROOVE",
 						"file", "slack.yaml",
 						"will_use_defaults", true)
 					return retry.Unrecoverable(err)
 				}
 				slog.Warn("failed to fetch config file, will retry",
-					"org", org,
+					logFieldOrg, org,
 					"repo", ".codeGROOVE",
 					"file", "slack.yaml",
 					"error", err)
@@ -222,7 +227,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 
 			if content == nil || content.Content == nil {
 				slog.Warn("config file exists but is empty",
-					"org", org,
+					logFieldOrg, org,
 					"will_use_defaults", true)
 				return retry.Unrecoverable(errors.New("config file empty"))
 			}
@@ -231,13 +236,13 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 			configContent, err = content.GetContent()
 			if err != nil {
 				slog.Error("failed to decode config file content",
-					"org", org,
+					logFieldOrg, org,
 					"error", err)
 				return err
 			}
 
 			slog.Info("successfully fetched config file",
-				"org", org,
+				logFieldOrg, org,
 				"config_size_bytes", len(configContent),
 				"will_parse_yaml", true)
 
@@ -275,7 +280,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 
 		hits, misses := m.cache.stats()
 		slog.Info("using default configuration for org",
-			"org", org,
+			logFieldOrg, org,
 			"reason", "config_load_failed",
 			"error", err,
 			"default_prefix", ":postal_horn:",
@@ -289,7 +294,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 
 	// Parse the YAML
 	slog.Debug("parsing YAML configuration",
-		"org", org,
+		logFieldOrg, org,
 		"config_content_preview", configContent[:min(len(configContent), 200)])
 
 	var config RepoConfig
@@ -316,7 +321,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 
 		hits, misses := m.cache.stats()
 		slog.Error("failed to parse YAML configuration - using defaults",
-			"org", org,
+			logFieldOrg, org,
 			"yaml_error", err,
 			"config_preview", configContent[:min(len(configContent), 100)],
 			"will_use_defaults", true,
@@ -327,7 +332,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 	}
 
 	slog.Info("successfully parsed YAML configuration",
-		"org", org,
+		logFieldOrg, org,
 		"parsed_channels", len(config.Channels),
 		"has_global_config", true,
 		"workspace_specified", config.Global.Slack != "")
@@ -335,7 +340,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 	// Validate workspace name matches if specified
 	if config.Global.Slack != "" && m.workspaceName != "" {
 		slog.Debug("validating workspace name",
-			"org", org,
+			logFieldOrg, org,
 			"config_workspace", config.Global.Slack,
 			"actual_workspace", m.workspaceName,
 			"validation_enabled", true)
@@ -364,7 +369,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 
 			hits, misses := m.cache.stats()
 			slog.Warn("workspace mismatch - config is for different Slack workspace",
-				"org", org,
+				logFieldOrg, org,
 				"config_workspace", config.Global.Slack,
 				"actual_workspace", m.workspaceName,
 				"action", "skipping_config",
@@ -377,17 +382,17 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 		}
 
 		slog.Info("workspace validation successful",
-			"org", org,
+			logFieldOrg, org,
 			"workspace", m.workspaceName,
 			"config_valid_for_workspace", true)
 	} else {
 		if config.Global.Slack == "" {
 			slog.Info("no workspace validation required - config has no workspace specified",
-				"org", org,
+				logFieldOrg, org,
 				"will_accept_any_workspace", true)
 		} else {
 			slog.Warn("workspace validation disabled - no actual workspace name available",
-				"org", org,
+				logFieldOrg, org,
 				"config_workspace", config.Global.Slack,
 				"validation_skipped", true)
 		}
@@ -435,7 +440,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 			}
 		}
 		slog.Debug("channel configuration loaded",
-			"org", org,
+			logFieldOrg, org,
 			"channel", channelName,
 			"repos_count", len(channelConfig.Repos),
 			"repos", channelConfig.Repos,
@@ -457,8 +462,8 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 
 	hits, misses := m.cache.stats()
 	slog.Info("configuration successfully loaded and validated",
-		"org", org,
-		"final_config", map[string]interface{}{
+		logFieldOrg, org,
+		"final_config", map[string]any{
 			"prefix":                    config.Global.Prefix,
 			"slack_workspace":           config.Global.Slack,
 			"channel_notify_delay_mins": config.Global.ChannelNotifyDelayMins,
@@ -509,7 +514,7 @@ func (m *Manager) ChannelsForRepo(org, repo string) []string {
 				// Skip muted channels even if explicitly configured
 				if channelConfig.Mute {
 					slog.Debug("skipping explicitly muted channel",
-						"org", org,
+						logFieldOrg, org,
 						"repo", repo,
 						"channel", channelName,
 						"muted", true)
@@ -535,7 +540,7 @@ func (m *Manager) ChannelsForRepo(org, repo string) []string {
 
 		if alreadyIncluded {
 			slog.Debug("auto-discovered channel already included via explicit config",
-				"org", org,
+				logFieldOrg, org,
 				"repo", repo,
 				"channel", autoChannel)
 			continue
@@ -544,7 +549,7 @@ func (m *Manager) ChannelsForRepo(org, repo string) []string {
 		// Check if auto-discovered channel is explicitly muted
 		if channelConfig, exists := config.Channels[autoChannel]; exists && channelConfig.Mute {
 			slog.Info("auto-discovered channel is explicitly muted in config",
-				"org", org,
+				logFieldOrg, org,
 				"repo", repo,
 				"channel", autoChannel,
 				"muted", true)
@@ -554,7 +559,7 @@ func (m *Manager) ChannelsForRepo(org, repo string) []string {
 		// Add the auto-discovered channel
 		channels = append(channels, autoChannel)
 		slog.Debug("added auto-discovered channel",
-			"org", org,
+			logFieldOrg, org,
 			"repo", repo,
 			"channel", autoChannel,
 			"reason", "repo name matches channel name")
@@ -562,7 +567,7 @@ func (m *Manager) ChannelsForRepo(org, repo string) []string {
 
 	if len(channels) > 0 {
 		slog.Debug("resolved channels for repo",
-			"org", org,
+			logFieldOrg, org,
 			"repo", repo,
 			"channels", channels,
 			"has_explicit_config", explicitlyConfigured,
@@ -591,13 +596,13 @@ func (*Manager) matchesRepo(pattern, repo string) bool {
 
 // autoDiscoverChannels automatically discovers Slack channels based on repo names.
 // For example: repo "goose" -> channel "#goose", repo "my-service" -> channel "#my-service".
-func (m *Manager) autoDiscoverChannels(org, repo string) []string {
+func (*Manager) autoDiscoverChannels(org, repo string) []string {
 	// Convert repo name to channel name
 	// Most repos will match their channel name directly
 	channelName := repo
 
 	slog.Info("attempting auto-discovery of channel for repo",
-		"org", org,
+		logFieldOrg, org,
 		"repo", repo,
 		"auto_channel", channelName,
 		"explanation", "repo name matches Slack channel name convention")

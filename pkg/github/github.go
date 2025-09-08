@@ -20,6 +20,11 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// Constants for security requirements.
+const (
+	minRSAKeyBits = 2048
+)
+
 // Client wraps the GitHub API client.
 type Client struct {
 	tokenExpiry       time.Time
@@ -65,8 +70,8 @@ func New(ctx context.Context, appID, privateKeyPEM, installationID string) (*Cli
 	}
 
 	// Validate RSA key strength (minimum 2048 bits).
-	if key.N.BitLen() < 2048 {
-		return nil, fmt.Errorf("RSA key too weak: %d bits (minimum 2048 required)", key.N.BitLen())
+	if key.N.BitLen() < minRSAKeyBits {
+		return nil, fmt.Errorf("RSA key too weak: %d bits (minimum %d required)", key.N.BitLen(), minRSAKeyBits)
 	}
 
 	// Parse installation ID.
