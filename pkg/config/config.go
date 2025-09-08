@@ -39,6 +39,7 @@ type RepoConfig struct {
 	Global struct {
 		Prefix                 string `yaml:"prefix"`
 		Slack                  string `yaml:"slack"`
+		Domain                 string `yaml:"domain"`
 		ChannelNotifyDelayMins int    `yaml:"channel_notify_delay_mins"`
 		DailyReminders         bool   `yaml:"daily_reminders"`
 	} `yaml:"global"` // Default: 60
@@ -262,11 +263,13 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 			Global: struct {
 				Prefix                 string `yaml:"prefix"`
 				Slack                  string `yaml:"slack"`
+				Domain                 string `yaml:"domain"`
 				ChannelNotifyDelayMins int    `yaml:"channel_notify_delay_mins"`
 				DailyReminders         bool   `yaml:"daily_reminders"`
 			}{
 				Prefix:                 ":postal_horn:",
 				Slack:                  "",
+				Domain:                 "",
 				ChannelNotifyDelayMins: 60,
 				DailyReminders:         true,
 			},
@@ -303,11 +306,13 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 			Global: struct {
 				Prefix                 string `yaml:"prefix"`
 				Slack                  string `yaml:"slack"`
+				Domain                 string `yaml:"domain"`
 				ChannelNotifyDelayMins int    `yaml:"channel_notify_delay_mins"`
 				DailyReminders         bool   `yaml:"daily_reminders"`
 			}{
 				Prefix:                 ":postal_horn:",
 				Slack:                  "",
+				Domain:                 "",
 				ChannelNotifyDelayMins: 60,
 				DailyReminders:         true,
 			},
@@ -351,11 +356,13 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 				Global: struct {
 					Prefix                 string `yaml:"prefix"`
 					Slack                  string `yaml:"slack"`
+					Domain                 string `yaml:"domain"`
 					ChannelNotifyDelayMins int    `yaml:"channel_notify_delay_mins"`
 					DailyReminders         bool   `yaml:"daily_reminders"`
 				}{
 					Prefix:                 ":postal_horn:",
 					Slack:                  "",
+					Domain:                 "",
 					ChannelNotifyDelayMins: 60,
 					DailyReminders:         true,
 				},
@@ -620,6 +627,18 @@ func (m *Manager) Prefix(org string) string {
 		return ":postal_horn:"
 	}
 	return config.Global.Prefix
+}
+
+// Domain returns the email domain for GitHub-to-Slack user mapping for the given organization.
+func (m *Manager) Domain(org string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	config, exists := m.configs[org]
+	if !exists {
+		return ""
+	}
+	return config.Global.Domain
 }
 
 // IsChannelMuted checks if a specific channel is muted for an org.

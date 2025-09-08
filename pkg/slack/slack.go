@@ -214,6 +214,62 @@ func (c *Client) PostThread(ctx context.Context, channelID, text string, attachm
 	return timestamp, nil
 }
 
+// UpdateMessage updates an existing message with retry logic.
+func (c *Client) UpdateMessage(ctx context.Context, channelID, timestamp, text string) error {
+	slog.Debug("updating message",
+		"channel_id", channelID,
+		"timestamp", timestamp,
+		"text_preview", func() string {
+			if len(text) > 100 {
+				return text[:100] + "..."
+			}
+			return text
+		}())
+
+	// Disable unfurling for GitHub links.
+	options := []slack.MsgOption{
+		slack.MsgOptionText(text, false),
+		slack.MsgOptionDisableLinkUnfurl(),
+	}
+
+	err := retry.Do(
+		func() error {
+			_, _, _, err := c.api.UpdateMessageContext(ctx, channelID, timestamp, options...)
+			if err != nil {
+				if isRateLimitError(err) {
+					slog.Warn("rate limited updating message, backing off", "channel", channelID, "timestamp", timestamp)
+					return err
+				}
+				// Don't retry on permanent errors
+				if strings.Contains(err.Error(), "message_not_found") ||
+					strings.Contains(err.Error(), "channel_not_found") ||
+					strings.Contains(err.Error(), "not_in_channel") {
+					return retry.Unrecoverable(err)
+				}
+				slog.Warn("failed to update message, retrying", "channel", channelID, "timestamp", timestamp, "error", err)
+				return err
+			}
+			return nil
+		},
+		retry.Attempts(5),
+		retry.Delay(2*time.Second),
+		retry.MaxDelay(30*time.Second),
+		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
+		retry.LastErrorOnly(true),
+		retry.Context(ctx),
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to update message after retries: %w", err)
+	}
+
+	slog.Debug("successfully updated message",
+		"timestamp", timestamp,
+		"channel_id", channelID)
+	return nil
+}
+
 // PostThreadReply posts a reply to an existing thread with retry logic.
 func (c *Client) PostThreadReply(ctx context.Context, channelID, threadTS, text string) error {
 	options := []slack.MsgOption{
@@ -828,6 +884,11 @@ func (c *Client) PublishHomeView(userID string, blocks []slack.Block) error {
 // SearchMessages searches for messages using the Slack API.
 func (c *Client) SearchMessages(ctx context.Context, query string, params *slack.SearchParameters) (*slack.SearchMessages, error) {
 	return c.api.SearchMessagesContext(ctx, query, *params)
+}
+
+// API returns the underlying Slack API client.
+func (c *Client) API() *slack.Client {
+	return c.api
 }
 
 // GetChannelHistory retrieves channel message history with optional time filtering.

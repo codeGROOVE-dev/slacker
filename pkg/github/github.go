@@ -487,6 +487,66 @@ func (c *Client) PRState(ctx context.Context, owner, repo string, number int) (s
 	return "hourglass", blockedOn, nil
 }
 
+// PRReviewers gets all reviewers (requested and completed) for a PR.
+func (c *Client) PRReviewers(ctx context.Context, owner, repo string, number int) ([]string, error) {
+	var allReviewers []string
+	reviewerSet := make(map[string]bool) // Use set to avoid duplicates
+
+	slog.Debug("fetching PR reviewers",
+		"owner", owner,
+		"repo", repo,
+		"pr_number", number)
+
+	// Get PR details to get requested reviewers
+	pr, err := c.PR(ctx, owner, repo, number)
+	if err != nil {
+		slog.Error("failed to get PR details for reviewers",
+			"owner", owner,
+			"repo", repo,
+			"pr_number", number,
+			"error", err)
+		return nil, err
+	}
+
+	// Add requested reviewers
+	for _, reviewer := range pr.RequestedReviewers {
+		if reviewer.GetLogin() != "" {
+			reviewerSet[reviewer.GetLogin()] = true
+		}
+	}
+
+	// Get reviews to find completed reviewers
+	reviews, err := c.PRReviews(ctx, owner, repo, number)
+	if err != nil {
+		slog.Warn("failed to get PR reviews, continuing with requested reviewers only",
+			"owner", owner,
+			"repo", repo,
+			"pr_number", number,
+			"error", err)
+	} else {
+		// Add reviewers who have already reviewed
+		for _, review := range reviews {
+			if review.GetUser() != nil && review.GetUser().GetLogin() != "" {
+				reviewerSet[review.GetUser().GetLogin()] = true
+			}
+		}
+	}
+
+	// Convert set to slice
+	for reviewer := range reviewerSet {
+		allReviewers = append(allReviewers, reviewer)
+	}
+
+	slog.Debug("collected PR reviewers",
+		"owner", owner,
+		"repo", repo,
+		"pr_number", number,
+		"reviewers", allReviewers,
+		"reviewer_count", len(allReviewers))
+
+	return allReviewers, nil
+}
+
 // PRInfo contains simplified PR information.
 type PRInfo struct {
 	CreatedAt time.Time
