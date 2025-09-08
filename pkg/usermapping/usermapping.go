@@ -16,6 +16,12 @@ import (
 const (
 	cacheTTL             = 24 * time.Hour // Cache mappings for 24 hours
 	maxConcurrentLookups = 5              // Limit concurrent email lookups
+	
+	// Confidence scoring constants
+	baseConfidence       = 50 // Base confidence for email match
+	channelMemberBonus   = 30 // Bonus for users in the target channel
+	primaryEmailBonus    = 20 // Bonus for primary email match
+	genericEmailPenalty  = 20 // Penalty for generic/shared emails
 )
 
 // UserMapping represents a GitHub-to-Slack user mapping.
@@ -24,18 +30,28 @@ type UserMapping struct {
 	SlackUserID    string
 	SlackUsername  string
 	MatchedEmail   string
-	ChannelContext string // Channel where mapping was established
-	Confidence     int    // Match confidence (0-100)
 	CachedAt       time.Time
+	Confidence     int // Match confidence (0-100)
+}
+
+// SlackAPI defines the interface for Slack API operations needed by the mapping service.
+type SlackAPI interface {
+	GetUserByEmailContext(ctx context.Context, email string) (*slack.User, error)
+}
+
+// GitHubEmailLookup defines the interface for GitHub email lookup operations.
+type GitHubEmailLookup interface {
+	Lookup(ctx context.Context, username, organization string) (*ghmailto.Result, error)
+	Guess(ctx context.Context, username, organization string, opts ghmailto.GuessOptions) (*ghmailto.GuessResult, error)
 }
 
 // Service handles GitHub-to-Slack user mapping.
 type Service struct {
-	slackClient  *slack.Client
-	githubLookup *ghmailto.Lookup
+	slackClient  SlackAPI
+	githubLookup GitHubEmailLookup
 	cache        map[string]*UserMapping
-	cacheMu      sync.RWMutex
 	lookupSem    chan struct{} // Semaphore for limiting concurrent lookups
+	cacheMu      sync.RWMutex
 }
 
 // New creates a new user mapping service.
@@ -49,14 +65,13 @@ func New(slackClient *slack.Client, githubToken string) *Service {
 }
 
 // GetSlackHandle attempts to find a Slack handle for a GitHub username.
-// It uses email matching with preference for users in the specified channel.
-func (s *Service) GetSlackHandle(ctx context.Context, githubUsername, channelID string) (string, error) {
+// It uses email matching to find the best Slack user match.
+func (s *Service) GetSlackHandle(ctx context.Context, githubUsername, organization, domain string) (string, error) {
 	// Check cache first
-	if mapping := s.getCachedMapping(githubUsername, channelID); mapping != nil {
+	if mapping := s.getCachedMapping(githubUsername); mapping != nil {
 		slog.Debug("using cached GitHub-to-Slack mapping",
 			"github_user", githubUsername,
 			"slack_user", mapping.SlackUsername,
-			"channel", channelID,
 			"confidence", mapping.Confidence,
 			"age_hours", time.Since(mapping.CachedAt).Hours())
 		return mapping.SlackUsername, nil
@@ -72,11 +87,11 @@ func (s *Service) GetSlackHandle(ctx context.Context, githubUsername, channelID 
 
 	slog.Debug("performing GitHub-to-Slack user lookup",
 		"github_user", githubUsername,
-		"channel", channelID)
+		"organization", organization,
+		"domain", domain)
 
-	// Get emails for GitHub user - we need to infer organization from context
-	// For now, we'll do a lookup without specific organization (may be less accurate)
-	result, err := s.githubLookup.Lookup(ctx, githubUsername, "")
+	// Get emails for GitHub user with organization context
+	result, err := s.githubLookup.Lookup(ctx, githubUsername, organization)
 	if err != nil {
 		slog.Warn("failed to get emails for GitHub user",
 			"github_user", githubUsername,
@@ -84,77 +99,120 @@ func (s *Service) GetSlackHandle(ctx context.Context, githubUsername, channelID 
 		return "", err
 	}
 
-	if len(result.Addresses) == 0 {
-		slog.Info("no emails found for GitHub user",
-			"github_user", githubUsername)
-		// Cache negative result to avoid repeated lookups
-		s.cacheMapping(&UserMapping{
-			GitHubUsername: githubUsername,
-			SlackUserID:    "",
-			SlackUsername:  "",
-			ChannelContext: channelID,
-			Confidence:     0,
-			CachedAt:       time.Now(),
-		})
-		return "", nil
-	}
-
-	// Extract email addresses from results
-	emails := make([]string, len(result.Addresses))
-	for i, addr := range result.Addresses {
-		emails[i] = addr.Email
-	}
-
-	slog.Debug("found emails for GitHub user",
-		"github_user", githubUsername,
-		"email_count", len(emails),
-		"emails", emails)
-
-	// Find matching Slack users
-	matches, err := s.findSlackMatches(ctx, emails, channelID)
-	if err != nil {
-		slog.Error("failed to find Slack matches",
+	// First try all found emails (including any domain) for direct matches
+	var emails []string
+	if len(result.Addresses) > 0 {
+		emails = make([]string, len(result.Addresses))
+		for i, addr := range result.Addresses {
+			emails[i] = addr.Email
+		}
+		
+		slog.Debug("found emails for GitHub user",
 			"github_user", githubUsername,
-			"error", err)
-		return "", err
+			"email_count", len(emails),
+			"emails", emails)
+		
+		// Try finding Slack matches with all emails first
+		matches := s.findSlackMatches(ctx, githubUsername, emails)
+		if len(matches) > 0 {
+			bestMatch := s.selectBestMatch(matches)
+			slog.Info("successfully mapped GitHub user to Slack via direct email match",
+				"github_user", githubUsername,
+				"slack_user", bestMatch.SlackUsername,
+				"matched_email", bestMatch.MatchedEmail,
+				"confidence", bestMatch.Confidence)
+			s.cacheMapping(bestMatch)
+			return bestMatch.SlackUsername, nil
+		}
 	}
-
-	if len(matches) == 0 {
-		slog.Info("no Slack users found matching GitHub emails",
+	
+	// If no direct matches and domain is specified, try domain-specific approaches
+	if domain != "" {
+		// Try normalized emails within the target domain
+		if len(result.Addresses) > 0 {
+			normalizedResult := result.FilterAndNormalize(ghmailto.FilterOptions{
+				Domain:    domain,
+				Normalize: true,
+			})
+			
+			if len(normalizedResult.Addresses) > 0 {
+				normalizedEmails := make([]string, len(normalizedResult.Addresses))
+				for i, addr := range normalizedResult.Addresses {
+					normalizedEmails[i] = addr.Email
+				}
+				
+				slog.Debug("trying normalized domain emails",
+					"github_user", githubUsername,
+					"domain", domain,
+					"normalized_emails", normalizedEmails)
+				
+				matches := s.findSlackMatches(ctx, githubUsername, normalizedEmails)
+				if len(matches) > 0 {
+					bestMatch := s.selectBestMatch(matches)
+					slog.Info("successfully mapped GitHub user to Slack via normalized email",
+						"github_user", githubUsername,
+						"slack_user", bestMatch.SlackUsername,
+						"matched_email", bestMatch.MatchedEmail,
+						"confidence", bestMatch.Confidence)
+					s.cacheMapping(bestMatch)
+					return bestMatch.SlackUsername, nil
+				}
+			}
+		}
+		// Finally, try intelligent guessing
+		slog.Debug("trying intelligent email guessing",
 			"github_user", githubUsername,
-			"emails_checked", len(emails))
-		// Cache negative result
-		s.cacheMapping(&UserMapping{
-			GitHubUsername: githubUsername,
-			SlackUserID:    "",
-			SlackUsername:  "",
-			ChannelContext: channelID,
-			Confidence:     0,
-			CachedAt:       time.Now(),
+			"domain", domain)
+		
+		guessResult, err := s.githubLookup.Guess(ctx, githubUsername, organization, ghmailto.GuessOptions{
+			Domain: domain,
 		})
-		return "", nil
+		if err != nil {
+			slog.Warn("email guessing failed", 
+				"github_user", githubUsername,
+				"domain", domain,
+				"error", err)
+		} else if len(guessResult.Guesses) > 0 {
+			slog.Debug("generated email guesses",
+				"github_user", githubUsername,
+				"domain", domain,
+				"guesses", guessResult.Guesses)
+				
+			matches := s.findSlackMatches(ctx, githubUsername, guessResult.Guesses)
+			if len(matches) > 0 {
+				bestMatch := s.selectBestMatch(matches)
+				slog.Info("successfully mapped GitHub user to Slack via email guessing",
+					"github_user", githubUsername,
+					"slack_user", bestMatch.SlackUsername,
+					"guessed_email", bestMatch.MatchedEmail,
+					"confidence", bestMatch.Confidence)
+				s.cacheMapping(bestMatch)
+				return bestMatch.SlackUsername, nil
+			}
+		}
 	}
 
-	// Select best match (highest confidence, prefer channel members)
-	bestMatch := s.selectBestMatch(matches, channelID)
-
-	slog.Info("successfully mapped GitHub user to Slack",
+	// No matches found through any method
+	slog.Info("no Slack mapping found for GitHub user",
 		"github_user", githubUsername,
-		"slack_user", bestMatch.SlackUsername,
-		"slack_user_id", bestMatch.SlackUserID,
-		"matched_email", bestMatch.MatchedEmail,
-		"confidence", bestMatch.Confidence,
-		"channel_member", bestMatch.ChannelContext == channelID)
-
-	// Cache the mapping
-	s.cacheMapping(bestMatch)
-
-	return bestMatch.SlackUsername, nil
+		"tried_direct_emails", len(emails) > 0,
+		"tried_domain_filtering", domain != "",
+		"tried_guessing", domain != "")
+		
+	// Cache negative result to avoid repeated lookups
+	s.cacheMapping(&UserMapping{
+		GitHubUsername: githubUsername,
+		SlackUserID:    "",
+		SlackUsername:  "",
+		Confidence:     0,
+		CachedAt:       time.Now(),
+	})
+	return "", nil
 }
 
 // GetSlackHandles performs batch lookup of multiple GitHub users to Slack handles.
 // Returns a map of GitHub username to Slack handle (empty string if not found).
-func (s *Service) GetSlackHandles(ctx context.Context, githubUsernames []string, channelID string) (map[string]string, error) {
+func (s *Service) GetSlackHandles(ctx context.Context, githubUsernames []string, organization, domain string) (map[string]string, error) {
 	if len(githubUsernames) == 0 {
 		return make(map[string]string), nil
 	}
@@ -162,13 +220,14 @@ func (s *Service) GetSlackHandles(ctx context.Context, githubUsernames []string,
 	slog.Debug("performing batch GitHub-to-Slack user lookup",
 		"github_users", githubUsernames,
 		"user_count", len(githubUsernames),
-		"channel", channelID)
+		"organization", organization,
+		"domain", domain)
 
 	results := make(map[string]string, len(githubUsernames))
 
 	// Process users concurrently but respect semaphore limits
 	for _, username := range githubUsernames {
-		slackHandle, err := s.GetSlackHandle(ctx, username, channelID)
+		slackHandle, err := s.GetSlackHandle(ctx, username, organization, domain)
 		if err != nil {
 			slog.Warn("failed to lookup Slack handle for GitHub user",
 				"github_user", username,
@@ -196,16 +255,15 @@ func (s *Service) GetSlackHandles(ctx context.Context, githubUsernames []string,
 
 // FormatUserMention formats a GitHub username as a Slack mention if mapping exists.
 // Falls back to @githubUsername if no Slack mapping is found.
-func (s *Service) FormatUserMention(ctx context.Context, githubUsername, channelID string) string {
+func (s *Service) FormatUserMention(ctx context.Context, githubUsername, organization, domain string) string {
 	if githubUsername == "" {
 		return ""
 	}
 
-	slackHandle, err := s.GetSlackHandle(ctx, githubUsername, channelID)
+	slackHandle, err := s.GetSlackHandle(ctx, githubUsername, organization, domain)
 	if err != nil || slackHandle == "" {
 		slog.Debug("falling back to GitHub username for mention",
 			"github_user", githubUsername,
-			"channel", channelID,
 			"reason", "no_slack_mapping")
 		return "@" + githubUsername
 	}
@@ -215,12 +273,12 @@ func (s *Service) FormatUserMention(ctx context.Context, githubUsername, channel
 
 // FormatUserMentions formats multiple GitHub usernames as Slack mentions.
 // Returns formatted string like "@slackUser1, @slackUser2" or falls back to GitHub usernames.
-func (s *Service) FormatUserMentions(ctx context.Context, githubUsernames []string, channelID string) string {
+func (s *Service) FormatUserMentions(ctx context.Context, githubUsernames []string, organization, domain string) string {
 	if len(githubUsernames) == 0 {
 		return ""
 	}
 
-	handles, err := s.GetSlackHandles(ctx, githubUsernames, channelID)
+	handles, err := s.GetSlackHandles(ctx, githubUsernames, organization, domain)
 	if err != nil {
 		slog.Warn("failed to get Slack handles for batch formatting",
 			"github_users", githubUsernames,
@@ -239,28 +297,16 @@ func (s *Service) FormatUserMentions(ctx context.Context, githubUsernames []stri
 	return strings.Join(mentions, ", ")
 }
 
-// getCachedMapping retrieves a cached mapping, preferring channel-specific ones.
-func (s *Service) getCachedMapping(githubUsername, channelID string) *UserMapping {
+// getCachedMapping retrieves a cached mapping.
+func (s *Service) getCachedMapping(githubUsername string) *UserMapping {
 	s.cacheMu.RLock()
 	defer s.cacheMu.RUnlock()
 
-	// First try channel-specific cache key
-	channelKey := githubUsername + ":" + channelID
-	if mapping, exists := s.cache[channelKey]; exists {
-		if time.Since(mapping.CachedAt) < cacheTTL {
-			return mapping
-		}
-		// Expired, remove it
-		delete(s.cache, channelKey)
-	}
-
-	// Fall back to general mapping
 	if mapping, exists := s.cache[githubUsername]; exists {
 		if time.Since(mapping.CachedAt) < cacheTTL {
 			return mapping
 		}
-		// Expired, remove it
-		delete(s.cache, githubUsername)
+		// Expired, remove it lazily (we'll clean it up next time we cache)
 	}
 
 	return nil
@@ -271,32 +317,21 @@ func (s *Service) cacheMapping(mapping *UserMapping) {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
 
-	// Store with channel context if available
-	if mapping.ChannelContext != "" {
-		key := mapping.GitHubUsername + ":" + mapping.ChannelContext
-		s.cache[key] = mapping
+	// Clean up expired entries while we have the write lock
+	now := time.Now()
+	for key, cached := range s.cache {
+		if now.Sub(cached.CachedAt) >= cacheTTL {
+			delete(s.cache, key)
+		}
 	}
 
-	// Also store general mapping
+	// Store the mapping
 	s.cache[mapping.GitHubUsername] = mapping
 }
 
 // findSlackMatches finds Slack users matching the given emails.
-func (s *Service) findSlackMatches(ctx context.Context, emails []string, channelID string) ([]*UserMapping, error) {
+func (s *Service) findSlackMatches(ctx context.Context, githubUsername string, emails []string) []*UserMapping {
 	var matches []*UserMapping
-
-	// Get channel members for preference scoring
-	var channelMembers map[string]bool
-	if channelID != "" {
-		members, err := s.getChannelMembers(ctx, channelID)
-		if err != nil {
-			slog.Warn("failed to get channel members, will match against all users",
-				"channel", channelID,
-				"error", err)
-		} else {
-			channelMembers = members
-		}
-	}
 
 	// Search for each email in Slack user directory
 	for _, email := range emails {
@@ -316,9 +351,10 @@ func (s *Service) findSlackMatches(ctx context.Context, emails []string, channel
 		}
 
 		// Calculate confidence score
-		confidence := s.calculateConfidence(user, email, channelMembers)
+		confidence := s.calculateConfidence(user, email)
 
 		mapping := &UserMapping{
+			GitHubUsername: githubUsername,
 			SlackUserID:   user.ID,
 			SlackUsername: user.Name,
 			MatchedEmail:  email,
@@ -326,57 +362,29 @@ func (s *Service) findSlackMatches(ctx context.Context, emails []string, channel
 			CachedAt:      time.Now(),
 		}
 
-		// Set channel context if user is in the channel
-		if channelMembers != nil && channelMembers[user.ID] {
-			mapping.ChannelContext = channelID
-		}
-
 		matches = append(matches, mapping)
 
 		slog.Debug("found Slack user match",
 			"email", email,
 			"slack_user", user.Name,
-			"confidence", confidence,
-			"in_channel", channelMembers != nil && channelMembers[user.ID])
+			"confidence", confidence)
 	}
 
-	return matches, nil
-}
-
-// getChannelMembers retrieves the members of a channel.
-func (s *Service) getChannelMembers(ctx context.Context, channelID string) (map[string]bool, error) {
-	members, _, err := s.slackClient.GetUsersInConversationContext(ctx, &slack.GetUsersInConversationParameters{
-		ChannelID: channelID,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	memberMap := make(map[string]bool, len(members))
-	for _, memberID := range members {
-		memberMap[memberID] = true
-	}
-
-	return memberMap, nil
+	return matches
 }
 
 // calculateConfidence calculates a confidence score for a user match.
-func (s *Service) calculateConfidence(user *slack.User, email string, channelMembers map[string]bool) int {
-	confidence := 50 // Base confidence for email match
-
-	// Boost confidence if user is in the relevant channel
-	if channelMembers != nil && channelMembers[user.ID] {
-		confidence += 30
-	}
+func (*Service) calculateConfidence(user *slack.User, email string) int {
+	confidence := baseConfidence // Base confidence for email match
 
 	// Boost confidence for primary email vs secondary
 	if user.Profile.Email == email {
-		confidence += 20
+		confidence += primaryEmailBonus
 	}
 
 	// Reduce confidence for generic/shared emails
 	if isGenericEmail(email) {
-		confidence -= 20
+		confidence -= genericEmailPenalty
 	}
 
 	// Ensure confidence is within bounds
@@ -391,23 +399,14 @@ func (s *Service) calculateConfidence(user *slack.User, email string, channelMem
 }
 
 // selectBestMatch selects the best match from multiple candidates.
-func (s *Service) selectBestMatch(matches []*UserMapping, channelID string) *UserMapping {
+func (*Service) selectBestMatch(matches []*UserMapping) *UserMapping {
 	if len(matches) == 0 {
 		return nil
 	}
 
 	best := matches[0]
 	for _, match := range matches[1:] {
-		// Prefer channel members
-		if match.ChannelContext == channelID && best.ChannelContext != channelID {
-			best = match
-			continue
-		}
-		if best.ChannelContext == channelID && match.ChannelContext != channelID {
-			continue
-		}
-
-		// Among equal channel membership, prefer higher confidence
+		// Prefer higher confidence
 		if match.Confidence > best.Confidence {
 			best = match
 		}

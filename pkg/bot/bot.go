@@ -894,8 +894,11 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 	// Get prefix for this org.
 	prefix := c.configManager.Prefix(owner)
 
+	// Get domain for user mapping
+	domain := c.configManager.Domain(owner)
+
 	// Get Slack handle for PR author
-	authorMention := c.userMapper.FormatUserMention(ctx, pr.User.Login, channel)
+	authorMention := c.userMapper.FormatUserMention(ctx, pr.User.Login, owner, domain)
 
 	// Get reviewers for the PR
 	reviewers, err := c.github.PRReviewers(ctx, owner, repo, number)
@@ -919,7 +922,7 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 
 	// Add reviewers if we have any
 	if len(reviewers) > 0 {
-		reviewerMentions := c.userMapper.FormatUserMentions(ctx, reviewers, channel)
+		reviewerMentions := c.userMapper.FormatUserMentions(ctx, reviewers, owner, domain)
 		text += fmt.Sprintf(" — reviewers: %s", reviewerMentions)
 	}
 
