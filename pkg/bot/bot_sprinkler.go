@@ -13,6 +13,11 @@ import (
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
 )
 
+// Constants for URL parsing.
+const (
+	githubURLMinParts = 7
+)
+
 // getMapKeys returns the keys of a map[string]any for logging purposes.
 func getMapKeys(m map[string]any) []string {
 	if m == nil {
@@ -78,33 +83,33 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 				"raw_keys", getMapKeys(event.Raw))
 
 			// Sprinkler only provides metadata - extract PR number from URL
-			prNumber := 0
-			if event.URL != "" {
-				// Parse URL like https://github.com/owner/repo/pull/123
-				parts := strings.Split(event.URL, "/")
-				if len(parts) >= 7 && parts[2] == "github.com" && parts[5] == "pull" {
-					if num, err := strconv.Atoi(parts[6]); err == nil {
-						prNumber = num
-						slog.Debug("extracted PR number from URL",
-							"pr_number", prNumber,
-							"url", event.URL)
-					} else {
-						slog.Error("failed to parse PR number from URL",
-							"url", event.URL,
-							"parse_error", err)
-						return
-					}
-				} else {
-					slog.Error("invalid GitHub URL format from sprinkler",
-						"url", event.URL,
-						"expected_format", "https://github.com/owner/repo/pull/123")
-					return
-				}
-			} else {
+			if event.URL == "" {
 				slog.Error("sprinkler event missing URL - cannot determine PR number",
 					"type", event.Type)
 				return
 			}
+
+			// Parse URL like https://github.com/owner/repo/pull/123
+			parts := strings.Split(event.URL, "/")
+			if len(parts) < githubURLMinParts || parts[2] != "github.com" || parts[5] != "pull" {
+				slog.Error("invalid GitHub URL format from sprinkler",
+					"url", event.URL,
+					"expected_format", "https://github.com/owner/repo/pull/123")
+				return
+			}
+
+			num, err := strconv.Atoi(parts[6])
+			if err != nil {
+				slog.Error("failed to parse PR number from URL",
+					"url", event.URL,
+					"parse_error", err)
+				return
+			}
+
+			prNumber := num
+			slog.Debug("extracted PR number from URL",
+				"pr_number", prNumber,
+				"url", event.URL)
 
 			if prNumber == 0 {
 				slog.Error("invalid PR number extracted from sprinkler URL",
@@ -163,28 +168,28 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 	go func() {
 		if err := sprinklerClient.Start(ctx); err != nil {
 			// Check if it's an authentication error
-			if strings.Contains(err.Error(), "403") || strings.Contains(err.Error(), "401") {
-				slog.Error("authentication failed, refreshing token")
-				if refreshErr := c.github.RefreshToken(ctx); refreshErr != nil {
-					slog.Error("failed to refresh token", "error", refreshErr)
-					errChan <- fmt.Errorf("failed to refresh token: %w", refreshErr)
-					return
-				}
-				// Try once more with fresh token
-				githubToken = c.github.InstallationToken(ctx)
-				clientConfig.Token = githubToken
-				newClient, err := client.New(clientConfig)
-				if err != nil {
-					errChan <- fmt.Errorf("failed to create sprinkler client after token refresh: %w", err)
-					return
-				}
-				sprinklerClient = newClient
-				if err := sprinklerClient.Start(ctx); err != nil {
-					errChan <- fmt.Errorf("failed to start sprinkler client after token refresh: %w", err)
-					return
-				}
-			} else {
+			if !strings.Contains(err.Error(), "403") && !strings.Contains(err.Error(), "401") {
 				errChan <- fmt.Errorf("failed to start sprinkler client: %w", err)
+				return
+			}
+
+			slog.Error("authentication failed, refreshing token")
+			if refreshErr := c.github.RefreshToken(ctx); refreshErr != nil {
+				slog.Error("failed to refresh token", "error", refreshErr)
+				errChan <- fmt.Errorf("failed to refresh token: %w", refreshErr)
+				return
+			}
+			// Try once more with fresh token
+			githubToken = c.github.InstallationToken(ctx)
+			clientConfig.Token = githubToken
+			newClient, err := client.New(clientConfig)
+			if err != nil {
+				errChan <- fmt.Errorf("failed to create sprinkler client after token refresh: %w", err)
+				return
+			}
+			sprinklerClient = newClient
+			if err := sprinklerClient.Start(ctx); err != nil {
+				errChan <- fmt.Errorf("failed to start sprinkler client after token refresh: %w", err)
 				return
 			}
 		}

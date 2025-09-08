@@ -22,9 +22,15 @@ import (
 	"github.com/slack-go/slack/slackevents"
 )
 
+// Constants for input validation.
+const (
+	maxCommandInputLength = 200
+	logFieldChannelID     = "channel_id"
+)
+
 // cacheEntry represents a cached value with expiration.
 type cacheEntry struct {
-	value     interface{}
+	value     any
 	expiresAt time.Time
 }
 
@@ -39,12 +45,12 @@ type apiCache struct {
 // Client wraps the Slack API client with caching.
 type Client struct {
 	api           *slack.Client
-	signingSecret string
 	cache         *apiCache
+	signingSecret string
 }
 
 // set stores a value in the cache with TTL.
-func (c *apiCache) set(key string, value interface{}, ttl time.Duration) {
+func (c *apiCache) set(key string, value any, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries[key] = cacheEntry{
@@ -54,7 +60,7 @@ func (c *apiCache) set(key string, value interface{}, ttl time.Duration) {
 }
 
 // get retrieves a value from the cache if not expired.
-func (c *apiCache) get(key string) (interface{}, bool) {
+func (c *apiCache) get(key string) (any, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, exists := c.entries[key]
@@ -64,13 +70,6 @@ func (c *apiCache) get(key string) (interface{}, bool) {
 	}
 	c.hits++
 	return entry.value, true
-}
-
-// stats returns cache performance statistics.
-func (c *apiCache) stats() (hits, misses int64) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.hits, c.misses
 }
 
 // invalidate removes a specific cache entry (useful for setup scenarios).
@@ -560,12 +559,12 @@ func (c *Client) IsUserActive(ctx context.Context, userID string) bool {
 }
 
 // EventsHandler handles Slack events.
-func (c *Client) EventsHandler(w http.ResponseWriter, r *http.Request) {
+func (c *Client) EventsHandler(writer http.ResponseWriter, r *http.Request) {
 	// Read body for verification.
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		slog.Error("failed to read body", "error", err)
-		w.WriteHeader(http.StatusBadRequest)
+		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
@@ -574,14 +573,14 @@ func (c *Client) EventsHandler(w http.ResponseWriter, r *http.Request) {
 	timestamp := r.Header.Get("X-Slack-Request-Timestamp")
 	if !c.verifySignature(signature, timestamp, body) {
 		slog.Warn("failed to verify signature")
-		w.WriteHeader(http.StatusUnauthorized)
+		writer.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
 	eventsAPIEvent, err := slackevents.ParseEvent(body, slackevents.OptionNoVerifyToken())
 	if err != nil {
 		slog.Warn("failed to parse Slack event", "error", err)
-		w.WriteHeader(http.StatusBadRequest)
+		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
@@ -590,12 +589,12 @@ func (c *Client) EventsHandler(w http.ResponseWriter, r *http.Request) {
 		var challenge slackevents.ChallengeResponse
 		if err := json.Unmarshal(body, &challenge); err != nil {
 			slog.Error("failed to unmarshal challenge", "error", err)
-			w.WriteHeader(http.StatusBadRequest)
+			writer.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		w.Header().Set("Content-Type", "text/plain")
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte(challenge.Challenge)); err != nil {
+		writer.Header().Set("Content-Type", "text/plain")
+		writer.WriteHeader(http.StatusOK)
+		if _, err := writer.Write([]byte(challenge.Challenge)); err != nil {
 			slog.Error("failed to write challenge response", "error", err)
 		}
 		return
@@ -631,28 +630,28 @@ func (c *Client) EventsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.WriteHeader(http.StatusOK)
+	writer.WriteHeader(http.StatusOK)
 }
 
 // InteractionsHandler handles Slack interactive components.
-func (c *Client) InteractionsHandler(w http.ResponseWriter, r *http.Request) {
+func (c *Client) InteractionsHandler(writer http.ResponseWriter, r *http.Request) {
 	// Parse the payload.
 	payload := r.FormValue("payload")
 	if payload == "" {
-		w.WriteHeader(http.StatusBadRequest)
+		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
 	var interaction slack.InteractionCallback
 	if err := json.Unmarshal([]byte(payload), &interaction); err != nil {
 		slog.Error("failed to unmarshal interaction", "error", err)
-		w.WriteHeader(http.StatusBadRequest)
+		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
 	// Verify the request signature.
 	if !c.verifyRequest(r) {
-		w.WriteHeader(http.StatusUnauthorized)
+		writer.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
@@ -669,14 +668,14 @@ func (c *Client) InteractionsHandler(w http.ResponseWriter, r *http.Request) {
 		slog.Debug("unhandled interaction type", "type", interaction.Type)
 	}
 
-	w.WriteHeader(http.StatusOK)
+	writer.WriteHeader(http.StatusOK)
 }
 
 // SlashCommandHandler handles Slack slash commands.
-func (c *Client) SlashCommandHandler(w http.ResponseWriter, r *http.Request) {
+func (c *Client) SlashCommandHandler(writer http.ResponseWriter, r *http.Request) {
 	// Verify the request signature.
 	if !c.verifyRequest(r) {
-		w.WriteHeader(http.StatusUnauthorized)
+		writer.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
@@ -684,7 +683,7 @@ func (c *Client) SlashCommandHandler(w http.ResponseWriter, r *http.Request) {
 	cmd, err := slack.SlashCommandParse(r)
 	if err != nil {
 		slog.Error("failed to parse slash command", "error", err)
-		w.WriteHeader(http.StatusBadRequest)
+		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
@@ -698,9 +697,9 @@ func (c *Client) SlashCommandHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send response.
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(map[string]string{
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(writer).Encode(map[string]string{
 		"text": response,
 	}); err != nil {
 		slog.Error("failed to encode slash command response", "error", err)
@@ -711,7 +710,7 @@ func (c *Client) SlashCommandHandler(w http.ResponseWriter, r *http.Request) {
 func (*Client) handleR2RCommand(cmd *slack.SlashCommand) string {
 	// Sanitize and validate input.
 	text := strings.TrimSpace(cmd.Text)
-	if len(text) > 200 { // Reasonable limit for command input.
+	if len(text) > maxCommandInputLength { // Reasonable limit for command input.
 		return "Command too long. Please use shorter commands."
 	}
 
@@ -832,7 +831,9 @@ func (c *Client) SearchMessages(ctx context.Context, query string, params *slack
 }
 
 // GetChannelHistory retrieves channel message history with optional time filtering.
-func (c *Client) GetChannelHistory(ctx context.Context, channelID string, oldest, latest string, limit int) (*slack.GetConversationHistoryResponse, error) {
+func (c *Client) GetChannelHistory(
+	ctx context.Context, channelID string, oldest, latest string, limit int,
+) (*slack.GetConversationHistoryResponse, error) {
 	params := &slack.GetConversationHistoryParameters{
 		ChannelID: channelID,
 		Limit:     limit,
@@ -1000,14 +1001,14 @@ func (c *Client) IsBotInChannel(ctx context.Context, channelID string) bool {
 		c.cache.invalidate(cacheKey)
 	}
 
-	slog.Debug("channel membership not cached, checking via API", "channel_id", channelID)
+	slog.Debug("channel membership not cached, checking via API", logFieldChannelID, channelID)
 
 	// Get bot user info first (this is now cached)
 	authTest, err := c.GetBotInfo(ctx)
 	if err != nil {
 		slog.Error("failed to get bot user info for channel membership check",
 			"error", err,
-			"channel_id", channelID)
+			logFieldChannelID, channelID)
 		return false
 	}
 
@@ -1037,14 +1038,14 @@ func (c *Client) IsBotInChannel(ctx context.Context, channelID string) bool {
 			// Cache negative result for SHORT time (user likely to fix quickly)
 			c.cache.set(cacheKey, false, 15*time.Second)
 			slog.Info("caching bot not in channel briefly to allow quick retry after invite",
-				"channel_id", channelID, "cache_ttl", "15s")
+				logFieldChannelID, channelID, "cache_ttl", "15s")
 			return false
 		}
 		slog.Warn("failed to get channel members - unknown error",
 			"error", err,
 			"error_type", fmt.Sprintf("%T", err),
 			"error_string", err.Error(),
-			"channel_id", channelID)
+			logFieldChannelID, channelID)
 		return false
 	}
 
@@ -1066,6 +1067,6 @@ func (c *Client) IsBotInChannel(ctx context.Context, channelID string) bool {
 	// Cache negative result for SHORT time (user likely to fix this quickly)
 	c.cache.set(cacheKey, false, 20*time.Second)
 	slog.Info("caching bot membership failure briefly to allow quick retry after user fixes issue",
-		"channel_id", channelID, "cache_ttl", "20s")
+		logFieldChannelID, channelID, "cache_ttl", "20s")
 	return false
 }

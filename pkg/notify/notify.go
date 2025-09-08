@@ -35,7 +35,7 @@ func New(slackClient *slack.Client, stateManager *state.Manager, configManager i
 }
 
 // Run starts the notification scheduler.
-func (m *Manager) Run(ctx context.Context) error {
+func (*Manager) Run(ctx context.Context) error {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
