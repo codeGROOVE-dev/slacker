@@ -204,6 +204,9 @@ func runBotCoordinators(
 				continue
 			}
 
+			// Set GitHub client in config manager for this org
+			configManager.SetGitHubClient(org, githubClient.Client())
+
 			// Load config to check if Slack is configured
 			if err := configManager.LoadConfig(ctx, org); err != nil {
 				slog.Warn("failed to load config for org", "org", org, "error", err)
