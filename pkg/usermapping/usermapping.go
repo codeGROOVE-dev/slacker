@@ -17,7 +17,7 @@ const (
 	cacheTTL             = 24 * time.Hour // Cache mappings for 24 hours
 	maxConcurrentLookups = 5              // Limit concurrent email lookups
 
-	// Confidence scoring constants
+	// Confidence scoring constants.
 	baseConfidence      = 50 // Base confidence for email match
 	channelMemberBonus  = 30 // Bonus for users in the target channel
 	primaryEmailBonus   = 20 // Bonus for primary email match

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -61,7 +62,6 @@ func main() {
 		"data_dir", cfg.DataDir,
 		"sprinkler_url", cfg.SprinklerURL,
 		"github_app_id", cfg.GitHubAppID,
-		"github_installation_id", cfg.GitHubInstallationID,
 		"has_slack_token", cfg.SlackToken != "",
 		"has_slack_signing_secret", cfg.SlackSigningSecret != "",
 		"has_github_private_key", cfg.GitHubPrivateKey != "",
@@ -73,10 +73,10 @@ func main() {
 	// Initialize config manager for repo configs.
 	configManager := config.New(ctx)
 
-	// Initialize GitHub client.
-	githubClient, err := github.New(ctx, cfg.GitHubAppID, cfg.GitHubPrivateKey, cfg.GitHubInstallationID)
+	// Initialize GitHub installation manager.
+	githubManager, err := github.NewManager(ctx, cfg.GitHubAppID, cfg.GitHubPrivateKey)
 	if err != nil {
-		slog.Error("failed to initialize GitHub client", "error", err)
+		slog.Error("failed to initialize GitHub installation manager", "error", err)
 		cancel() // Ensure cleanup happens before exit
 		return   // Let main return naturally instead of os.Exit
 	}
@@ -86,17 +86,6 @@ func main() {
 
 	// Initialize notification manager.
 	notifier := notify.New(slackClient, stateManager, configManager)
-
-	// Initialize bot coordinator.
-	botCoordinator := bot.New(
-		ctx,
-		slackClient,
-		githubClient,
-		stateManager,
-		configManager,
-		notifier,
-		cfg.SprinklerURL,
-	)
 
 	// Setup HTTP routes with security middleware.
 	router := mux.NewRouter()
@@ -142,12 +131,9 @@ func main() {
 		return nil
 	})
 
-	// Start bot coordinator using the sprinkler client library.
+	// Start bot coordinators for each GitHub installation.
 	eg.Go(func() error {
-		slog.Debug("starting bot coordinator goroutine")
-		err := botCoordinator.RunWithSprinklerClient(ctx)
-		slog.Debug("bot coordinator goroutine ended", "error", err)
-		return err
+		return runBotCoordinators(ctx, slackClient, githubManager, stateManager, configManager, notifier, cfg.SprinklerURL)
 	})
 
 	// Start notification scheduler.
@@ -164,6 +150,135 @@ func main() {
 		slog.Error("server error", "error", err)
 	}
 	slog.Info("server stopped")
+}
+
+// runBotCoordinators manages bot coordinators for all GitHub installations.
+// It spawns one coordinator per org and refreshes the list every 15 minutes.
+func runBotCoordinators(
+	ctx context.Context,
+	slackClient *slack.Client,
+	githubManager *github.Manager,
+	stateManager *state.Manager,
+	configManager *config.Manager,
+	notifier *notify.Manager,
+	sprinklerURL string,
+) error {
+	activeCoordinators := make(map[string]context.CancelFunc)
+	var mu sync.Mutex
+
+	// startCoordinators creates coordinators for all orgs that don't already have one,
+	// and stops coordinators for orgs that no longer exist.
+	startCoordinators := func() {
+		mu.Lock()
+		defer mu.Unlock()
+
+		orgs := githubManager.AllOrgs()
+		slog.Info("checking GitHub installations", "total_orgs", len(orgs))
+
+		// Create map of current orgs for quick lookup
+		currentOrgs := make(map[string]bool)
+		for _, org := range orgs {
+			currentOrgs[org] = true
+		}
+
+		// Stop coordinators for orgs that no longer exist
+		for org, cancel := range activeCoordinators {
+			if !currentOrgs[org] {
+				slog.Info("stopping coordinator for removed org", "org", org)
+				cancel()
+				delete(activeCoordinators, org)
+			}
+		}
+
+		// Start coordinators for new orgs
+		for _, org := range orgs {
+			// Skip if already running
+			if _, exists := activeCoordinators[org]; exists {
+				continue
+			}
+
+			// Get GitHub client for this org
+			githubClient, exists := githubManager.ClientForOrg(org)
+			if !exists {
+				slog.Warn("no GitHub client for org", "org", org)
+				continue
+			}
+
+			// Load config to check if Slack is configured
+			if err := configManager.LoadConfig(ctx, org); err != nil {
+				slog.Warn("failed to load config for org", "org", org, "error", err)
+				continue
+			}
+
+			cfg, exists := configManager.Config(org)
+			if !exists || cfg.Global.Slack == "" {
+				slog.Debug("skipping org without Slack configuration", "org", org)
+				continue
+			}
+
+			// Create coordinator for this org
+			coordinator := bot.New(
+				ctx,
+				slackClient,
+				githubClient,
+				stateManager,
+				configManager,
+				notifier,
+				sprinklerURL,
+			)
+
+			// Start coordinator in goroutine
+			orgCtx, cancel := context.WithCancel(ctx)
+			activeCoordinators[org] = cancel
+
+			go func(org string, coord *bot.Coordinator) {
+				slog.Info("starting coordinator for org",
+					"org", org,
+					"workspace", cfg.Global.Slack,
+					"sprinkler_url", sprinklerURL)
+				if err := coord.RunWithSprinklerClient(orgCtx); err != nil && !errors.Is(err, context.Canceled) {
+					slog.Error("coordinator error", "org", org, "error", err)
+				}
+				slog.Info("coordinator stopped", "org", org)
+
+				// Clean up when coordinator exits
+				mu.Lock()
+				delete(activeCoordinators, org)
+				mu.Unlock()
+			}(org, coordinator)
+		}
+	}
+
+	// Start initial coordinators
+	startCoordinators()
+
+	// Refresh installations every 5 minutes
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("stopping all coordinators")
+			mu.Lock()
+			for org, cancel := range activeCoordinators {
+				slog.Info("stopping coordinator", "org", org)
+				cancel()
+			}
+			mu.Unlock()
+			return ctx.Err()
+		case <-ticker.C:
+			slog.Info("refreshing GitHub installations",
+				"active_coordinators", len(activeCoordinators))
+			if err := githubManager.RefreshInstallations(ctx); err != nil {
+				slog.Error("failed to refresh installations", "error", err)
+				continue
+			}
+			startCoordinators()
+			slog.Info("refresh complete",
+				"active_coordinators", len(activeCoordinators))
+		}
+	}
 }
 
 func loadConfig() (*config.ServerConfig, error) {
@@ -308,21 +423,19 @@ func loadConfig() (*config.ServerConfig, error) {
 	slog.Info("loading configuration values")
 
 	cfg := &config.ServerConfig{
-		DataDir:              dataDir,
-		SlackToken:           getSecretValue("SLACK_BOT_TOKEN"),
-		SlackSigningSecret:   getSecretValue("SLACK_SIGNING_SECRET"),
-		GitHubAppID:          os.Getenv("GITHUB_APP_ID"), // Not a secret, just config
-		GitHubPrivateKey:     githubPrivateKey,
-		GitHubInstallationID: os.Getenv("GITHUB_INSTALLATION_ID"), // Not a secret, just config
-		SprinklerURL:         sprinklerURL,
+		DataDir:            dataDir,
+		SlackToken:         getSecretValue("SLACK_BOT_TOKEN"),
+		SlackSigningSecret: getSecretValue("SLACK_SIGNING_SECRET"),
+		GitHubAppID:        os.Getenv("GITHUB_APP_ID"), // Not a secret, just config
+		GitHubPrivateKey:   githubPrivateKey,
+		SprinklerURL:       sprinklerURL,
 	}
 
 	slog.Info("configuration loaded",
 		"has_slack_token", cfg.SlackToken != "",
 		"has_slack_signing_secret", cfg.SlackSigningSecret != "",
 		"has_github_app_id", cfg.GitHubAppID != "",
-		"has_github_private_key", cfg.GitHubPrivateKey != "",
-		"has_github_installation_id", cfg.GitHubInstallationID != "")
+		"has_github_private_key", cfg.GitHubPrivateKey != "")
 
 	// Validate required fields
 	if cfg.SlackToken == "" {
@@ -336,9 +449,6 @@ func loadConfig() (*config.ServerConfig, error) {
 	}
 	if cfg.GitHubPrivateKey == "" {
 		return nil, errors.New("missing required configuration: GITHUB_PRIVATE_KEY (env var, file, or secret)")
-	}
-	if cfg.GitHubInstallationID == "" {
-		return nil, errors.New("missing required environment variable: GITHUB_INSTALLATION_ID")
 	}
 
 	return cfg, nil
