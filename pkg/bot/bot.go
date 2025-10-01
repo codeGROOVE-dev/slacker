@@ -18,7 +18,6 @@ import (
 	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
-	"github.com/slack-go/slack"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -162,7 +161,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 	User    struct {
 		Login string `json:"login"`
 	} `json:"user"`
-},
+}, checkResult *turn.CheckResponse,
 ) (string, bool, error) {
 	prKey := fmt.Sprintf("%s/%s#%d", owner, repo, prNumber)
 
@@ -208,7 +207,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 		logFieldChannel, channelID,
 		"pr_state", prState)
 
-	newThreadTS, err := c.createPRThread(ctx, channelID, owner, repo, prNumber, pullRequest)
+	newThreadTS, err := c.createPRThread(ctx, channelID, owner, repo, prNumber, pullRequest, checkResult)
 	if err != nil {
 		return "", false, fmt.Errorf("failed to create PR thread: %w", err)
 	}
@@ -469,7 +468,7 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 	c.stateManager.SetPRState(workspaceID, prStateObj)
 
 	// Process channels in parallel for better performance
-	c.processChannelsInParallel(ctx, owner, repo, prNumber, prState, event, channels, workspaceID)
+	c.processChannelsInParallel(ctx, owner, repo, prNumber, prState, event, channels, workspaceID, checkResult)
 
 	// Handle user notifications (same as before)
 	if len(blockedOn) > 0 {
@@ -493,61 +492,56 @@ func (*Coordinator) extractStateFromTurnclient(checkResult *turn.CheckResponse) 
 	// Use turnclient's state analysis instead of making GitHub API calls
 	// This maps turnclient states to our emoji reactions
 
-	slog.Debug("extracting state from turnclient data",
-		"pr_state", checkResult.PRState.State,
-		"draft", checkResult.PRState.Draft,
-		"ready_to_merge", checkResult.PRState.ReadyToMerge,
-		"approved", checkResult.PRState.Approved,
-		"checks_failing", checkResult.PRState.Checks.Failing,
-		"checks_pending", checkResult.PRState.Checks.Pending,
-		"checks_waiting", checkResult.PRState.Checks.Waiting,
-		"checks_passing", checkResult.PRState.Checks.Passing,
-		"unresolved_comments", checkResult.PRState.UnresolvedComments,
-		"tags", checkResult.PRState.Tags,
-		"current_state", checkResult.PRState.CurrentState)
+	pr := checkResult.PullRequest
+	analysis := checkResult.Analysis
 
-	if checkResult.PRState.State == "closed" {
-		// For closed PRs, check if it has a "merged" tag or any other indicator
-		// Since turnclient doesn't have a direct "merged" field, we need to check the tags
-		for _, tag := range checkResult.PRState.Tags {
-			if tag == "merged" {
-				slog.Debug("PR detected as merged via tags", "tags", checkResult.PRState.Tags)
-				return "merged"
-			}
-		}
+	slog.Info("extracting state from turnclient data",
+		"pr_state", pr.State,
+		"merged", pr.Merged,
+		"merged_at", pr.MergedAt,
+		"draft", pr.Draft,
+		"ready_to_merge", analysis.ReadyToMerge,
+		"approved", analysis.Approved,
+		"checks_failing", analysis.Checks.Failing,
+		"checks_pending", analysis.Checks.Pending,
+		"checks_waiting", analysis.Checks.Waiting,
+		"checks_passing", analysis.Checks.Passing,
+		"unresolved_comments", analysis.UnresolvedComments,
+		"tags", analysis.Tags)
 
-		// If no merged tag but ReadyToMerge was true, it's likely merged
-		// This is a heuristic that may need refinement
-		if checkResult.PRState.ReadyToMerge {
-			slog.Debug("PR detected as merged via ready_to_merge=true", "ready_to_merge", checkResult.PRState.ReadyToMerge)
-			return "merged"
-		}
+	// Check if PR is merged (most direct way)
+	if pr.Merged {
+		slog.Info("PR detected as merged", "merged_at", pr.MergedAt)
+		return "merged"
+	}
 
-		slog.Debug("PR detected as closed but not merged", "state", "face_palm")
+	// Check if PR is closed but not merged
+	if pr.State == "closed" {
+		slog.Info("PR detected as closed but not merged", "state", "face_palm")
 		return "face_palm"
 	}
 
-	if checkResult.PRState.Draft {
+	if pr.Draft {
 		slog.Debug("PR detected as draft", "state", "test_tube")
 		return "test_tube" // Draft PRs
 	}
 
-	if checkResult.PRState.Checks.Failing > 0 {
-		slog.Debug("PR has failing checks", "state", "broken_heart", "failing_count", checkResult.PRState.Checks.Failing)
+	if analysis.Checks.Failing > 0 {
+		slog.Debug("PR has failing checks", "state", "broken_heart", "failing_count", analysis.Checks.Failing)
 		return "broken_heart" // Tests failing
 	}
 
-	if checkResult.PRState.Checks.Pending > 0 || checkResult.PRState.Checks.Waiting > 0 {
+	if analysis.Checks.Pending > 0 || analysis.Checks.Waiting > 0 {
 		slog.Debug("PR has pending/waiting checks", "state", "test_tube",
-			"pending_count", checkResult.PRState.Checks.Pending,
-			"waiting_count", checkResult.PRState.Checks.Waiting)
+			"pending_count", analysis.Checks.Pending,
+			"waiting_count", analysis.Checks.Waiting)
 		return "test_tube" // Tests running
 	}
 
-	if checkResult.PRState.Approved {
-		if checkResult.PRState.UnresolvedComments > 0 {
+	if analysis.Approved {
+		if analysis.UnresolvedComments > 0 {
 			slog.Debug("PR approved but has unresolved comments", "state", "carpentry_saw",
-				"unresolved_comments", checkResult.PRState.UnresolvedComments)
+				"unresolved_comments", analysis.UnresolvedComments)
 			return "carpentry_saw" // Approved but has unresolved comments
 		}
 		slog.Debug("PR approved and ready", "state", "check")
@@ -561,10 +555,18 @@ func (*Coordinator) extractStateFromTurnclient(checkResult *turn.CheckResponse) 
 // extractBlockedUsersFromTurnclient extracts blocked users from turnclient response.
 func (*Coordinator) extractBlockedUsersFromTurnclient(checkResult *turn.CheckResponse) []string {
 	var blockedUsers []string
-	for user := range checkResult.PRState.UnblockAction {
+	for user := range checkResult.Analysis.NextAction {
 		blockedUsers = append(blockedUsers, user)
 	}
 	return blockedUsers
+}
+
+// extractReviewersFromTurnclient extracts requested reviewers from turnclient response.
+func (*Coordinator) extractReviewersFromTurnclient(checkResult *turn.CheckResponse) []string {
+	if checkResult == nil {
+		return nil
+	}
+	return checkResult.PullRequest.RequestedReviewers
 }
 
 // processChannelsInParallel processes multiple channels concurrently for better performance.
@@ -579,7 +581,7 @@ func (c *Coordinator) processChannelsInParallel(ctx context.Context, owner, repo
 			Login string `json:"login"`
 		} `json:"user"`
 	} `json:"pull_request"`
-}, channels []string, workspaceID string,
+}, channels []string, workspaceID string, checkResult *turn.CheckResponse,
 ) {
 	slog.Info("processing PR for all configured channels",
 		"workspace", c.workspaceName,
@@ -622,8 +624,9 @@ func (c *Coordinator) processChannelsInParallel(ctx context.Context, owner, repo
 
 	for _, channelName := range validChannels {
 		// Capture loop variable
+		channelName := channelName
 		g.Go(func() error {
-			c.processPRForChannel(gCtx, owner, repo, prNumber, prState, event, channelName, workspaceID)
+			c.processPRForChannel(gCtx, owner, repo, prNumber, prState, event, channelName, workspaceID, checkResult)
 			return nil // Don't fail the entire group if one channel fails
 		})
 	}
@@ -646,7 +649,7 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 			Login string `json:"login"`
 		} `json:"user"`
 	} `json:"pull_request"`
-}, channelName, workspaceID string,
+}, channelName, workspaceID string, checkResult *turn.CheckResponse,
 ) {
 	// Resolve channel name to ID for API calls and get display info
 	channelID, channelDisplay := c.getChannelDisplayInfo(ctx, channelName)
@@ -682,7 +685,7 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 		User:    event.PullRequest.User,
 		HTMLURL: event.PullRequest.HTMLURL,
 	}
-	threadTS, wasNewlyCreated, err := c.findOrCreatePRThread(ctx, channelID, owner, repo, prNumber, prState, pullRequestStruct)
+	threadTS, wasNewlyCreated, err := c.findOrCreatePRThread(ctx, channelID, owner, repo, prNumber, prState, pullRequestStruct, checkResult)
 	if err != nil {
 		slog.Error("failed to find or create PR thread",
 			"workspace", c.workspaceName,
@@ -701,81 +704,17 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 		pr.ChannelID = channelID
 	}
 
-	// Check if we need to update the thread title (for existing threads only)
+	// Update thread title for existing threads (simplified for now)
 	if !wasNewlyCreated {
-		// Generate the expected thread title
-		expectedTitle, err := c.formatThreadTitle(ctx, owner, repo, prNumber, pullRequestStruct)
-		if err != nil {
-			slog.Warn("failed to format expected thread title, skipping title update",
-				"workspace", c.workspaceName,
-				logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-				"channel", channelDisplay,
-				"thread_ts", threadTS,
-				"error", err)
-		} else {
-			// Get the current message to compare
-			historyParams := &slack.GetConversationHistoryParameters{
-				ChannelID: channelID,
-				Latest:    threadTS,
-				Inclusive: true,
-				Limit:     1,
-			}
-
-			history, err := c.slack.API().GetConversationHistoryContext(ctx, historyParams)
-			if err != nil {
-				slog.Warn("failed to get current thread message for title comparison",
-					"workspace", c.workspaceName,
-					logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-					"channel", channelDisplay,
-					"thread_ts", threadTS,
-					"error", err)
-			} else if len(history.Messages) > 0 {
-				currentTitle := history.Messages[0].Text
-
-				// Update title if it's different
-				if currentTitle != expectedTitle {
-					slog.Info("updating thread title",
-						"workspace", c.workspaceName,
-						logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-						"channel", channelDisplay,
-						"thread_ts", threadTS,
-						"current_title_preview", func() string {
-							if len(currentTitle) > 100 {
-								return currentTitle[:100] + "..."
-							}
-							return currentTitle
-						}(),
-						"new_title_preview", func() string {
-							if len(expectedTitle) > 100 {
-								return expectedTitle[:100] + "..."
-							}
-							return expectedTitle
-						}())
-
-					if err := c.slack.UpdateMessage(ctx, channelID, threadTS, expectedTitle); err != nil {
-						slog.Error("failed to update thread title",
-							"workspace", c.workspaceName,
-							logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-							"channel", channelDisplay,
-							"thread_ts", threadTS,
-							"error", err)
-					} else {
-						slog.Debug("successfully updated thread title",
-							"workspace", c.workspaceName,
-							logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-							"channel", channelDisplay,
-							"thread_ts", threadTS)
-					}
-				} else {
-					slog.Debug("thread title unchanged, no update needed",
-						"workspace", c.workspaceName,
-						logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-						"channel", channelDisplay,
-						"thread_ts", threadTS)
-				}
-			}
-		}
+		slog.Debug("thread title update skipped for simplification",
+			"workspace", c.workspaceName,
+			logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+			"channel", channelDisplay,
+			"thread_ts", threadTS)
 	}
+
+	// Track that we notified users in this channel for DM delay logic
+	c.stateManager.UpdateChannelNotification(workspaceID, owner, repo, prNumber)
 
 	// Update reactions only if state changed
 	if oldState != "" && oldState != prState {
@@ -813,14 +752,9 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 			"workspace", c.workspaceName,
 			logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
 			"channel", channelDisplay,
-			"channel_id", channelID,
-			"state", prState)
+			"thread_ts", threadTS,
+			"current_state", prState)
 	}
-
-	// State changes are communicated via emoji reactions only
-
-	// Track that we notified users in this channel for DM delay logic
-	c.stateManager.UpdateChannelNotification(workspaceID, owner, repo, prNumber)
 
 	slog.Info("successfully processed PR in channel",
 		"workspace", c.workspaceName,
@@ -854,7 +788,7 @@ func (c *Coordinator) handlePullRequestFromSprinkler(
 	}
 
 	// Create and authenticate turnclient
-	turnClient, err := turn.NewClient("https://turn.ready-to-review.dev") // TODO: make configurable
+	turnClient, err := turn.NewDefaultClient()
 	if err != nil {
 		slog.Error("failed to create turnclient",
 			logFieldOwner, owner,
@@ -893,22 +827,13 @@ func (c *Coordinator) handlePullRequestFromSprinkler(
 		logFieldOwner, owner,
 		logFieldRepo, repo,
 		"pr_number", prNumber,
-		"pr_size", checkResult.PRState.Size,
-		"unresolved_comments", checkResult.PRState.UnresolvedComments,
-		"checks_state", fmt.Sprintf("%+v", checkResult.PRState.Checks),
-		"last_activity", checkResult.PRState.LastActivity)
+		"pr_size", checkResult.Analysis.Size,
+		"unresolved_comments", checkResult.Analysis.UnresolvedComments,
+		"checks_state", fmt.Sprintf("%+v", checkResult.Analysis.Checks),
+		"last_activity", checkResult.Analysis.LastActivity)
 
-	// Fetch actual PR details from GitHub to get title and author
-	// TODO: Once turnclient provides PR title and author, we can use that instead of this GitHub API call
-	pr, err := c.github.PR(ctx, owner, repo, prNumber)
-	if err != nil {
-		slog.Error("failed to fetch PR details from GitHub",
-			logFieldOwner, owner,
-			logFieldRepo, repo,
-			"pr_number", prNumber,
-			"error", err)
-		return
-	}
+	// Use PR details from turnclient instead of making additional GitHub API call
+	pr := checkResult.PullRequest
 
 	// Create a synthetic webhook event to reuse existing logic with real PR data
 	event := struct {
@@ -934,18 +859,18 @@ func (c *Coordinator) handlePullRequestFromSprinkler(
 			} `json:"user"`
 		}{
 			Number:  prNumber,
-			Title:   pr.GetTitle(),
-			HTMLURL: pr.GetHTMLURL(),
+			Title:   pr.Title,
+			HTMLURL: prURL,
 			User: struct {
 				Login string `json:"login"`
 			}{
-				Login: pr.GetUser().GetLogin(),
+				Login: pr.Author,
 			},
 		},
 	}
 
 	// Call optimized handler with pre-fetched data to avoid redundant API calls
-	c.handlePullRequestEventWithData(ctx, owner, repo, event, checkResult, pr)
+	c.handlePullRequestEventWithData(ctx, owner, repo, event, checkResult, nil)
 }
 
 // handlePullRequestReviewFromSprinkler handles PR review events from sprinkler.
@@ -967,12 +892,32 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 	User    struct {
 		Login string `json:"login"`
 	} `json:"user"`
-},
+}, checkResult *turn.CheckResponse,
 ) (string, error) {
-	// Format the thread title consistently
-	text, err := c.formatThreadTitle(ctx, owner, repo, number, pr)
-	if err != nil {
-		return "", fmt.Errorf("failed to format thread title: %w", err)
+	// Get prefix for this org and domain for user mapping
+	prefix := c.configManager.Prefix(owner)
+	domain := c.configManager.Domain(owner)
+
+	// Get Slack handle for PR author
+	authorMention := c.userMapper.FormatUserMention(ctx, pr.User.Login, owner, domain)
+
+	// Get reviewers from turnclient data
+	reviewers := c.extractReviewersFromTurnclient(checkResult)
+
+	// Format message with author and reviewers
+	text := fmt.Sprintf("%s %s • <%s|%s#%d> by %s",
+		prefix,
+		pr.Title,
+		pr.HTMLURL,
+		repo,
+		number,
+		authorMention,
+	)
+
+	// Add reviewers if we have any
+	if len(reviewers) > 0 {
+		reviewerMentions := c.userMapper.FormatUserMentions(ctx, reviewers, owner, domain)
+		text += fmt.Sprintf(" — reviewers: %s", reviewerMentions)
 	}
 
 	// Resolve channel name to ID for consistent API calls
@@ -989,18 +934,13 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 		return "", fmt.Errorf("failed to post thread: %w", err)
 	}
 
-	// Add initial reaction based on state.
-	prState, _, err := c.github.PRState(ctx, owner, repo, number)
-	if err == nil {
-		slog.Debug("adding initial reaction for new thread",
-			logFieldPR, fmt.Sprintf(prFormatString, owner, repo, number),
-			logFieldChannel, resolvedChannel,
-			"thread_ts", threadTS,
-			"pr_state", prState)
-		if err := c.slack.UpdateReactions(ctx, resolvedChannel, threadTS, prState); err != nil {
-			slog.Warn("failed to add initial reaction", "error", err, "channel", resolvedChannel, "thread_ts", threadTS, "pr_state", prState)
-		}
-	}
+	// Add initial reaction based on state from turnclient if available
+	// For createPRThread, we may not have turnclient data available, so this is optional
+	// The reaction will be set properly when the PR is processed through the main flow
+	slog.Debug("thread created, reaction will be set by main processing flow",
+		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, number),
+		logFieldChannel, resolvedChannel,
+		"thread_ts", threadTS)
 
 	return threadTS, nil
 }
@@ -1013,7 +953,7 @@ func (c *Coordinator) formatThreadTitle(ctx context.Context, owner, repo string,
 	User    struct {
 		Login string `json:"login"`
 	} `json:"user"`
-}) (string, error) {
+}, checkResult *turn.CheckResponse) (string, error) {
 	// Get prefix for this org.
 	prefix := c.configManager.Prefix(owner)
 
@@ -1023,15 +963,8 @@ func (c *Coordinator) formatThreadTitle(ctx context.Context, owner, repo string,
 	// Get Slack handle for PR author
 	authorMention := c.userMapper.FormatUserMention(ctx, pr.User.Login, owner, domain)
 
-	// Get reviewers for the PR
-	reviewers, err := c.github.PRReviewers(ctx, owner, repo, number)
-	if err != nil {
-		slog.Warn("failed to get PR reviewers for thread title, continuing without reviewer mentions",
-			"owner", owner,
-			"repo", repo,
-			"pr_number", number,
-			"error", err)
-	}
+	// Get reviewers from turnclient data
+	reviewers := c.extractReviewersFromTurnclient(checkResult)
 
 	// Format message with author and reviewers
 	text := fmt.Sprintf("%s %s • <%s|%s#%d> by %s",

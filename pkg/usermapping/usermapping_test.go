@@ -139,7 +139,7 @@ func TestService_GetSlackHandle_FallbackToGitHub(t *testing.T) {
 	// Mock the Guess method in case it gets called
 	emptyGuessResult := &ghmailto.GuessResult{
 		Username:       githubUser,
-		Guesses:        []string{},
+		Guesses:        []ghmailto.Address{},
 		FoundAddresses: []ghmailto.Address{},
 	}
 	mockGitHub.On("Guess", mock.Anything, githubUser, organization, mock.Anything).Return(emptyGuessResult, nil)
@@ -205,7 +205,7 @@ func TestService_FormatUserMention_NoMapping(t *testing.T) {
 	// Mock the Guess method that will be called when no emails are found but domain is specified
 	guessResult := &ghmailto.GuessResult{
 		Username:       "unknownuser",
-		Guesses:        []string{}, // No guesses either
+		Guesses:        []ghmailto.Address{}, // No guesses either
 		FoundAddresses: []ghmailto.Address{},
 	}
 	mockGitHub.On("Guess", mock.Anything, "unknownuser", organization, ghmailto.GuessOptions{Domain: domain}).Return(guessResult, nil)
@@ -257,7 +257,7 @@ func TestService_FormatUserMentions_Mixed(t *testing.T) {
 	// Mock the Guess method in case it gets called
 	emptyGuessResult := &ghmailto.GuessResult{
 		Username:       "user3",
-		Guesses:        []string{},
+		Guesses:        []ghmailto.Address{},
 		FoundAddresses: []ghmailto.Address{},
 	}
 	mockGitHub.On("Guess", mock.Anything, "user3", organization, mock.Anything).Return(emptyGuessResult, nil)
