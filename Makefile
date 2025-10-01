@@ -1,4 +1,4 @@
-.PHONY: all build test clean fmt vet run-server
+.PHONY: all build test clean fmt vet run-server deploy
 
 # Default target
 all: fmt vet lint test build
@@ -28,6 +28,10 @@ clean:
 # Run the server
 run-server: build
 	./bin/slacker
+
+# Deploy the server
+deploy:
+	./hacks/deploy.sh cmd/server/
 
 # BEGIN: lint-install .
 # http://github.com/codeGROOVE-dev/lint-install

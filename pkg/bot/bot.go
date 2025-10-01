@@ -111,8 +111,9 @@ func New(
 		threadCache:   NewThreadCache(),
 	}
 
-	// Set GitHub client in config manager.
-	configManager.SetGitHubClient(githubClient.Client())
+	// Set GitHub client in config manager for this org.
+	org := githubClient.Organization()
+	configManager.SetGitHubClient(org, githubClient.Client())
 
 	// Get workspace info and set in config manager for validation.
 	if teamInfo, err := slackClient.GetWorkspaceInfo(ctx); err == nil {

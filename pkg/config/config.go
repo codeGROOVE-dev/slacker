@@ -4,6 +4,7 @@ package config
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -127,7 +128,7 @@ func (c *configCache) stats() (hits, misses int64) {
 // Manager manages repository configurations.
 type Manager struct {
 	configs       map[string]*RepoConfig
-	client        *github.Client
+	clients       map[string]*github.Client // org -> client
 	cache         *configCache
 	workspaceName string
 	mu            sync.RWMutex
@@ -137,6 +138,7 @@ type Manager struct {
 func New(ctx context.Context) *Manager {
 	return &Manager{
 		configs: make(map[string]*RepoConfig),
+		clients: make(map[string]*github.Client),
 		cache:   newConfigCache(20 * time.Minute), // 20-minute TTL as requested
 	}
 }
@@ -148,11 +150,11 @@ func (m *Manager) SetWorkspaceName(workspaceName string) {
 	m.workspaceName = workspaceName
 }
 
-// SetGitHubClient sets the GitHub client for fetching configs.
-func (m *Manager) SetGitHubClient(client *github.Client) {
+// SetGitHubClient sets the GitHub client for a specific org.
+func (m *Manager) SetGitHubClient(org string, client *github.Client) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.client = client
+	m.clients[org] = client
 }
 
 // LoadConfig loads the configuration for a GitHub org with retry logic.
@@ -182,8 +184,9 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.client == nil {
-		return errors.New("github client not initialized")
+	client := m.clients[org]
+	if client == nil {
+		return fmt.Errorf("github client not initialized for org: %s", org)
 	}
 
 	var content *github.RepositoryContent
@@ -199,7 +202,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 	err := retry.Do(
 		func() error {
 			var err error
-			content, _, _, err = m.client.Repositories.GetContents(
+			content, _, _, err = client.Repositories.GetContents(
 				ctx,
 				org,
 				".codeGROOVE",
