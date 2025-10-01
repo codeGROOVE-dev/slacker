@@ -788,7 +788,7 @@ func (c *Coordinator) handlePullRequestFromSprinkler(
 	}
 
 	// Create and authenticate turnclient
-	turnClient, err := turn.NewClient("https://turn.ready-to-review.dev") // TODO: make configurable
+	turnClient, err := turn.NewDefaultClient()
 	if err != nil {
 		slog.Error("failed to create turnclient",
 			logFieldOwner, owner,

@@ -131,8 +131,7 @@ func (s *Service) GetSlackHandle(ctx context.Context, githubUsername, organizati
 		// Try normalized emails within the target domain
 		if len(result.Addresses) > 0 {
 			normalizedResult := result.FilterAndNormalize(ghmailto.FilterOptions{
-				Domain:    domain,
-				Normalize: true,
+				Domain: domain,
 			})
 
 			if len(normalizedResult.Addresses) > 0 {
@@ -173,12 +172,17 @@ func (s *Service) GetSlackHandle(ctx context.Context, githubUsername, organizati
 				"domain", domain,
 				"error", err)
 		} else if len(guessResult.Guesses) > 0 {
+			guessedEmails := make([]string, len(guessResult.Guesses))
+			for i, addr := range guessResult.Guesses {
+				guessedEmails[i] = addr.Email
+			}
+
 			slog.Debug("generated email guesses",
 				"github_user", githubUsername,
 				"domain", domain,
-				"guesses", guessResult.Guesses)
+				"guesses", guessedEmails)
 
-			matches := s.findSlackMatches(ctx, githubUsername, guessResult.Guesses)
+			matches := s.findSlackMatches(ctx, githubUsername, guessedEmails)
 			if len(matches) > 0 {
 				bestMatch := s.selectBestMatch(matches)
 				slog.Info("successfully mapped GitHub user to Slack via email guessing",

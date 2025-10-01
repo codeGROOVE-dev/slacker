@@ -17,8 +17,10 @@ import (
 	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/slacker/pkg/github"
 	"github.com/codeGROOVE-dev/slacker/pkg/notify"
+	"github.com/codeGROOVE-dev/slacker/pkg/secrets"
 	"github.com/codeGROOVE-dev/slacker/pkg/slack"
 	"github.com/codeGROOVE-dev/slacker/pkg/state"
+	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
 	"github.com/gorilla/mux"
 	"golang.org/x/sync/errgroup"
 )
@@ -165,8 +167,119 @@ func main() {
 }
 
 func loadConfig() (*config.ServerConfig, error) {
-	// Load GitHub private key from environment or file.
-	githubPrivateKey := os.Getenv("GITHUB_PRIVATE_KEY")
+	ctx := context.Background()
+
+	// Check if Google Secret Manager should be used
+	// Try multiple common project ID environment variables
+	var secretsManager *secrets.Manager
+
+	// Log all environment variables that might contain project info (for debugging)
+	slog.Info("checking for project ID in environment",
+		"GCP_PROJECT_ID", os.Getenv("GCP_PROJECT_ID"),
+		"GOOGLE_CLOUD_PROJECT", os.Getenv("GOOGLE_CLOUD_PROJECT"),
+		"GCP_PROJECT", os.Getenv("GCP_PROJECT"),
+		"PROJECT_ID", os.Getenv("PROJECT_ID"),
+		"GCLOUD_PROJECT", os.Getenv("GCLOUD_PROJECT"))
+
+	projectID := os.Getenv("GCP_PROJECT_ID")
+	if projectID == "" {
+		projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
+	}
+	if projectID == "" {
+		projectID = os.Getenv("GCP_PROJECT")
+	}
+	if projectID == "" {
+		projectID = os.Getenv("PROJECT_ID")
+	}
+	if projectID == "" {
+		projectID = os.Getenv("GCLOUD_PROJECT")
+	}
+
+	// Check if we're running on Cloud Run
+	isCloudRun := os.Getenv("K_SERVICE") != "" || os.Getenv("CLOUD_RUN_TIMEOUT_SECONDS") != ""
+
+	slog.Info("Secret Manager configuration",
+		"project_id", projectID,
+		"has_project", projectID != "",
+		"is_cloud_run", isCloudRun,
+		"google_application_credentials", os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"),
+		"k_service", os.Getenv("K_SERVICE"),
+		"cloud_run_timeout", os.Getenv("CLOUD_RUN_TIMEOUT_SECONDS"))
+
+	if isCloudRun && projectID == "" {
+		slog.Warn("Running on Cloud Run but no project ID found. Set GCP_PROJECT_ID environment variable in your Cloud Run service configuration")
+	}
+
+	if projectID != "" {
+		// Initialize secrets manager
+		credentialsPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
+		var err error
+		slog.Info("attempting to initialize Google Secret Manager",
+			"project_id", projectID,
+			"credentials_path", credentialsPath)
+
+		secretsManager, err = secrets.New(ctx, projectID, credentialsPath)
+		if err != nil {
+			slog.Error("failed to initialize Google Secret Manager, falling back to env vars",
+				"project_id", projectID,
+				"credentials_path", credentialsPath,
+				"error", err,
+				"error_detail", fmt.Sprintf("%+v", err))
+			// Continue without secrets manager
+		} else {
+			defer func() {
+				if err := secretsManager.Close(); err != nil {
+					slog.Warn("failed to close secrets manager", "error", err)
+				}
+			}()
+			slog.Info("Google Secret Manager successfully initialized",
+				"project_id", projectID,
+				"has_credentials", credentialsPath != "")
+		}
+	}
+
+	// Helper function to get secret values with Secret Manager fallback
+	getSecretValue := func(envVar string) string {
+		// Environment variable takes precedence
+		if value := os.Getenv(envVar); value != "" {
+			slog.Info("using environment variable",
+				"env_var", envVar,
+				"source", "environment")
+			return value
+		}
+
+		slog.Info("environment variable not found, checking Secret Manager",
+			"env_var", envVar,
+			"secret_manager_available", secretsManager != nil)
+
+		// Try Secret Manager if available (using same name as env var)
+		if secretsManager != nil {
+			slog.Info("attempting to fetch from Secret Manager",
+				"env_var", envVar,
+				"secret_name", envVar)
+
+			value, err := secretsManager.GetWithEnvOverride(ctx, envVar, envVar)
+			if err != nil {
+				slog.Error("failed to fetch secret from Secret Manager",
+					"env_var", envVar,
+					"secret_name", envVar,
+					"error", err,
+					"error_detail", fmt.Sprintf("%+v", err))
+				return ""
+			}
+			slog.Info("successfully fetched secret from Secret Manager",
+				"env_var", envVar,
+				"has_value", value != "")
+			return value
+		}
+
+		slog.Warn("Secret Manager not initialized, cannot fetch secret",
+			"env_var", envVar)
+		return ""
+	}
+
+	// Load GitHub private key from environment, file, or Secret Manager
+	githubPrivateKey := getSecretValue("GITHUB_PRIVATE_KEY")
 	if githubPrivateKey == "" {
 		if keyPath := os.Getenv("GITHUB_PRIVATE_KEY_PATH"); keyPath != "" {
 			keyData, err := os.ReadFile(keyPath)
@@ -177,7 +290,7 @@ func loadConfig() (*config.ServerConfig, error) {
 		}
 	}
 
-	// Set defaults for optional config.
+	// Set defaults for optional config
 	dataDir := os.Getenv("DATA_DIR")
 	if dataDir == "" {
 		configDir, err := os.UserConfigDir()
@@ -189,31 +302,40 @@ func loadConfig() (*config.ServerConfig, error) {
 
 	sprinklerURL := os.Getenv("SPRINKLER_URL")
 	if sprinklerURL == "" {
-		sprinklerURL = "wss://hook.g.robot-army.dev/ws"
+		sprinklerURL = "wss://" + client.DefaultServerAddress + "/ws"
 	}
+
+	slog.Info("loading configuration values")
 
 	cfg := &config.ServerConfig{
 		DataDir:              dataDir,
-		SlackToken:           os.Getenv("SLACK_BOT_TOKEN"),
-		SlackSigningSecret:   os.Getenv("SLACK_SIGNING_SECRET"),
-		GitHubAppID:          os.Getenv("GITHUB_APP_ID"),
+		SlackToken:           getSecretValue("SLACK_BOT_TOKEN"),
+		SlackSigningSecret:   getSecretValue("SLACK_SIGNING_SECRET"),
+		GitHubAppID:          os.Getenv("GITHUB_APP_ID"), // Not a secret, just config
 		GitHubPrivateKey:     githubPrivateKey,
-		GitHubInstallationID: os.Getenv("GITHUB_INSTALLATION_ID"),
+		GitHubInstallationID: os.Getenv("GITHUB_INSTALLATION_ID"), // Not a secret, just config
 		SprinklerURL:         sprinklerURL,
 	}
 
+	slog.Info("configuration loaded",
+		"has_slack_token", cfg.SlackToken != "",
+		"has_slack_signing_secret", cfg.SlackSigningSecret != "",
+		"has_github_app_id", cfg.GitHubAppID != "",
+		"has_github_private_key", cfg.GitHubPrivateKey != "",
+		"has_github_installation_id", cfg.GitHubInstallationID != "")
+
 	// Validate required fields
 	if cfg.SlackToken == "" {
-		return nil, errors.New("missing required environment variable: SLACK_BOT_TOKEN")
+		return nil, errors.New("missing required configuration: SLACK_BOT_TOKEN (env var or secret)")
 	}
 	if cfg.SlackSigningSecret == "" {
-		return nil, errors.New("missing required environment variable: SLACK_SIGNING_SECRET")
+		return nil, errors.New("missing required configuration: SLACK_SIGNING_SECRET (env var or secret)")
 	}
 	if cfg.GitHubAppID == "" {
 		return nil, errors.New("missing required environment variable: GITHUB_APP_ID")
 	}
 	if cfg.GitHubPrivateKey == "" {
-		return nil, errors.New("missing required environment variable: GITHUB_PRIVATE_KEY or GITHUB_PRIVATE_KEY_PATH")
+		return nil, errors.New("missing required configuration: GITHUB_PRIVATE_KEY (env var, file, or secret)")
 	}
 	if cfg.GitHubInstallationID == "" {
 		return nil, errors.New("missing required environment variable: GITHUB_INSTALLATION_ID")
