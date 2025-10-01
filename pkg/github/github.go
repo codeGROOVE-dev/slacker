@@ -162,7 +162,7 @@ func (c *Client) authenticate(ctx context.Context) error {
 		},
 		retry.Attempts(5),
 		retry.Delay(time.Second),
-		retry.MaxDelay(30*time.Second),
+		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
 		retry.LastErrorOnly(true),
@@ -604,4 +604,191 @@ func (c *Client) InstallationToken(ctx context.Context) string {
 	}
 
 	return token
+}
+
+// Manager manages multiple GitHub App installations.
+type Manager struct {
+	appID      string
+	privateKey *rsa.PrivateKey
+	clients    map[string]*Client // org -> client
+	mu         sync.RWMutex
+}
+
+// NewManager creates a new installation manager.
+func NewManager(ctx context.Context, appID, privateKeyPEM string) (*Manager, error) {
+	// Parse the private key.
+	block, _ := pem.Decode([]byte(privateKeyPEM))
+	if block == nil {
+		return nil, errors.New("failed to parse PEM block")
+	}
+
+	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		// Try PKCS8 format.
+		keyInterface, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse private key: %w", err)
+		}
+		var ok bool
+		key, ok = keyInterface.(*rsa.PrivateKey)
+		if !ok {
+			return nil, errors.New("private key is not RSA")
+		}
+	}
+
+	// Validate RSA key strength (minimum 2048 bits).
+	if key.N.BitLen() < minRSAKeyBits {
+		return nil, fmt.Errorf("RSA key too weak: %d bits (minimum %d required)", key.N.BitLen(), minRSAKeyBits)
+	}
+
+	m := &Manager{
+		clients:    make(map[string]*Client),
+		appID:      appID,
+		privateKey: key,
+	}
+
+	// Discover installations at startup.
+	if err := m.RefreshInstallations(ctx); err != nil {
+		return nil, fmt.Errorf("failed to discover installations: %w", err)
+	}
+
+	return m, nil
+}
+
+// RefreshInstallations discovers all installations and creates clients for them.
+func (m *Manager) RefreshInstallations(ctx context.Context) error {
+	slog.Info("discovering GitHub App installations", "app_id", m.appID)
+
+	// Create JWT for app-level authentication.
+	jwtToken, err := m.createJWT()
+	if err != nil {
+		return fmt.Errorf("failed to create JWT: %w", err)
+	}
+
+	// Create app client.
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: jwtToken})
+	tc := oauth2.NewClient(ctx, ts)
+	tc.Transport = &userAgentTransport{base: tc.Transport}
+	appClient := github.NewClient(tc)
+
+	// List all installations with retry.
+	var installations []*github.Installation
+	err = retry.Do(
+		func() error {
+			var resp *github.Response
+			var err error
+			installations, resp, err = appClient.Apps.ListInstallations(ctx, &github.ListOptions{
+				PerPage: 100,
+			})
+			if err != nil {
+				if resp != nil && resp.StatusCode == http.StatusUnauthorized {
+					slog.Error("GitHub App authentication failed",
+						"app_id", m.appID,
+						"hint", "Check that your GitHub App ID and private key are correct")
+					return retry.Unrecoverable(err)
+				}
+				slog.Warn("failed to list installations, retrying",
+					"error", err,
+					"app_id", m.appID)
+				return err
+			}
+			return nil
+		},
+		retry.Attempts(5),
+		retry.Delay(time.Second),
+		retry.MaxDelay(2*time.Minute),
+		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
+		retry.LastErrorOnly(true),
+		retry.Context(ctx),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to list installations after retries: %w", err)
+	}
+
+	slog.Info("discovered GitHub App installations",
+		"app_id", m.appID,
+		"installation_count", len(installations))
+
+	// Create clients for each installation.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	newClients := make(map[string]*Client)
+	for _, inst := range installations {
+		if inst.Account == nil || inst.Account.Login == nil {
+			slog.Warn("installation missing account information",
+				"installation_id", inst.GetID())
+			continue
+		}
+
+		org := inst.Account.GetLogin()
+
+		// Create client for this installation.
+		gc := &Client{
+			appID:          m.appID,
+			privateKey:     m.privateKey,
+			installationID: inst.GetID(),
+		}
+
+		if err := gc.authenticate(ctx); err != nil {
+			slog.Error("failed to authenticate installation",
+				"org", org,
+				"installation_id", inst.GetID(),
+				"error", err)
+			continue
+		}
+
+		newClients[org] = gc
+		slog.Info("created client for installation",
+			"org", org,
+			"installation_id", inst.GetID(),
+			"account_type", inst.Account.GetType())
+	}
+
+	// Replace old clients with new ones.
+	m.clients = newClients
+
+	slog.Info("installation refresh complete",
+		"app_id", m.appID,
+		"active_clients", len(m.clients))
+
+	return nil
+}
+
+// createJWT creates a JWT for GitHub App authentication.
+func (m *Manager) createJWT() (string, error) {
+	now := time.Now()
+	claims := jwt.RegisteredClaims{
+		IssuedAt:  jwt.NewNumericDate(now),
+		ExpiresAt: jwt.NewNumericDate(now.Add(10 * time.Minute)),
+		Issuer:    m.appID,
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	tokenString, err := token.SignedString(m.privateKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to sign JWT: %w", err)
+	}
+
+	return tokenString, nil
+}
+
+// ClientForOrg returns the GitHub client for a specific organization.
+func (m *Manager) ClientForOrg(org string) (*Client, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	client, exists := m.clients[org]
+	return client, exists
+}
+
+// AllOrgs returns a list of all organizations with active installations.
+func (m *Manager) AllOrgs() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	orgs := make([]string, 0, len(m.clients))
+	for org := range m.clients {
+		orgs = append(orgs, org)
+	}
+	return orgs
 }

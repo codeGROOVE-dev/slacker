@@ -77,7 +77,7 @@ func (tc *ThreadCache) Update(prKey string, updateFn func(*ThreadInfo) bool) {
 	}
 }
 
-// Coordinator coordinates between GitHub, Slack, and notifications.
+// Coordinator coordinates between GitHub, Slack, and notifications for a single org.
 type Coordinator struct {
 	slack         *slackpkg.Client
 	github        *github.Client
@@ -90,7 +90,7 @@ type Coordinator struct {
 	workspaceName string // Track workspace name for better logging
 }
 
-// New creates a new bot coordinator.
+// New creates a new bot coordinator for a single GitHub organization.
 func New(
 	ctx context.Context,
 	slackClient *slackpkg.Client,
@@ -623,8 +623,6 @@ func (c *Coordinator) processChannelsInParallel(ctx context.Context, owner, repo
 	g, gCtx := errgroup.WithContext(ctx)
 
 	for _, channelName := range validChannels {
-		// Capture loop variable
-		channelName := channelName
 		g.Go(func() error {
 			c.processPRForChannel(gCtx, owner, repo, prNumber, prState, event, channelName, workspaceID, checkResult)
 			return nil // Don't fail the entire group if one channel fails
@@ -953,7 +951,8 @@ func (c *Coordinator) formatThreadTitle(ctx context.Context, owner, repo string,
 	User    struct {
 		Login string `json:"login"`
 	} `json:"user"`
-}, checkResult *turn.CheckResponse) (string, error) {
+}, checkResult *turn.CheckResponse,
+) (string, error) {
 	// Get prefix for this org.
 	prefix := c.configManager.Prefix(owner)
 
