@@ -10,16 +10,17 @@ Ready to Review is an elegant modern Slack bot written in Go that integrates wit
 
 ### 1. Channel Thread Management
 - Start threads in Slack channels when new PRs are created
-- Add reaction emojis based on PR state:
+- Update message prefix emoji based on PR state:
   - `:test_tube:` - tests running/pending
-  - `:broken_heart:` - tests broken (blocked on author)
+  - `:cockroach:` - tests broken (blocked on author)
   - `:hourglass:` - waiting on review
   - `:carpentry_saw:` - approved but needs work (blocked on author)
-  - `:check:` - reviewed & approved (blocked on author)
+  - `:white_check_mark:` - reviewed & approved (blocked on author)
   - `:rocket:` - merged
-  - `:face_palm:` - closed but not merged
-- Format: `:postal_horn: Update README.md • goose#51 by @slackUser` (with link to PR, link previews disabled)
-- Post follow-up comments when reviewers are assigned with checkmark reactions when they review
+  - `:man_facepalming:` - closed but not merged
+- Format: `<prefix_emoji> Update README.md • goose#51 by @slackUser` (with link to PR, link previews disabled)
+- PR URLs include state suffix for debugging (e.g., `?st=tests_broken`, `?st=awaiting_review`)
+- Post follow-up comments when reviewers are assigned
 
 ### 2. User Dashboard
 - Native Slack app home tab with Block Kit UI showing incoming/outgoing PRs
