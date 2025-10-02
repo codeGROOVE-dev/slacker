@@ -208,7 +208,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 		logFieldChannel, channelID,
 		"pr_state", prState)
 
-	newThreadTS, err := c.createPRThread(ctx, channelID, owner, repo, prNumber, pullRequest, checkResult)
+	newThreadTS, err := c.createPRThread(ctx, channelID, owner, repo, prNumber, prState, pullRequest, checkResult)
 	if err != nil {
 		return "", false, fmt.Errorf("failed to create PR thread: %w", err)
 	}
@@ -518,39 +518,39 @@ func (*Coordinator) extractStateFromTurnclient(checkResult *turn.CheckResponse) 
 
 	// Check if PR is closed but not merged
 	if pr.State == "closed" {
-		slog.Info("PR detected as closed but not merged", "state", "face_palm")
-		return "face_palm"
+		slog.Info("PR detected as closed but not merged", "state", "closed")
+		return "closed"
 	}
 
 	if pr.Draft {
-		slog.Debug("PR detected as draft", "state", "test_tube")
-		return "test_tube" // Draft PRs
+		slog.Debug("PR detected as draft", "state", "tests_running")
+		return "tests_running" // Draft PRs show as tests running
 	}
 
 	if analysis.Checks.Failing > 0 {
-		slog.Debug("PR has failing checks", "state", "broken_heart", "failing_count", analysis.Checks.Failing)
-		return "broken_heart" // Tests failing
+		slog.Debug("PR has failing checks", "state", "tests_broken", "failing_count", analysis.Checks.Failing)
+		return "tests_broken" // Tests failing
 	}
 
 	if analysis.Checks.Pending > 0 || analysis.Checks.Waiting > 0 {
-		slog.Debug("PR has pending/waiting checks", "state", "test_tube",
+		slog.Debug("PR has pending/waiting checks", "state", "tests_running",
 			"pending_count", analysis.Checks.Pending,
 			"waiting_count", analysis.Checks.Waiting)
-		return "test_tube" // Tests running
+		return "tests_running" // Tests running
 	}
 
 	if analysis.Approved {
 		if analysis.UnresolvedComments > 0 {
-			slog.Debug("PR approved but has unresolved comments", "state", "carpentry_saw",
+			slog.Debug("PR approved but has unresolved comments", "state", "changes_requested",
 				"unresolved_comments", analysis.UnresolvedComments)
-			return "carpentry_saw" // Approved but has unresolved comments
+			return "changes_requested" // Approved but has unresolved comments
 		}
-		slog.Debug("PR approved and ready", "state", "check")
-		return "check" // Approved and ready
+		slog.Debug("PR approved and ready", "state", "approved")
+		return "approved" // Approved and ready
 	}
 
-	slog.Debug("PR waiting for review (default state)", "state", "hourglass")
-	return "hourglass" // Default: waiting for review
+	slog.Debug("PR waiting for review (default state)", "state", "awaiting_review")
+	return "awaiting_review" // Default: waiting for review
 }
 
 // extractBlockedUsersFromTurnclient extracts blocked users from turnclient response.
@@ -568,6 +568,46 @@ func (*Coordinator) extractReviewersFromTurnclient(checkResult *turn.CheckRespon
 		return nil
 	}
 	return checkResult.PullRequest.RequestedReviewers
+}
+
+// getPrefixForState returns the emoji prefix for a given PR state.
+func (*Coordinator) getPrefixForState(state string) string {
+	switch state {
+	case "tests_running":
+		return ":test_tube:" // Tests running/pending
+	case "tests_broken":
+		return ":cockroach:" // Tests broken - needs fixing
+	case "awaiting_review":
+		return ":hourglass:" // Waiting on review
+	case "changes_requested":
+		return ":carpentry_saw:" // Approved but needs work
+	case "approved":
+		return ":white_check_mark:" // Reviewed & approved
+	case "merged":
+		return ":rocket:" // Merged
+	case "closed":
+		return ":man_facepalming:" // Closed but not merged
+	default:
+		return ":postal_horn:" // Default fallback
+	}
+}
+
+// getStateQueryParam returns the URL query parameter suffix for a given PR state.
+func (*Coordinator) getStateQueryParam(state string) string {
+	switch state {
+	case "tests_running":
+		return "?st=tests_running"
+	case "tests_broken":
+		return "?st=tests_broken"
+	case "awaiting_review":
+		return "?st=awaiting_review"
+	case "changes_requested":
+		return "?st=changes_requested"
+	case "approved":
+		return "?st=approved"
+	default:
+		return "" // No suffix for merged/closed - it's obvious from GitHub UI
+	}
 }
 
 // processChannelsInParallel processes multiple channels concurrently for better performance.
@@ -703,21 +743,12 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 		pr.ChannelID = channelID
 	}
 
-	// Update thread title for existing threads (simplified for now)
-	if !wasNewlyCreated {
-		slog.Debug("thread title update skipped for simplification",
-			"workspace", c.workspaceName,
-			logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-			"channel", channelDisplay,
-			"thread_ts", threadTS)
-	}
-
 	// Track that we notified users in this channel for DM delay logic
 	c.stateManager.UpdateChannelNotification(workspaceID, owner, repo, prNumber)
 
-	// Update reactions only if state changed
-	if oldState != "" && oldState != prState {
-		slog.Debug("updating reactions for state change",
+	// Update message prefix if state changed
+	if !wasNewlyCreated && oldState != "" && oldState != prState {
+		slog.Debug("updating message prefix for state change",
 			"workspace", c.workspaceName,
 			logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
 			"channel", channelDisplay,
@@ -726,8 +757,29 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 			"old_state", oldState,
 			"new_state", prState)
 
-		if err := c.slack.UpdateReactionsWithPrevious(ctx, channelID, threadTS, oldState, prState); err != nil {
-			slog.Error("failed to update reaction for PR state",
+		// Rebuild the message text with new prefix
+		newPrefix := c.getPrefixForState(prState)
+		domain := c.configManager.Domain(owner)
+		authorMention := c.userMapper.FormatUserMention(ctx, event.PullRequest.User.Login, owner, domain)
+		reviewers := c.extractReviewersFromTurnclient(checkResult)
+		urlWithState := event.PullRequest.HTMLURL + c.getStateQueryParam(prState)
+
+		newText := fmt.Sprintf("%s %s • <%s|%s#%d> by %s",
+			newPrefix,
+			event.PullRequest.Title,
+			urlWithState,
+			repo,
+			prNumber,
+			authorMention,
+		)
+
+		if len(reviewers) > 0 {
+			reviewerMentions := c.userMapper.FormatUserMentions(ctx, reviewers, owner, domain)
+			newText += fmt.Sprintf(" — reviewers: %s", reviewerMentions)
+		}
+
+		if err := c.slack.UpdateMessage(ctx, channelID, threadTS, newText); err != nil {
+			slog.Error("failed to update message prefix for PR state",
 				"workspace", c.workspaceName,
 				logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
 				"channel", channelDisplay,
@@ -737,7 +789,7 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 				"new_state", prState,
 				"error", err)
 		} else {
-			slog.Debug("updated PR reaction successfully",
+			slog.Debug("updated PR message prefix successfully",
 				"workspace", c.workspaceName,
 				logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
 				"channel", channelDisplay,
@@ -746,8 +798,8 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 				"old_state", oldState,
 				"new_state", prState)
 		}
-	} else {
-		slog.Debug("PR state unchanged, skipping reaction update",
+	} else if !wasNewlyCreated {
+		slog.Debug("PR state unchanged, skipping message update",
 			"workspace", c.workspaceName,
 			logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
 			"channel", channelDisplay,
@@ -884,7 +936,7 @@ func (*Coordinator) handlePullRequestReviewFromSprinkler(ctx context.Context, ow
 }
 
 // createPRThread creates a new thread in Slack for a PR.
-func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo string, number int, pr struct {
+func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo string, number int, prState string, pr struct {
 	Number  int    `json:"number"`
 	HTMLURL string `json:"html_url"`
 	Title   string `json:"title"`
@@ -893,8 +945,8 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 	} `json:"user"`
 }, checkResult *turn.CheckResponse,
 ) (string, error) {
-	// Get prefix for this org and domain for user mapping
-	prefix := c.configManager.Prefix(owner)
+	// Get state-based prefix and domain for user mapping
+	prefix := c.getPrefixForState(prState)
 	domain := c.configManager.Domain(owner)
 
 	// Get Slack handle for PR author
@@ -903,11 +955,14 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 	// Get reviewers from turnclient data
 	reviewers := c.extractReviewersFromTurnclient(checkResult)
 
+	// Add state query param to URL for debugging
+	urlWithState := pr.HTMLURL + c.getStateQueryParam(prState)
+
 	// Format message with author and reviewers
 	text := fmt.Sprintf("%s %s • <%s|%s#%d> by %s",
 		prefix,
 		pr.Title,
-		pr.HTMLURL,
+		urlWithState,
 		repo,
 		number,
 		authorMention,
