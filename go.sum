@@ -14,6 +14,8 @@ github.com/codeGROOVE-dev/retry v1.2.0 h1:xYpYPX2PQZmdHwuiQAGGzsBm392xIMl4nfMEFA
 github.com/codeGROOVE-dev/retry v1.2.0/go.mod h1:8OgefgV1XP7lzX2PdKlCXILsYKuz6b4ZpHa/20iLi8E=
 github.com/codeGROOVE-dev/sprinkler v0.0.0-20251001154245-068712aa969d h1:tQX67dAzyWVAaNe0EhYpj/AmWZo1Wwhaah6KVj7M3qs=
 github.com/codeGROOVE-dev/sprinkler v0.0.0-20251001154245-068712aa969d/go.mod h1:RZ/Te7HkY5upHQlnmf3kV4GHVM0R8AK3U+yPItCZAoQ=
+github.com/codeGROOVE-dev/sprinkler v0.0.0-20251006222220-b17dfab41959 h1:WOkrCVfIQAsDsOl8r9Ur+pnTVVYA8nldRpq4RWzv0j8=
+github.com/codeGROOVE-dev/sprinkler v0.0.0-20251006222220-b17dfab41959/go.mod h1:RZ/Te7HkY5upHQlnmf3kV4GHVM0R8AK3U+yPItCZAoQ=
 github.com/codeGROOVE-dev/turnclient v0.0.0-20251001194229-2aaea2e63cc7 h1:iRWrlJusl5FiEC1sCiPoW8IFei5bebAIornGtQFUHbc=
 github.com/codeGROOVE-dev/turnclient v0.0.0-20251001194229-2aaea2e63cc7/go.mod h1:Rt0k+aoZ13TvXKl9n2AeBabWIXZ/xIvurdwFTgyNk0w=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
