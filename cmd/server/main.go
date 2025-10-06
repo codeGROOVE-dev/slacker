@@ -14,11 +14,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/codeGROOVE-dev/gsm"
 	"github.com/codeGROOVE-dev/slacker/pkg/bot"
 	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/slacker/pkg/github"
 	"github.com/codeGROOVE-dev/slacker/pkg/notify"
-	"github.com/codeGROOVE-dev/slacker/pkg/secrets"
 	"github.com/codeGROOVE-dev/slacker/pkg/slack"
 	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
@@ -287,113 +287,31 @@ func runBotCoordinators(
 func loadConfig() (*config.ServerConfig, error) {
 	ctx := context.Background()
 
-	// Check if Google Secret Manager should be used
-	// Try multiple common project ID environment variables
-	var secretsManager *secrets.Manager
-
-	// Log all environment variables that might contain project info (for debugging)
-	slog.Info("checking for project ID in environment",
-		"GCP_PROJECT_ID", os.Getenv("GCP_PROJECT_ID"),
-		"GOOGLE_CLOUD_PROJECT", os.Getenv("GOOGLE_CLOUD_PROJECT"),
-		"GCP_PROJECT", os.Getenv("GCP_PROJECT"),
-		"PROJECT_ID", os.Getenv("PROJECT_ID"),
-		"GCLOUD_PROJECT", os.Getenv("GCLOUD_PROJECT"))
-
-	projectID := os.Getenv("GCP_PROJECT_ID")
-	if projectID == "" {
-		projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
-	}
-	if projectID == "" {
-		projectID = os.Getenv("GCP_PROJECT")
-	}
-	if projectID == "" {
-		projectID = os.Getenv("PROJECT_ID")
-	}
-	if projectID == "" {
-		projectID = os.Getenv("GCLOUD_PROJECT")
-	}
-
-	// Check if we're running on Cloud Run
-	isCloudRun := os.Getenv("K_SERVICE") != "" || os.Getenv("CLOUD_RUN_TIMEOUT_SECONDS") != ""
-
-	slog.Info("Secret Manager configuration",
-		"project_id", projectID,
-		"has_project", projectID != "",
-		"is_cloud_run", isCloudRun,
-		"google_application_credentials", os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"),
-		"k_service", os.Getenv("K_SERVICE"),
-		"cloud_run_timeout", os.Getenv("CLOUD_RUN_TIMEOUT_SECONDS"))
-
-	if isCloudRun && projectID == "" {
-		slog.Warn("Running on Cloud Run but no project ID found. Set GCP_PROJECT_ID environment variable in your Cloud Run service configuration")
-	}
-
-	if projectID != "" {
-		// Initialize secrets manager
-		credentialsPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
-		var err error
-		slog.Info("attempting to initialize Google Secret Manager",
-			"project_id", projectID,
-			"credentials_path", credentialsPath)
-
-		secretsManager, err = secrets.New(ctx, projectID, credentialsPath)
-		if err != nil {
-			slog.Error("failed to initialize Google Secret Manager, falling back to env vars",
-				"project_id", projectID,
-				"credentials_path", credentialsPath,
-				"error", err,
-				"error_detail", fmt.Sprintf("%+v", err))
-			// Continue without secrets manager
-		} else {
-			defer func() {
-				if err := secretsManager.Close(); err != nil {
-					slog.Warn("failed to close secrets manager", "error", err)
-				}
-			}()
-			slog.Info("Google Secret Manager successfully initialized",
-				"project_id", projectID,
-				"has_credentials", credentialsPath != "")
-		}
-	}
-
-	// Helper function to get secret values with Secret Manager fallback
-	getSecretValue := func(envVar string) string {
+	// Helper function to get secret values
+	// Environment variables take precedence, then Secret Manager
+	getSecretValue := func(name string) string {
 		// Environment variable takes precedence
-		if value := os.Getenv(envVar); value != "" {
+		if value := os.Getenv(name); value != "" {
 			slog.Info("using environment variable",
-				"env_var", envVar,
+				"name", name,
 				"source", "environment")
 			return value
 		}
 
-		slog.Info("environment variable not found, checking Secret Manager",
-			"env_var", envVar,
-			"secret_manager_available", secretsManager != nil)
-
-		// Try Secret Manager if available (using same name as env var)
-		if secretsManager != nil {
-			slog.Info("attempting to fetch from Secret Manager",
-				"env_var", envVar,
-				"secret_name", envVar)
-
-			value, err := secretsManager.GetWithEnvOverride(ctx, envVar, envVar)
-			if err != nil {
-				slog.Error("failed to fetch secret from Secret Manager",
-					"env_var", envVar,
-					"secret_name", envVar,
-					"error", err,
-					"error_detail", fmt.Sprintf("%+v", err))
-				return ""
-			}
-			slog.Info("successfully fetched secret from Secret Manager",
-				"env_var", envVar,
-				"has_value", value != "")
-			return value
+		// Try Secret Manager using gsm library
+		slog.Info("attempting to fetch secret from Secret Manager",
+			"name", name)
+		value, err := gsm.Secret(ctx, name)
+		if err != nil {
+			slog.Error("failed to fetch secret from Secret Manager",
+				"name", name,
+				"error", err)
+			return ""
 		}
-
-		slog.Warn("Secret Manager not initialized, cannot fetch secret",
-			"env_var", envVar)
-		return ""
+		slog.Info("successfully fetched secret from Secret Manager",
+			"name", name,
+			"has_value", value != "")
+		return value
 	}
 
 	// Load GitHub private key from environment, file, or Secret Manager
