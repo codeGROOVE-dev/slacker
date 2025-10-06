@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
 )
@@ -157,32 +158,50 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 	}
 
 	// Start the client (this will handle reconnection, ping/pong, etc.)
+	// Note: Start() may return when connection is lost, so we loop to restart it
 	slog.Info("starting sprinkler client")
 
-	if err := sprinklerClient.Start(ctx); err != nil {
-		// Check if it's NOT an authentication error - return immediately
-		if !strings.Contains(err.Error(), "403") && !strings.Contains(err.Error(), "401") {
-			return fmt.Errorf("failed to start sprinkler client: %w", err)
-		}
-
-		// Authentication error - try refreshing token
-		slog.Warn("authentication failed, refreshing token")
-		if refreshErr := c.github.RefreshToken(ctx); refreshErr != nil {
-			slog.Error("failed to refresh token", "error", refreshErr)
-			return err
-		}
-		// Try once more with fresh token
-		githubToken = c.github.InstallationToken(ctx)
-		clientConfig.Token = githubToken
-		newClient, err := client.New(clientConfig)
-		if err != nil {
-			return fmt.Errorf("failed to create sprinkler client after token refresh: %w", err)
-		}
-		sprinklerClient = newClient
+	for {
 		if err := sprinklerClient.Start(ctx); err != nil {
-			return fmt.Errorf("failed to start sprinkler client after token refresh: %w", err)
-		}
-	}
+			// Context cancelled - clean shutdown
+			if errors.Is(err, context.Canceled) {
+				slog.Info("sprinkler client context cancelled")
+				return nil
+			}
 
-	return nil
+			// Check if it's an authentication error
+			if strings.Contains(err.Error(), "403") || strings.Contains(err.Error(), "401") {
+				slog.Warn("authentication failed, refreshing token")
+				if refreshErr := c.github.RefreshToken(ctx); refreshErr != nil {
+					slog.Error("failed to refresh token", "error", refreshErr)
+					return err
+				}
+				// Try once more with fresh token
+				githubToken = c.github.InstallationToken(ctx)
+				clientConfig.Token = githubToken
+				newClient, err := client.New(clientConfig)
+				if err != nil {
+					return fmt.Errorf("failed to create sprinkler client after token refresh: %w", err)
+				}
+				sprinklerClient = newClient
+				continue
+			}
+
+			// Other error - log and retry after delay
+			slog.Warn("sprinkler client stopped, will restart",
+				"error", err,
+				"delay_seconds", 5)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(5 * time.Second):
+				slog.Info("restarting sprinkler client")
+				continue
+			}
+		}
+
+		// Start() returned nil - should not happen normally
+		slog.Warn("sprinkler client Start() returned nil unexpectedly")
+		return nil
+	}
 }
