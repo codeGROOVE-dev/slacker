@@ -18,7 +18,6 @@ import (
 	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
-	"golang.org/x/sync/errgroup"
 )
 
 // Common logging constants.
@@ -684,19 +683,24 @@ func (c *Coordinator) processChannelsInParallel(ctx context.Context, owner, repo
 		"filtered_out", len(channels)-len(validChannels))
 
 	// Process channels in parallel for better performance
-	g, gCtx := errgroup.WithContext(ctx)
+	// Use WaitGroup instead of errgroup since we don't want one failure to cancel others
+	var wg sync.WaitGroup
+	wg.Add(len(validChannels))
 
 	for _, channelName := range validChannels {
-		g.Go(func() error {
-			c.processPRForChannel(gCtx, owner, repo, prNumber, prState, event, channelName, workspaceID, checkResult)
-			return nil // Don't fail the entire group if one channel fails
-		})
+		// Capture loop variable to avoid closure bug
+		channelName := channelName
+		go func() {
+			defer wg.Done()
+			c.processPRForChannel(ctx, owner, repo, prNumber, prState, event, channelName, workspaceID, checkResult)
+		}()
 	}
 
 	// Wait for all channels to complete
-	if err := g.Wait(); err != nil {
-		slog.Error("error in parallel channel processing", "error", err)
-	}
+	wg.Wait()
+	slog.Debug("completed parallel channel processing",
+		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+		"channels_processed", len(validChannels))
 }
 
 // processPRForChannel handles PR processing for a single channel (extracted from the main loop).
@@ -762,8 +766,10 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 	// Update PR state to use the first successful thread (for backwards compatibility)
 	pr, exists := c.stateManager.PRState(workspaceID, owner, repo, prNumber)
 	if exists && pr != nil && pr.ThreadTS == "" {
+		// Must call SetPRState to properly save the update
 		pr.ThreadTS = threadTS
 		pr.ChannelID = channelID
+		c.stateManager.SetPRState(workspaceID, pr)
 	}
 
 	// Track that we notified users in this channel for DM delay logic
@@ -882,8 +888,12 @@ func (c *Coordinator) handlePullRequestFromSprinkler(
 		logFieldOwner, owner)
 
 	// Use the turnclient to check the PR - this gives us rich PR state analysis
+	// Add timeout to prevent hanging on slow API calls
+	checkCtx, checkCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer checkCancel()
+
 	prURL := fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, prNumber)
-	checkResult, err := turnClient.Check(ctx, prURL, botUsername, eventTimestamp)
+	checkResult, err := turnClient.Check(checkCtx, prURL, botUsername, eventTimestamp)
 	if err != nil {
 		slog.Error("failed to check PR with turnclient",
 			logFieldOwner, owner,
@@ -891,7 +901,8 @@ func (c *Coordinator) handlePullRequestFromSprinkler(
 			"pr_number", prNumber,
 			"pr_url", prURL,
 			"bot_username", botUsername,
-			"error", err)
+			"error", err,
+			"timeout_seconds", 30)
 		return
 	}
 

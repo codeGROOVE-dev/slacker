@@ -33,6 +33,13 @@ const (
 )
 
 func main() {
+	// Configure logging with source locations for better debugging
+	logHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		AddSource: true,
+		Level:     slog.LevelInfo,
+	})
+	slog.SetDefault(slog.New(logHandler))
+
 	// Load configuration from environment.
 	cfg, err := loadConfig()
 	if err != nil {
@@ -53,15 +60,11 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigChan
-		slog.Info("received shutdown signal, gracefully stopping")
+		sig := <-sigChan
+		slog.Info("received shutdown signal, starting graceful stop",
+			"signal", sig.String(),
+			"signal_number", sig)
 		cancel()
-
-		// Force exit after 30 seconds if graceful shutdown doesn't complete.
-		// This allows time for in-flight GitHub API calls to finish.
-		time.Sleep(30 * time.Second)
-		slog.Error("graceful shutdown timeout, forcing exit")
-		panic("shutdown timeout exceeded")
 	}()
 
 	// Log configuration without secrets.
@@ -175,6 +178,11 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 		slog.Error("server error", "error", err)
 		return 1
 	}
+
+	// Gracefully stop the state manager
+	slog.Info("shutting down state manager")
+	stateManager.Stop()
+
 	slog.Info("server stopped")
 	return 0
 }
@@ -230,10 +238,8 @@ func runBotCoordinators(
 			githubClient, exists := githubManager.ClientForOrg(org)
 			if !exists {
 				slog.Warn("no GitHub client for org", "org", org)
-				// Mark as failed so we retry later
-				mu.Lock()
+				// Mark as failed so we retry later (already holding mu)
 				failedCoordinators[org] = time.Now()
-				mu.Unlock()
 				continue
 			}
 
@@ -252,9 +258,19 @@ func runBotCoordinators(
 				continue
 			}
 
-			// Create coordinator for this org
+			// Capture config values before goroutine to avoid closure issues
+			workspaceName := cfg.Global.Slack
+
+			// Start coordinator in goroutine with org-specific context
+			orgCtx, cancel := context.WithCancel(ctx)
+			activeCoordinators[org] = cancel
+
+			// Clear from failed list since we're starting it
+			delete(failedCoordinators, org)
+
+			// Create coordinator for this org with org-specific context
 			coordinator := bot.New(
-				ctx,
+				orgCtx,
 				slackClient,
 				githubClient,
 				stateManager,
@@ -263,17 +279,10 @@ func runBotCoordinators(
 				sprinklerURL,
 			)
 
-			// Start coordinator in goroutine
-			orgCtx, cancel := context.WithCancel(ctx)
-			activeCoordinators[org] = cancel
-
-			// Clear from failed list since we're starting it
-			delete(failedCoordinators, org)
-
-			go func(org string, coord *bot.Coordinator) {
+			go func(org, workspace string, coord *bot.Coordinator, orgCtx context.Context) {
 				slog.Info("starting coordinator for org",
 					"org", org,
-					"workspace", cfg.Global.Slack,
+					"workspace", workspace,
 					"sprinkler_url", sprinklerURL)
 
 				err := coord.RunWithSprinklerClient(orgCtx)
@@ -306,7 +315,7 @@ func runBotCoordinators(
 				mu.Lock()
 				delete(activeCoordinators, org)
 				mu.Unlock()
-			}(org, coordinator)
+			}(org, workspaceName, coordinator, orgCtx)
 		}
 	}
 
@@ -371,13 +380,13 @@ func runBotCoordinators(
 		case <-retryTicker.C:
 			mu.Lock()
 			failedCount := len(failedCoordinators)
+			mu.Unlock()
+
 			if failedCount > 0 {
 				slog.Info("retrying failed coordinators",
-					"failed_count", failedCount,
-					"active_coordinators", len(activeCoordinators))
+					"failed_count", failedCount)
 
 				// Refresh installations to get latest GitHub clients
-				mu.Unlock()
 				if err := githubManager.RefreshInstallations(ctx); err != nil {
 					if !errors.Is(err, context.Canceled) {
 						slog.Error("failed to refresh installations during retry", "error", err)
@@ -387,24 +396,38 @@ func runBotCoordinators(
 
 				// Try to start failed coordinators
 				startCoordinators()
-				slog.Info("retry attempt complete",
-					"active_coordinators", len(activeCoordinators))
-			} else {
+
+				mu.Lock()
+				activeCount := len(activeCoordinators)
 				mu.Unlock()
+
+				slog.Info("retry attempt complete",
+					"active_coordinators", activeCount)
 			}
 
 		case <-installationTicker.C:
+			mu.Lock()
+			activeCount := len(activeCoordinators)
+			mu.Unlock()
+
 			slog.Info("refreshing GitHub installations",
-				"active_coordinators", len(activeCoordinators))
+				"active_coordinators", activeCount)
+
 			if err := githubManager.RefreshInstallations(ctx); err != nil {
 				if !errors.Is(err, context.Canceled) {
 					slog.Error("failed to refresh installations", "error", err)
 				}
 				continue
 			}
+
 			startCoordinators()
+
+			mu.Lock()
+			newActiveCount := len(activeCoordinators)
+			mu.Unlock()
+
 			slog.Info("refresh complete",
-				"active_coordinators", len(activeCoordinators))
+				"active_coordinators", newActiveCount)
 		}
 	}
 }

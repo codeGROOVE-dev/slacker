@@ -51,6 +51,7 @@ type Manager struct {
 	saveChan chan string
 	dataDir  string
 	mu       sync.RWMutex
+	stopChan chan struct{}
 }
 
 // New creates a new state manager.
@@ -59,6 +60,7 @@ func New(dataDir string) *Manager {
 		dataDir:  dataDir,
 		data:     make(map[string]*WorkspaceData),
 		saveChan: make(chan string, 100),
+		stopChan: make(chan struct{}),
 	}
 
 	// Create data directory if it doesn't exist with restrictive permissions.
@@ -72,11 +74,15 @@ func New(dataDir string) *Manager {
 	return m
 }
 
+// Stop gracefully stops the state manager.
+func (m *Manager) Stop() {
+	close(m.stopChan)
+	slog.Info("state manager stopped")
+}
+
 // GetNotificationState returns notification state for a user.
 func (m *Manager) GetNotificationState(workspaceID, userID string) NotificationState {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	// Load workspace data if not in memory.
 	if _, exists := m.data[workspaceID]; !exists {
 		slog.Debug("workspace not in memory, loading from disk",
@@ -89,6 +95,7 @@ func (m *Manager) GetNotificationState(workspaceID, userID string) NotificationS
 
 	workspace, exists := m.data[workspaceID]
 	if !exists || workspace.UserNotifications == nil {
+		m.mu.RUnlock()
 		slog.Debug("returning empty notification state - no workspace data",
 			"workspace", workspaceID,
 			"user", userID,
@@ -98,6 +105,8 @@ func (m *Manager) GetNotificationState(workspaceID, userID string) NotificationS
 	}
 
 	state, exists := workspace.UserNotifications[userID]
+	m.mu.RUnlock()
+
 	if !exists {
 		slog.Debug("returning empty notification state - user not found",
 			"workspace", workspaceID,
@@ -425,6 +434,22 @@ func (m *Manager) saveWorker() {
 
 	for {
 		select {
+		case <-m.stopChan:
+			slog.Info("save worker stopping, performing final save")
+			// Save all workspaces one last time before exiting
+			m.mu.RLock()
+			workspaces := make([]string, 0, len(m.data))
+			for id := range m.data {
+				workspaces = append(workspaces, id)
+			}
+			m.mu.RUnlock()
+
+			for _, id := range workspaces {
+				m.saveWorkspaceData(id)
+			}
+			slog.Info("save worker exited")
+			return
+
 		case workspaceID := <-m.saveChan:
 			// Debounce saves - wait at least 5 seconds between saves.
 			if lastSave, exists := saved[workspaceID]; exists && time.Since(lastSave) < 5*time.Second {

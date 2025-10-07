@@ -61,8 +61,8 @@ func (c *apiCache) set(key string, value any, ttl time.Duration) {
 
 // get retrieves a value from the cache if not expired.
 func (c *apiCache) get(key string) (any, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	entry, exists := c.entries[key]
 	if !exists || time.Now().After(entry.expiresAt) {
 		c.misses++

@@ -580,29 +580,50 @@ func (c *Client) Organization() string {
 }
 
 // InstallationToken returns the current installation token, refreshing if needed.
+// This method is safe to call concurrently - only one goroutine will perform the refresh.
 func (c *Client) InstallationToken(ctx context.Context) string {
+	// First check with read lock (fast path for common case)
 	c.tokenMutex.RLock()
 	token := c.installationToken
 	expiry := c.tokenExpiry
+	needsRefresh := time.Now().After(expiry)
 	c.tokenMutex.RUnlock()
 
-	// Check if token needs refresh.
-	if time.Now().After(expiry) {
+	if !needsRefresh {
+		return token
+	}
+
+	// Token needs refresh - acquire write lock to coordinate
+	c.tokenMutex.Lock()
+	// Double-check after acquiring write lock (another goroutine might have refreshed)
+	if time.Now().After(c.tokenExpiry) {
 		slog.Info("GitHub installation token expired, refreshing",
-			"old_token_prefix", token[:min(10, len(token))]+"...",
-			"expiry_was", expiry)
+			"old_token_prefix", c.installationToken[:min(10, len(c.installationToken))]+"...",
+			"expiry_was", c.tokenExpiry)
+
+		// Release lock during API call to avoid blocking other operations
+		c.tokenMutex.Unlock()
+
 		if err := c.authenticate(ctx); err != nil {
 			slog.Error("failed to refresh GitHub token", "error", err)
-			// Return old token as fallback (might still work for a bit).
+			// Return old token as fallback (might still work for a bit)
+			c.tokenMutex.RLock()
+			token := c.installationToken
+			c.tokenMutex.RUnlock()
 			return token
 		}
+
 		c.tokenMutex.RLock()
-		token = c.installationToken
+		token := c.installationToken
 		c.tokenMutex.RUnlock()
 		slog.Info("GitHub token refreshed successfully",
 			"new_token_prefix", token[:min(10, len(token))]+"...")
+		return token
 	}
 
+	// Another goroutine refreshed while we were waiting for the lock
+	token = c.installationToken
+	c.tokenMutex.Unlock()
 	return token
 }
 
