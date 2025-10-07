@@ -253,13 +253,12 @@ func (c *Client) UpdateMessage(ctx context.Context, channelID, timestamp, text s
 		},
 		retry.Attempts(5),
 		retry.Delay(2*time.Second),
-		retry.MaxDelay(30*time.Second),
+		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
 		retry.LastErrorOnly(true),
 		retry.Context(ctx),
 	)
-
 	if err != nil {
 		return fmt.Errorf("failed to update message after retries: %w", err)
 	}
@@ -358,9 +357,9 @@ func (c *Client) AddReaction(ctx context.Context, channelID, timestamp, emoji st
 			}
 			return nil
 		},
-		retry.Attempts(3),
+		retry.Attempts(5),
 		retry.Delay(time.Second),
-		retry.MaxDelay(10*time.Second),
+		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
 		retry.LastErrorOnly(true),
@@ -403,9 +402,9 @@ func (c *Client) RemoveReaction(ctx context.Context, channelID, timestamp, emoji
 			}
 			return nil
 		},
-		retry.Attempts(3),
+		retry.Attempts(5),
 		retry.Delay(time.Second),
-		retry.MaxDelay(10*time.Second),
+		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
 		retry.LastErrorOnly(true),
@@ -492,9 +491,9 @@ func (c *Client) SendDirectMessage(ctx context.Context, userID, text string) err
 			channelID = channel.ID
 			return nil
 		},
-		retry.Attempts(3),
+		retry.Attempts(5),
 		retry.Delay(time.Second),
-		retry.MaxDelay(30*time.Second),
+		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
 		retry.LastErrorOnly(true),
@@ -555,9 +554,9 @@ func (c *Client) UserInfo(ctx context.Context, userID string) (*slack.User, erro
 			}
 			return nil
 		},
-		retry.Attempts(3),
+		retry.Attempts(5),
 		retry.Delay(time.Second),
-		retry.MaxDelay(30*time.Second),
+		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
 		retry.LastErrorOnly(true),
@@ -590,9 +589,9 @@ func (c *Client) UserPresence(ctx context.Context, userID string) (string, error
 			}
 			return nil
 		},
-		retry.Attempts(3),
+		retry.Attempts(5),
 		retry.Delay(time.Second),
-		retry.MaxDelay(10*time.Second),
+		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
 		retry.LastErrorOnly(true),
@@ -869,10 +868,11 @@ func (c *Client) PublishHomeView(userID string, blocks []slack.Block) error {
 			}
 			return nil
 		},
-		retry.Attempts(3),
+		retry.Attempts(5),
 		retry.Delay(time.Second),
-		retry.MaxDelay(30*time.Second),
+		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
 		retry.LastErrorOnly(true),
 	)
 	if err != nil {
