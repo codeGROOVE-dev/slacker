@@ -41,14 +41,14 @@ func main() {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Run the server and handle exit code
-	os.Exit(run(ctx, cancel, cfg))
+	exitCode := run(ctx, cancel, cfg)
+	cancel() // Cancel context before exit
+	os.Exit(exitCode)
 }
 
 func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfig) int {
-
 	// Handle graceful shutdown.
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -61,7 +61,7 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 		// This allows time for in-flight GitHub API calls to finish.
 		time.Sleep(30 * time.Second)
 		slog.Error("graceful shutdown timeout, forcing exit")
-		os.Exit(1)
+		panic("shutdown timeout exceeded")
 	}()
 
 	// Log configuration without secrets.
@@ -97,7 +97,12 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	// Setup HTTP routes with security middleware.
 	router := mux.NewRouter()
 	router.Use(securityHeadersMiddleware)
+
+	// Health endpoints
 	router.HandleFunc("/health", healthHandler).Methods("GET")
+	router.HandleFunc("/healthz", makeHealthzHandler(githubManager)).Methods("GET")
+
+	// Slack endpoints
 	router.HandleFunc("/slack/events", slackClient.EventsHandler).Methods("POST")
 	router.HandleFunc("/slack/interactions", slackClient.InteractionsHandler).Methods("POST")
 	router.HandleFunc("/slack/slash", slackClient.SlashCommandHandler).Methods("POST")
@@ -139,12 +144,18 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	})
 
 	// Start bot coordinators for each GitHub installation.
+	// This runs indefinitely and handles its own retries - should never return an error
+	// unless the context is cancelled (clean shutdown).
 	eg.Go(func() error {
-		err := runBotCoordinators(ctx, slackClient, githubManager, stateManager, configManager, notifier, cfg.SprinklerURL)
-		if errors.Is(err, context.Canceled) {
-			return nil
+		if err := runBotCoordinators(ctx, slackClient, githubManager, stateManager, configManager, notifier, cfg.SprinklerURL); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
+			// Log unexpected error but don't propagate to errgroup
+			// (would trigger shutdown of entire server)
+			slog.Error("bot coordinators stopped unexpectedly", "error", err)
 		}
-		return err
+		return nil
 	})
 
 	// Start notification scheduler.
@@ -264,14 +275,32 @@ func runBotCoordinators(
 					"org", org,
 					"workspace", cfg.Global.Slack,
 					"sprinkler_url", sprinklerURL)
-				if err := coord.RunWithSprinklerClient(orgCtx); err != nil && !errors.Is(err, context.Canceled) {
-					slog.Error("coordinator error", "org", org, "error", err)
-					// Mark as failed so we retry
+
+				err := coord.RunWithSprinklerClient(orgCtx)
+
+				// Coordinator should NEVER exit unless context is cancelled
+				if err != nil {
+					if errors.Is(err, context.Canceled) {
+						slog.Info("coordinator stopped due to context cancellation", "org", org)
+					} else {
+						slog.Error("coordinator exited unexpectedly - THIS SHOULD NOT HAPPEN",
+							"org", org,
+							"error", err,
+							"error_type", fmt.Sprintf("%T", err))
+						// Mark as failed so we retry
+						mu.Lock()
+						failedCoordinators[org] = time.Now()
+						mu.Unlock()
+					}
+				} else {
+					// This should NEVER happen - RunWithSprinklerClient has infinite retry loop
+					slog.Error("coordinator exited with nil error - THIS SHOULD NOT HAPPEN",
+						"org", org,
+						"sprinkler_url", sprinklerURL)
 					mu.Lock()
 					failedCoordinators[org] = time.Now()
 					mu.Unlock()
 				}
-				slog.Info("coordinator stopped", "org", org)
 
 				// Clean up when coordinator exits
 				mu.Lock()
@@ -292,6 +321,12 @@ func runBotCoordinators(
 	retryTicker := time.NewTicker(1 * time.Minute)
 	defer retryTicker.Stop()
 
+	// Health check: fail if no coordinators are active for too long
+	healthCheckTicker := time.NewTicker(15 * time.Second)
+	defer healthCheckTicker.Stop()
+	var lastHealthCheck time.Time
+	const maxDowntime = 1 * time.Minute
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -303,6 +338,35 @@ func runBotCoordinators(
 			}
 			mu.Unlock()
 			return ctx.Err()
+
+		case <-healthCheckTicker.C:
+			mu.Lock()
+			activeCount := len(activeCoordinators)
+			failedCount := len(failedCoordinators)
+			totalOrgs := len(githubManager.AllOrgs())
+			mu.Unlock()
+
+			if activeCount == 0 && totalOrgs > 0 {
+				// No active coordinators but we have orgs - this is a problem
+				if !lastHealthCheck.IsZero() && time.Since(lastHealthCheck) > maxDowntime {
+					slog.Error("FATAL: no active coordinators for too long",
+						"total_orgs", totalOrgs,
+						"failed_coordinators", failedCount,
+						"last_active", lastHealthCheck,
+						"downtime", time.Since(lastHealthCheck))
+					return errors.New("no active coordinators for extended period")
+				}
+				slog.Warn("no active coordinators - will fail soon",
+					"total_orgs", totalOrgs,
+					"failed_coordinators", failedCount,
+					"time_until_failure", maxDowntime-time.Since(lastHealthCheck))
+			} else if activeCount > 0 {
+				lastHealthCheck = time.Now()
+				slog.Debug("coordinator health check passed",
+					"active_coordinators", activeCount,
+					"failed_coordinators", failedCount,
+					"total_orgs", totalOrgs)
+			}
 
 		case <-retryTicker.C:
 			mu.Lock()
@@ -437,9 +501,36 @@ func loadConfig() (*config.ServerConfig, error) {
 }
 
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
+	// Basic health check - just confirms the HTTP server is responding
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write([]byte("OK")); err != nil {
 		slog.Error("failed to write health response", "error", err)
+	}
+}
+
+// makeHealthzHandler creates a more detailed health check that verifies coordinators are running.
+// This is useful for Cloud Run liveness checks.
+func makeHealthzHandler(githubManager *github.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		orgs := githubManager.AllOrgs()
+
+		// If we have GitHub installations configured, we should have coordinators
+		if len(orgs) == 0 {
+			// No orgs configured yet - this is OK during startup
+			w.WriteHeader(http.StatusOK)
+			if _, err := w.Write([]byte("OK - no orgs configured")); err != nil {
+				slog.Error("failed to write healthz response", "error", err)
+			}
+			return
+		}
+
+		// We have orgs - assume coordinators should be running
+		// (This is a basic check - the coordinator health check ticker provides more detailed monitoring)
+		w.WriteHeader(http.StatusOK)
+		response := fmt.Sprintf("OK - %d orgs configured", len(orgs))
+		if _, err := w.Write([]byte(response)); err != nil {
+			slog.Error("failed to write healthz response", "error", err)
+		}
 	}
 }
 

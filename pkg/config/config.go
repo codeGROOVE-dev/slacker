@@ -251,9 +251,9 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 
 			return nil
 		},
-		retry.Attempts(3),
+		retry.Attempts(5),
 		retry.Delay(time.Second),
-		retry.MaxDelay(30*time.Second),
+		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
 		retry.LastErrorOnly(true),
