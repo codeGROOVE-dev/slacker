@@ -161,6 +161,10 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 	// Note: Start() may return when connection is lost, so we loop to restart it
 	slog.Info("starting sprinkler client")
 
+	retryDelay := 5 * time.Second
+	maxRetryDelay := 60 * time.Second
+	consecutiveErrors := 0
+
 	for {
 		if err := sprinklerClient.Start(ctx); err != nil {
 			// Context cancelled - clean shutdown
@@ -169,39 +173,70 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 				return nil
 			}
 
+			consecutiveErrors++
+
 			// Check if it's an authentication error
 			if strings.Contains(err.Error(), "403") || strings.Contains(err.Error(), "401") {
-				slog.Warn("authentication failed, refreshing token")
+				slog.Warn("authentication failed, refreshing token",
+					"consecutive_errors", consecutiveErrors)
 				if refreshErr := c.github.RefreshToken(ctx); refreshErr != nil {
 					slog.Error("failed to refresh token", "error", refreshErr)
-					return err
+					// Don't exit - the outer retry loop will try again
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(retryDelay):
+						continue
+					}
 				}
-				// Try once more with fresh token
+				// Try with fresh token
 				githubToken = c.github.InstallationToken(ctx)
 				clientConfig.Token = githubToken
 				newClient, err := client.New(clientConfig)
 				if err != nil {
-					return fmt.Errorf("failed to create sprinkler client after token refresh: %w", err)
+					slog.Error("failed to create sprinkler client after token refresh",
+						"error", err,
+						"will_retry", true)
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(retryDelay):
+						continue
+					}
 				}
 				sprinklerClient = newClient
+				// Reset delay on successful token refresh
+				retryDelay = 5 * time.Second
+				consecutiveErrors = 0
 				continue
 			}
 
-			// Other error - log and retry after delay
+			// Other error - log and retry with exponential backoff
 			slog.Warn("sprinkler client stopped, will restart",
 				"error", err,
-				"delay_seconds", 5)
+				"delay_seconds", retryDelay.Seconds(),
+				"consecutive_errors", consecutiveErrors)
+
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(5 * time.Second):
-				slog.Info("restarting sprinkler client")
+			case <-time.After(retryDelay):
+				// Exponential backoff capped at maxRetryDelay
+				retryDelay *= 2
+				if retryDelay > maxRetryDelay {
+					retryDelay = maxRetryDelay
+				}
+				slog.Info("restarting sprinkler client",
+					"next_delay_seconds", retryDelay.Seconds())
 				continue
 			}
 		}
 
 		// Start() returned nil - should not happen normally
-		slog.Warn("sprinkler client Start() returned nil unexpectedly")
-		return nil
+		// Reset backoff and try again
+		slog.Warn("sprinkler client Start() returned nil unexpectedly, restarting")
+		consecutiveErrors = 0
+		retryDelay = 5 * time.Second
+		continue
 	}
 }

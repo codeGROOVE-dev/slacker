@@ -43,6 +43,12 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Run the server and handle exit code
+	os.Exit(run(ctx, cancel, cfg))
+}
+
+func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfig) int {
+
 	// Handle graceful shutdown.
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -51,8 +57,9 @@ func main() {
 		slog.Info("received shutdown signal, gracefully stopping")
 		cancel()
 
-		// Force exit after 5 seconds if graceful shutdown doesn't complete
-		time.Sleep(5 * time.Second)
+		// Force exit after 30 seconds if graceful shutdown doesn't complete.
+		// This allows time for in-flight GitHub API calls to finish.
+		time.Sleep(30 * time.Second)
 		slog.Error("graceful shutdown timeout, forcing exit")
 		os.Exit(1)
 	}()
@@ -78,7 +85,7 @@ func main() {
 	if err != nil {
 		slog.Error("failed to initialize GitHub installation manager", "error", err)
 		cancel() // Ensure cleanup happens before exit
-		return   // Let main return naturally instead of os.Exit
+		return 1
 	}
 
 	// Initialize Slack client.
@@ -133,7 +140,11 @@ func main() {
 
 	// Start bot coordinators for each GitHub installation.
 	eg.Go(func() error {
-		return runBotCoordinators(ctx, slackClient, githubManager, stateManager, configManager, notifier, cfg.SprinklerURL)
+		err := runBotCoordinators(ctx, slackClient, githubManager, stateManager, configManager, notifier, cfg.SprinklerURL)
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return err
 	})
 
 	// Start notification scheduler.
@@ -141,19 +152,25 @@ func main() {
 		slog.Debug("starting notifier goroutine")
 		err := notifier.Run(ctx)
 		slog.Debug("notifier goroutine ended", "error", err)
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
 		return err
 	})
 
 	// Wait for all services.
 	slog.Debug("waiting for all services to complete")
-	if err := eg.Wait(); err != nil {
+	if err := eg.Wait(); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("server error", "error", err)
+		return 1
 	}
 	slog.Info("server stopped")
+	return 0
 }
 
 // runBotCoordinators manages bot coordinators for all GitHub installations.
-// It spawns one coordinator per org and refreshes the list every 15 minutes.
+// It spawns one coordinator per org and refreshes the list every 5 minutes.
+// Failed coordinators are automatically restarted every minute.
 func runBotCoordinators(
 	ctx context.Context,
 	slackClient *slack.Client,
@@ -164,6 +181,7 @@ func runBotCoordinators(
 	sprinklerURL string,
 ) error {
 	activeCoordinators := make(map[string]context.CancelFunc)
+	failedCoordinators := make(map[string]time.Time) // Track when coordinators failed
 	var mu sync.Mutex
 
 	// startCoordinators creates coordinators for all orgs that don't already have one,
@@ -201,6 +219,10 @@ func runBotCoordinators(
 			githubClient, exists := githubManager.ClientForOrg(org)
 			if !exists {
 				slog.Warn("no GitHub client for org", "org", org)
+				// Mark as failed so we retry later
+				mu.Lock()
+				failedCoordinators[org] = time.Now()
+				mu.Unlock()
 				continue
 			}
 
@@ -234,6 +256,9 @@ func runBotCoordinators(
 			orgCtx, cancel := context.WithCancel(ctx)
 			activeCoordinators[org] = cancel
 
+			// Clear from failed list since we're starting it
+			delete(failedCoordinators, org)
+
 			go func(org string, coord *bot.Coordinator) {
 				slog.Info("starting coordinator for org",
 					"org", org,
@@ -241,6 +266,10 @@ func runBotCoordinators(
 					"sprinkler_url", sprinklerURL)
 				if err := coord.RunWithSprinklerClient(orgCtx); err != nil && !errors.Is(err, context.Canceled) {
 					slog.Error("coordinator error", "org", org, "error", err)
+					// Mark as failed so we retry
+					mu.Lock()
+					failedCoordinators[org] = time.Now()
+					mu.Unlock()
 				}
 				slog.Info("coordinator stopped", "org", org)
 
@@ -256,8 +285,12 @@ func runBotCoordinators(
 	startCoordinators()
 
 	// Refresh installations every 5 minutes
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
+	installationTicker := time.NewTicker(5 * time.Minute)
+	defer installationTicker.Stop()
+
+	// Retry failed coordinators every minute
+	retryTicker := time.NewTicker(1 * time.Minute)
+	defer retryTicker.Stop()
 
 	for {
 		select {
@@ -270,11 +303,39 @@ func runBotCoordinators(
 			}
 			mu.Unlock()
 			return ctx.Err()
-		case <-ticker.C:
+
+		case <-retryTicker.C:
+			mu.Lock()
+			failedCount := len(failedCoordinators)
+			if failedCount > 0 {
+				slog.Info("retrying failed coordinators",
+					"failed_count", failedCount,
+					"active_coordinators", len(activeCoordinators))
+
+				// Refresh installations to get latest GitHub clients
+				mu.Unlock()
+				if err := githubManager.RefreshInstallations(ctx); err != nil {
+					if !errors.Is(err, context.Canceled) {
+						slog.Error("failed to refresh installations during retry", "error", err)
+					}
+					continue
+				}
+
+				// Try to start failed coordinators
+				startCoordinators()
+				slog.Info("retry attempt complete",
+					"active_coordinators", len(activeCoordinators))
+			} else {
+				mu.Unlock()
+			}
+
+		case <-installationTicker.C:
 			slog.Info("refreshing GitHub installations",
 				"active_coordinators", len(activeCoordinators))
 			if err := githubManager.RefreshInstallations(ctx); err != nil {
-				slog.Error("failed to refresh installations", "error", err)
+				if !errors.Is(err, context.Canceled) {
+					slog.Error("failed to refresh installations", "error", err)
+				}
 				continue
 			}
 			startCoordinators()
