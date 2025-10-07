@@ -18,18 +18,6 @@ const (
 	githubURLMinParts = 7
 )
 
-// getMapKeys returns the keys of a map[string]any for logging purposes.
-func getMapKeys(m map[string]any) []string {
-	if m == nil {
-		return nil
-	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
 // RunWithSprinklerClient runs the bot using the official sprinkler client library.
 func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 	slog.Info("starting bot coordinator with sprinkler client")
@@ -84,12 +72,19 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 					"timestamp", event.Timestamp)
 
 				// Log the sprinkler event data for debugging
+				var rawKeys []string
+				if event.Raw != nil {
+					rawKeys = make([]string, 0, len(event.Raw))
+					for k := range event.Raw {
+						rawKeys = append(rawKeys, k)
+					}
+				}
 				slog.Debug("sprinkler event metadata",
 					"organization", organization,
 					"type", event.Type,
 					"url", event.URL,
 					"timestamp", event.Timestamp,
-					"raw_keys", getMapKeys(event.Raw))
+					"raw_keys", rawKeys)
 
 				// Sprinkler only provides metadata - extract PR number from URL
 				if event.URL == "" {
@@ -214,11 +209,11 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 
 		// Check if context was cancelled even without error
 		// (this handles the case where Start() returns nil on clean shutdown)
-		if ctx.Err() != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
 			slog.Info("context cancelled, stopping sprinkler client",
 				"organization", organization,
-				"context_error", ctx.Err())
-			return nil
+				"context_error", ctxErr)
+			return ctxErr
 		}
 
 		// Handle different error types
@@ -319,10 +314,10 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 
 		// Start() returned nil without error - this can happen on graceful disconnect
 		// Check if context is still active before treating this as unexpected
-		if ctx.Err() != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
 			slog.Info("sprinkler client stopped cleanly due to context cancellation",
 				"organization", organization)
-			return nil
+			return ctxErr
 		}
 
 		// Unexpected clean return - log details and restart with minimal delay

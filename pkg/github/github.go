@@ -608,17 +608,17 @@ func (c *Client) InstallationToken(ctx context.Context) string {
 			slog.Error("failed to refresh GitHub token", "error", err)
 			// Return old token as fallback (might still work for a bit)
 			c.tokenMutex.RLock()
-			token := c.installationToken
+			fallbackToken := c.installationToken
 			c.tokenMutex.RUnlock()
-			return token
+			return fallbackToken
 		}
 
 		c.tokenMutex.RLock()
-		token := c.installationToken
+		refreshedToken := c.installationToken
 		c.tokenMutex.RUnlock()
 		slog.Info("GitHub token refreshed successfully",
-			"new_token_prefix", token[:min(10, len(token))]+"...")
-		return token
+			"new_token_prefix", refreshedToken[:min(10, len(refreshedToken))]+"...")
+		return refreshedToken
 	}
 
 	// Another goroutine refreshed while we were waiting for the lock

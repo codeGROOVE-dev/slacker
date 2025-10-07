@@ -43,13 +43,6 @@ type ThreadInfo struct {
 	LastState string `json:"last_state"`
 }
 
-// NewThreadCache creates a new thread cache.
-func NewThreadCache() *ThreadCache {
-	return &ThreadCache{
-		prThreads: make(map[string]ThreadInfo),
-	}
-}
-
 // Get retrieves thread info for a PR.
 func (tc *ThreadCache) Get(prKey string) (ThreadInfo, bool) {
 	tc.mu.RLock()
@@ -63,17 +56,6 @@ func (tc *ThreadCache) Set(prKey string, info ThreadInfo) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	tc.prThreads[prKey] = info
-}
-
-// Update modifies thread info for a PR.
-func (tc *ThreadCache) Update(prKey string, updateFn func(*ThreadInfo) bool) {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	if info, exists := tc.prThreads[prKey]; exists {
-		if updateFn(&info) {
-			tc.prThreads[prKey] = info
-		}
-	}
 }
 
 // Coordinator coordinates between GitHub, Slack, and notifications for a single org.
@@ -107,7 +89,9 @@ func New(
 		notifier:      notifier,
 		userMapper:    usermapping.New(slackClient.API(), githubClient.InstallationToken(ctx)),
 		sprinklerURL:  sprinklerURL,
-		threadCache:   NewThreadCache(),
+		threadCache: &ThreadCache{
+			prThreads: make(map[string]ThreadInfo),
+		},
 	}
 
 	// Set GitHub client in config manager for this org.
@@ -130,26 +114,6 @@ func New(
 	}
 
 	return c
-}
-
-// getChannelDisplayInfo returns both channel ID and name for logging purposes.
-func (c *Coordinator) getChannelDisplayInfo(ctx context.Context, channelName string) (channelID, displayName string) {
-	channelID = c.slack.ResolveChannelID(ctx, channelName)
-
-	// For display purposes, show both name and ID
-	switch {
-	case channelID != channelName:
-		// Successfully resolved - show name and ID
-		displayName = fmt.Sprintf("#%s (%s)", channelName, channelID)
-	case channelName != "" && channelName[0] == 'C':
-		// Already an ID - try to get the name for display
-		displayName = channelID
-	default:
-		// Couldn't resolve - just show the name
-		displayName = fmt.Sprintf("#%s (unresolved)", channelName)
-	}
-
-	return channelID, displayName
 }
 
 // findOrCreatePRThread finds an existing thread or creates a new one for a PR.
@@ -593,8 +557,8 @@ func (c *Coordinator) formatNextActions(ctx context.Context, checkResult *turn.C
 }
 
 // getPrefixForState returns the emoji prefix for a given PR state.
-func (*Coordinator) getPrefixForState(state string) string {
-	switch state {
+func (*Coordinator) getPrefixForState(prState string) string {
+	switch prState {
 	case "tests_running":
 		return ":test_tube:" // Tests running/pending
 	case "tests_broken":
@@ -615,8 +579,8 @@ func (*Coordinator) getPrefixForState(state string) string {
 }
 
 // getStateQueryParam returns the URL query parameter suffix for a given PR state.
-func (*Coordinator) getStateQueryParam(state string) string {
-	switch state {
+func (*Coordinator) getStateQueryParam(prState string) string {
+	switch prState {
 	case "tests_running":
 		return "?st=tests_running"
 	case "tests_broken":
@@ -688,12 +652,10 @@ func (c *Coordinator) processChannelsInParallel(ctx context.Context, owner, repo
 	wg.Add(len(validChannels))
 
 	for _, channelName := range validChannels {
-		// Capture loop variable to avoid closure bug
-		channelName := channelName
-		go func() {
+		go func(ch string) {
 			defer wg.Done()
-			c.processPRForChannel(ctx, owner, repo, prNumber, prState, event, channelName, workspaceID, checkResult)
-		}()
+			c.processPRForChannel(ctx, owner, repo, prNumber, prState, event, ch, workspaceID, checkResult)
+		}(channelName)
 	}
 
 	// Wait for all channels to complete
@@ -717,8 +679,19 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 	} `json:"pull_request"`
 }, channelName, workspaceID string, checkResult *turn.CheckResponse,
 ) {
-	// Resolve channel name to ID for API calls and get display info
-	channelID, channelDisplay := c.getChannelDisplayInfo(ctx, channelName)
+	// Resolve channel name to ID for API calls
+	channelID := c.slack.ResolveChannelID(ctx, channelName)
+
+	// For display purposes, show both name and ID
+	var channelDisplay string
+	switch {
+	case channelID != channelName:
+		channelDisplay = fmt.Sprintf("#%s (%s)", channelName, channelID)
+	case channelName != "" && channelName[0] == 'C':
+		channelDisplay = channelID
+	default:
+		channelDisplay = fmt.Sprintf("#%s (unresolved)", channelName)
+	}
 
 	slog.Info("processing PR for individual channel",
 		"workspace", c.workspaceName,
