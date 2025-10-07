@@ -562,12 +562,35 @@ func (*Coordinator) extractBlockedUsersFromTurnclient(checkResult *turn.CheckRes
 	return blockedUsers
 }
 
-// extractReviewersFromTurnclient extracts requested reviewers from turnclient response.
-func (*Coordinator) extractReviewersFromTurnclient(checkResult *turn.CheckResponse) []string {
-	if checkResult == nil {
-		return nil
+// formatNextActions formats NextAction map into a compact string like "fix tests: user1, user2; review: user3".
+// It groups users by action kind and formats each action as "action_name: user1, user2".
+// Multiple actions are separated by semicolons.
+func (c *Coordinator) formatNextActions(ctx context.Context, checkResult *turn.CheckResponse, owner, domain string) string {
+	if checkResult == nil || len(checkResult.Analysis.NextAction) == 0 {
+		return ""
 	}
-	return checkResult.PullRequest.RequestedReviewers
+
+	// Group users by action kind
+	actionGroups := make(map[string][]string)
+	for user, action := range checkResult.Analysis.NextAction {
+		actionKind := string(action.Kind)
+		actionGroups[actionKind] = append(actionGroups[actionKind], user)
+	}
+
+	// Format each action group
+	var parts []string
+	for actionKind, users := range actionGroups {
+		// Convert snake_case to space-separated words
+		actionName := strings.ReplaceAll(actionKind, "_", " ")
+
+		// Format user mentions
+		userMentions := c.userMapper.FormatUserMentions(ctx, users, owner, domain)
+
+		parts = append(parts, fmt.Sprintf("%s: %s", actionName, userMentions))
+	}
+
+	// Use semicolons to separate different actions (commas are used between users)
+	return strings.Join(parts, "; ")
 }
 
 // getPrefixForState returns the emoji prefix for a given PR state.
@@ -760,22 +783,20 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 		// Rebuild the message text with new prefix
 		newPrefix := c.getPrefixForState(prState)
 		domain := c.configManager.Domain(owner)
-		authorMention := c.userMapper.FormatUserMention(ctx, event.PullRequest.User.Login, owner, domain)
-		reviewers := c.extractReviewersFromTurnclient(checkResult)
 		urlWithState := event.PullRequest.HTMLURL + c.getStateQueryParam(prState)
 
-		newText := fmt.Sprintf("%s %s • <%s|%s#%d> by %s",
+		newText := fmt.Sprintf("%s %s <%s|%s#%d> · %s",
 			newPrefix,
 			event.PullRequest.Title,
 			urlWithState,
 			repo,
 			prNumber,
-			authorMention,
+			event.PullRequest.User.Login,
 		)
 
-		if len(reviewers) > 0 {
-			reviewerMentions := c.userMapper.FormatUserMentions(ctx, reviewers, owner, domain)
-			newText += fmt.Sprintf(" — reviewers: %s", reviewerMentions)
+		nextActions := c.formatNextActions(ctx, checkResult, owner, domain)
+		if nextActions != "" {
+			newText += fmt.Sprintf(" → %s", nextActions)
 		}
 
 		if err := c.slack.UpdateMessage(ctx, channelID, threadTS, newText); err != nil {
@@ -949,29 +970,23 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 	prefix := c.getPrefixForState(prState)
 	domain := c.configManager.Domain(owner)
 
-	// Get Slack handle for PR author
-	authorMention := c.userMapper.FormatUserMention(ctx, pr.User.Login, owner, domain)
-
-	// Get reviewers from turnclient data
-	reviewers := c.extractReviewersFromTurnclient(checkResult)
-
 	// Add state query param to URL for debugging
 	urlWithState := pr.HTMLURL + c.getStateQueryParam(prState)
 
-	// Format message with author and reviewers
-	text := fmt.Sprintf("%s %s • <%s|%s#%d> by %s",
+	// Format message: :emoji: Title repo#123 · author → action (user1, user2)
+	text := fmt.Sprintf("%s %s <%s|%s#%d> · %s",
 		prefix,
 		pr.Title,
 		urlWithState,
 		repo,
 		number,
-		authorMention,
+		pr.User.Login,
 	)
 
-	// Add reviewers if we have any
-	if len(reviewers) > 0 {
-		reviewerMentions := c.userMapper.FormatUserMentions(ctx, reviewers, owner, domain)
-		text += fmt.Sprintf(" — reviewers: %s", reviewerMentions)
+	// Add next actions if we have any
+	nextActions := c.formatNextActions(ctx, checkResult, owner, domain)
+	if nextActions != "" {
+		text += fmt.Sprintf(" → %s", nextActions)
 	}
 
 	// Resolve channel name to ID for consistent API calls
@@ -997,45 +1012,4 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 		"thread_ts", threadTS)
 
 	return threadTS, nil
-}
-
-// formatThreadTitle creates the thread title for a PR consistently.
-func (c *Coordinator) formatThreadTitle(ctx context.Context, owner, repo string, number int, pr struct {
-	Number  int    `json:"number"`
-	HTMLURL string `json:"html_url"`
-	Title   string `json:"title"`
-	User    struct {
-		Login string `json:"login"`
-	} `json:"user"`
-}, checkResult *turn.CheckResponse,
-) (string, error) {
-	// Get prefix for this org.
-	prefix := c.configManager.Prefix(owner)
-
-	// Get domain for user mapping
-	domain := c.configManager.Domain(owner)
-
-	// Get Slack handle for PR author
-	authorMention := c.userMapper.FormatUserMention(ctx, pr.User.Login, owner, domain)
-
-	// Get reviewers from turnclient data
-	reviewers := c.extractReviewersFromTurnclient(checkResult)
-
-	// Format message with author and reviewers
-	text := fmt.Sprintf("%s %s • <%s|%s#%d> by %s",
-		prefix,
-		pr.Title,
-		pr.HTMLURL,
-		repo,
-		number,
-		authorMention,
-	)
-
-	// Add reviewers if we have any
-	if len(reviewers) > 0 {
-		reviewerMentions := c.userMapper.FormatUserMentions(ctx, reviewers, owner, domain)
-		text += fmt.Sprintf(" — reviewers: %s", reviewerMentions)
-	}
-
-	return text, nil
 }
