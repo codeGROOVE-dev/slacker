@@ -714,7 +714,12 @@ func (m *Manager) RefreshInstallations(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Start with existing clients to preserve valid ones if refresh fails
 	newClients := make(map[string]*Client)
+	for org, client := range m.clients {
+		newClients[org] = client
+	}
+
 	for _, inst := range installations {
 		if inst.Account == nil || inst.Account.Login == nil {
 			slog.Warn("installation missing account information",
@@ -731,11 +736,31 @@ func (m *Manager) RefreshInstallations(ctx context.Context) error {
 			installationID: inst.GetID(),
 		}
 
-		if err := gc.authenticate(ctx); err != nil {
-			slog.Error("failed to authenticate installation",
-				"org", org,
-				"installation_id", inst.GetID(),
-				"error", err)
+		// Use a timeout context for each org authentication to ensure
+		// shutdown doesn't block on hung API calls and to prevent
+		// one slow org from blocking others.
+		authCtx, authCancel := context.WithTimeout(ctx, 15*time.Second)
+		err := gc.authenticate(authCtx)
+		authCancel()
+
+		if err != nil {
+			// Skip this org but continue with others.
+			// Preserve existing client if we have one.
+			if errors.Is(err, context.Canceled) {
+				slog.Info("authentication canceled during shutdown",
+					"org", org,
+					"installation_id", inst.GetID())
+			} else {
+				slog.Error("failed to authenticate installation",
+					"org", org,
+					"installation_id", inst.GetID(),
+					"error", err)
+			}
+			// Keep existing client if we have one
+			if _, hasExisting := m.clients[org]; hasExisting {
+				slog.Info("preserving existing client after auth failure",
+					"org", org)
+			}
 			continue
 		}
 
@@ -744,6 +769,20 @@ func (m *Manager) RefreshInstallations(ctx context.Context) error {
 			"org", org,
 			"installation_id", inst.GetID(),
 			"account_type", inst.Account.GetType())
+	}
+
+	// Only remove clients for orgs that are no longer in the installation list
+	discoveredOrgs := make(map[string]bool)
+	for _, inst := range installations {
+		if inst.Account != nil && inst.Account.Login != nil {
+			discoveredOrgs[inst.Account.GetLogin()] = true
+		}
+	}
+	for org := range m.clients {
+		if !discoveredOrgs[org] {
+			slog.Info("removing client for uninstalled org", "org", org)
+			delete(newClients, org)
+		}
 	}
 
 	// Replace old clients with new ones.
