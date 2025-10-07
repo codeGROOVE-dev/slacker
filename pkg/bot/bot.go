@@ -593,14 +593,6 @@ func (c *Coordinator) formatNextActions(ctx context.Context, checkResult *turn.C
 	return strings.Join(parts, "; ")
 }
 
-// extractReviewersFromTurnclient extracts requested reviewers from turnclient response.
-func (*Coordinator) extractReviewersFromTurnclient(checkResult *turn.CheckResponse) []string {
-	if checkResult == nil {
-		return nil
-	}
-	return checkResult.PullRequest.RequestedReviewers
-}
-
 // getPrefixForState returns the emoji prefix for a given PR state.
 func (*Coordinator) getPrefixForState(state string) string {
 	switch state {
@@ -1020,39 +1012,4 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 		"thread_ts", threadTS)
 
 	return threadTS, nil
-}
-
-// formatThreadTitle creates the thread title for a PR consistently.
-func (c *Coordinator) formatThreadTitle(ctx context.Context, owner, repo string, number int, pr struct {
-	Number  int    `json:"number"`
-	HTMLURL string `json:"html_url"`
-	Title   string `json:"title"`
-	User    struct {
-		Login string `json:"login"`
-	} `json:"user"`
-}, checkResult *turn.CheckResponse,
-) (string, error) {
-	// Get prefix for this org.
-	prefix := c.configManager.Prefix(owner)
-
-	// Get domain for user mapping
-	domain := c.configManager.Domain(owner)
-
-	// Format message: :emoji: Title repo#123 · author → action (user1, user2)
-	text := fmt.Sprintf("%s %s <%s|%s#%d> · %s",
-		prefix,
-		pr.Title,
-		pr.HTMLURL,
-		repo,
-		number,
-		pr.User.Login,
-	)
-
-	// Add next actions if we have any
-	nextActions := c.formatNextActions(ctx, checkResult, owner, domain)
-	if nextActions != "" {
-		text += fmt.Sprintf(" → %s", nextActions)
-	}
-
-	return text, nil
 }
