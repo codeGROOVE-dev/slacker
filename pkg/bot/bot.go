@@ -15,10 +15,8 @@ import (
 	"github.com/codeGROOVE-dev/slacker/pkg/github"
 	"github.com/codeGROOVE-dev/slacker/pkg/notify"
 	slackpkg "github.com/codeGROOVE-dev/slacker/pkg/slack"
-	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
-	"golang.org/x/sync/errgroup"
 )
 
 // Common logging constants.
@@ -44,13 +42,6 @@ type ThreadInfo struct {
 	LastState string `json:"last_state"`
 }
 
-// NewThreadCache creates a new thread cache.
-func NewThreadCache() *ThreadCache {
-	return &ThreadCache{
-		prThreads: make(map[string]ThreadInfo),
-	}
-}
-
 // Get retrieves thread info for a PR.
 func (tc *ThreadCache) Get(prKey string) (ThreadInfo, bool) {
 	tc.mu.RLock()
@@ -66,22 +57,10 @@ func (tc *ThreadCache) Set(prKey string, info ThreadInfo) {
 	tc.prThreads[prKey] = info
 }
 
-// Update modifies thread info for a PR.
-func (tc *ThreadCache) Update(prKey string, updateFn func(*ThreadInfo) bool) {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	if info, exists := tc.prThreads[prKey]; exists {
-		if updateFn(&info) {
-			tc.prThreads[prKey] = info
-		}
-	}
-}
-
 // Coordinator coordinates between GitHub, Slack, and notifications for a single org.
 type Coordinator struct {
 	slack         *slackpkg.Client
 	github        *github.Client
-	stateManager  *state.Manager
 	configManager *config.Manager
 	notifier      *notify.Manager
 	userMapper    *usermapping.Service
@@ -95,7 +74,6 @@ func New(
 	ctx context.Context,
 	slackClient *slackpkg.Client,
 	githubClient *github.Client,
-	stateManager *state.Manager,
 	configManager *config.Manager,
 	notifier *notify.Manager,
 	sprinklerURL string,
@@ -103,12 +81,13 @@ func New(
 	c := &Coordinator{
 		slack:         slackClient,
 		github:        githubClient,
-		stateManager:  stateManager,
 		configManager: configManager,
 		notifier:      notifier,
 		userMapper:    usermapping.New(slackClient.API(), githubClient.InstallationToken(ctx)),
 		sprinklerURL:  sprinklerURL,
-		threadCache:   NewThreadCache(),
+		threadCache: &ThreadCache{
+			prThreads: make(map[string]ThreadInfo),
+		},
 	}
 
 	// Set GitHub client in config manager for this org.
@@ -131,26 +110,6 @@ func New(
 	}
 
 	return c
-}
-
-// getChannelDisplayInfo returns both channel ID and name for logging purposes.
-func (c *Coordinator) getChannelDisplayInfo(ctx context.Context, channelName string) (channelID, displayName string) {
-	channelID = c.slack.ResolveChannelID(ctx, channelName)
-
-	// For display purposes, show both name and ID
-	switch {
-	case channelID != channelName:
-		// Successfully resolved - show name and ID
-		displayName = fmt.Sprintf("#%s (%s)", channelName, channelID)
-	case channelName != "" && channelName[0] == 'C':
-		// Already an ID - try to get the name for display
-		displayName = channelID
-	default:
-		// Couldn't resolve - just show the name
-		displayName = fmt.Sprintf("#%s (unresolved)", channelName)
-	}
-
-	return channelID, displayName
 }
 
 // findOrCreatePRThread finds an existing thread or creates a new one for a PR.
@@ -417,13 +376,15 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 		"action", event.Action)
 
 	// Load workspace and organization configuration
-	workspaceID := "default"
 	if err := c.configManager.LoadConfig(ctx, owner); err != nil {
 		slog.Error("failed to load config for org",
 			"org", owner,
 			"error", err)
 		return
 	}
+
+	// Get workspace name from config for proper multi-workspace support
+	workspaceID := c.configManager.WorkspaceName(owner)
 
 	// Get channels for this PR
 	channels := c.configManager.ChannelsForRepo(owner, repo)
@@ -453,20 +414,6 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 		"state", prState,
 		"blocked_on_users", len(blockedOn),
 		"blocked_on", blockedOn)
-
-	// Update or create PR state
-	prStateObj := &state.PRState{
-		Owner:       owner,
-		Repo:        repo,
-		Number:      prNumber,
-		Title:       event.PullRequest.Title,
-		Author:      event.PullRequest.User.Login,
-		State:       prState,
-		BlockedOn:   blockedOn,
-		LastUpdated: time.Now(),
-	}
-
-	c.stateManager.SetPRState(workspaceID, prStateObj)
 
 	// Process channels in parallel for better performance
 	c.processChannelsInParallel(ctx, owner, repo, prNumber, prState, event, channels, workspaceID, checkResult)
@@ -594,8 +541,8 @@ func (c *Coordinator) formatNextActions(ctx context.Context, checkResult *turn.C
 }
 
 // getPrefixForState returns the emoji prefix for a given PR state.
-func (*Coordinator) getPrefixForState(state string) string {
-	switch state {
+func (*Coordinator) getPrefixForState(prState string) string {
+	switch prState {
 	case "tests_running":
 		return ":test_tube:" // Tests running/pending
 	case "tests_broken":
@@ -616,8 +563,8 @@ func (*Coordinator) getPrefixForState(state string) string {
 }
 
 // getStateQueryParam returns the URL query parameter suffix for a given PR state.
-func (*Coordinator) getStateQueryParam(state string) string {
-	switch state {
+func (*Coordinator) getStateQueryParam(prState string) string {
+	switch prState {
 	case "tests_running":
 		return "?st=tests_running"
 	case "tests_broken":
@@ -684,19 +631,22 @@ func (c *Coordinator) processChannelsInParallel(ctx context.Context, owner, repo
 		"filtered_out", len(channels)-len(validChannels))
 
 	// Process channels in parallel for better performance
-	g, gCtx := errgroup.WithContext(ctx)
+	// Use WaitGroup instead of errgroup since we don't want one failure to cancel others
+	var wg sync.WaitGroup
+	wg.Add(len(validChannels))
 
 	for _, channelName := range validChannels {
-		g.Go(func() error {
-			c.processPRForChannel(gCtx, owner, repo, prNumber, prState, event, channelName, workspaceID, checkResult)
-			return nil // Don't fail the entire group if one channel fails
-		})
+		go func(ch string) {
+			defer wg.Done()
+			c.processPRForChannel(ctx, owner, repo, prNumber, prState, event, ch, workspaceID, checkResult)
+		}(channelName)
 	}
 
 	// Wait for all channels to complete
-	if err := g.Wait(); err != nil {
-		slog.Error("error in parallel channel processing", "error", err)
-	}
+	wg.Wait()
+	slog.Debug("completed parallel channel processing",
+		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+		"channels_processed", len(validChannels))
 }
 
 // processPRForChannel handles PR processing for a single channel (extracted from the main loop).
@@ -713,8 +663,19 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 	} `json:"pull_request"`
 }, channelName, workspaceID string, checkResult *turn.CheckResponse,
 ) {
-	// Resolve channel name to ID for API calls and get display info
-	channelID, channelDisplay := c.getChannelDisplayInfo(ctx, channelName)
+	// Resolve channel name to ID for API calls
+	channelID := c.slack.ResolveChannelID(ctx, channelName)
+
+	// For display purposes, show both name and ID
+	var channelDisplay string
+	switch {
+	case channelID != channelName:
+		channelDisplay = fmt.Sprintf("#%s (%s)", channelName, channelID)
+	case channelName != "" && channelName[0] == 'C':
+		channelDisplay = channelID
+	default:
+		channelDisplay = fmt.Sprintf("#%s (unresolved)", channelName)
+	}
 
 	slog.Info("processing PR for individual channel",
 		"workspace", c.workspaceName,
@@ -759,15 +720,8 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 		return
 	}
 
-	// Update PR state to use the first successful thread (for backwards compatibility)
-	pr, exists := c.stateManager.PRState(workspaceID, owner, repo, prNumber)
-	if exists && pr != nil && pr.ThreadTS == "" {
-		pr.ThreadTS = threadTS
-		pr.ChannelID = channelID
-	}
-
 	// Track that we notified users in this channel for DM delay logic
-	c.stateManager.UpdateChannelNotification(workspaceID, owner, repo, prNumber)
+	c.notifier.Tracker.UpdateChannelNotification(workspaceID, owner, repo, prNumber)
 
 	// Update message prefix if state changed
 	if !wasNewlyCreated && oldState != "" && oldState != prState {
@@ -882,8 +836,12 @@ func (c *Coordinator) handlePullRequestFromSprinkler(
 		logFieldOwner, owner)
 
 	// Use the turnclient to check the PR - this gives us rich PR state analysis
+	// Add timeout to prevent hanging on slow API calls
+	checkCtx, checkCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer checkCancel()
+
 	prURL := fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, prNumber)
-	checkResult, err := turnClient.Check(ctx, prURL, botUsername, eventTimestamp)
+	checkResult, err := turnClient.Check(checkCtx, prURL, botUsername, eventTimestamp)
 	if err != nil {
 		slog.Error("failed to check PR with turnclient",
 			logFieldOwner, owner,
@@ -891,7 +849,8 @@ func (c *Coordinator) handlePullRequestFromSprinkler(
 			"pr_number", prNumber,
 			"pr_url", prURL,
 			"bot_username", botUsername,
-			"error", err)
+			"error", err,
+			"timeout_seconds", 30)
 		return
 	}
 

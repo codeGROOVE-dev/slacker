@@ -61,8 +61,8 @@ func (c *apiCache) set(key string, value any, ttl time.Duration) {
 
 // get retrieves a value from the cache if not expired.
 func (c *apiCache) get(key string) (any, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	entry, exists := c.entries[key]
 	if !exists || time.Now().After(entry.expiresAt) {
 		c.misses++
@@ -124,7 +124,27 @@ func (c *Client) GetWorkspaceInfo(ctx context.Context) (*slack.TeamInfo, error) 
 
 	// Fetch from API
 	slog.Debug("fetching team info from Slack API")
-	teamInfo, err := c.api.GetTeamInfoContext(ctx)
+	var teamInfo *slack.TeamInfo
+	err := retry.Do(
+		func() error {
+			var err error
+			teamInfo, err = c.api.GetTeamInfoContext(ctx)
+			if err != nil {
+				if isRateLimitError(err) {
+					return err // Retry
+				}
+				return retry.Unrecoverable(err) // Don't retry auth errors etc.
+			}
+			return nil
+		},
+		retry.Attempts(5),
+		retry.Delay(2*time.Second),
+		retry.MaxDelay(2*time.Minute),
+		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
+		retry.LastErrorOnly(true),
+		retry.Context(ctx),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get team info: %w", err)
 	}
@@ -883,7 +903,28 @@ func (c *Client) PublishHomeView(userID string, blocks []slack.Block) error {
 
 // SearchMessages searches for messages using the Slack API.
 func (c *Client) SearchMessages(ctx context.Context, query string, params *slack.SearchParameters) (*slack.SearchMessages, error) {
-	return c.api.SearchMessagesContext(ctx, query, *params)
+	var result *slack.SearchMessages
+	err := retry.Do(
+		func() error {
+			var err error
+			result, err = c.api.SearchMessagesContext(ctx, query, *params)
+			if err != nil {
+				if isRateLimitError(err) {
+					return err // Retry
+				}
+				return retry.Unrecoverable(err)
+			}
+			return nil
+		},
+		retry.Attempts(5),
+		retry.Delay(2*time.Second),
+		retry.MaxDelay(2*time.Minute),
+		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
+		retry.LastErrorOnly(true),
+		retry.Context(ctx),
+	)
+	return result, err
 }
 
 // API returns the underlying Slack API client.
@@ -902,7 +943,30 @@ func (c *Client) GetChannelHistory(
 		Latest:    latest,
 	}
 
-	result, err := c.api.GetConversationHistoryContext(ctx, params)
+	var result *slack.GetConversationHistoryResponse
+	err := retry.Do(
+		func() error {
+			var err error
+			result, err = c.api.GetConversationHistoryContext(ctx, params)
+			if err != nil {
+				if isRateLimitError(err) {
+					return err // Retry
+				}
+				if strings.Contains(err.Error(), "channel_not_found") {
+					return retry.Unrecoverable(err)
+				}
+				return err // Retry other errors
+			}
+			return nil
+		},
+		retry.Attempts(5),
+		retry.Delay(2*time.Second),
+		retry.MaxDelay(2*time.Minute),
+		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
+		retry.LastErrorOnly(true),
+		retry.Context(ctx),
+	)
 	if err != nil {
 		slog.Debug("GetChannelHistory failed with detailed error info",
 			"error", err,
@@ -933,7 +997,27 @@ func (c *Client) GetBotInfo(ctx context.Context) (*slack.AuthTestResponse, error
 
 	// Fetch from API
 	slog.Debug("fetching bot auth info from Slack API")
-	authTest, err := c.api.AuthTestContext(ctx)
+	var authTest *slack.AuthTestResponse
+	err := retry.Do(
+		func() error {
+			var err error
+			authTest, err = c.api.AuthTestContext(ctx)
+			if err != nil {
+				if isRateLimitError(err) {
+					return err // Retry
+				}
+				return retry.Unrecoverable(err) // Don't retry auth errors
+			}
+			return nil
+		},
+		retry.Attempts(5),
+		retry.Delay(2*time.Second),
+		retry.MaxDelay(2*time.Minute),
+		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
+		retry.LastErrorOnly(true),
+		retry.Context(ctx),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -978,10 +1062,31 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 	slog.Debug("channel not in cache, fetching from Slack API", "channel", channelName)
 
 	// Try to find the channel - first try public and private channels
-	channels, cursor, err := c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
-		Types: []string{"public_channel", "private_channel"},
-		Limit: 200,
-	})
+	var channels []slack.Channel
+	var cursor string
+	err := retry.Do(
+		func() error {
+			var err error
+			channels, cursor, err = c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
+				Types: []string{"public_channel", "private_channel"},
+				Limit: 200,
+			})
+			if err != nil {
+				if isRateLimitError(err) {
+					return err // Retry
+				}
+				return retry.Unrecoverable(err) // Don't retry permission errors
+			}
+			return nil
+		},
+		retry.Attempts(5),
+		retry.Delay(2*time.Second),
+		retry.MaxDelay(2*time.Minute),
+		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
+		retry.LastErrorOnly(true),
+		retry.Context(ctx),
+	)
 	if err != nil {
 		slog.Warn("failed to get public+private conversations, trying public only",
 			"error", err,
@@ -989,10 +1094,29 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 			"channel", channelName)
 
 		// Fallback: try public channels only (might not have private channel permissions)
-		channels, cursor, err = c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
-			Types: []string{"public_channel"},
-			Limit: 200,
-		})
+		err = retry.Do(
+			func() error {
+				var err error
+				channels, cursor, err = c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
+					Types: []string{"public_channel"},
+					Limit: 200,
+				})
+				if err != nil {
+					if isRateLimitError(err) {
+						return err // Retry
+					}
+					return retry.Unrecoverable(err)
+				}
+				return nil
+			},
+			retry.Attempts(5),
+			retry.Delay(2*time.Second),
+			retry.MaxDelay(2*time.Minute),
+			retry.DelayType(retry.BackOffDelay),
+			retry.MaxJitter(time.Second),
+			retry.LastErrorOnly(true),
+			retry.Context(ctx),
+		)
 		if err != nil {
 			slog.Error("failed to get conversations for channel resolution",
 				"error", err,
@@ -1020,11 +1144,30 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 
 	// If we have more pages, search them too
 	for cursor != "" {
-		channels, cursor, err = c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
-			Types:  []string{"public_channel", "private_channel"},
-			Limit:  200,
-			Cursor: cursor,
-		})
+		err = retry.Do(
+			func() error {
+				var err error
+				channels, cursor, err = c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
+					Types:  []string{"public_channel", "private_channel"},
+					Limit:  200,
+					Cursor: cursor,
+				})
+				if err != nil {
+					if isRateLimitError(err) {
+						return err // Retry
+					}
+					return retry.Unrecoverable(err)
+				}
+				return nil
+			},
+			retry.Attempts(5),
+			retry.Delay(2*time.Second),
+			retry.MaxDelay(2*time.Minute),
+			retry.DelayType(retry.BackOffDelay),
+			retry.MaxJitter(time.Second),
+			retry.LastErrorOnly(true),
+			retry.Context(ctx),
+		)
 		if err != nil {
 			slog.Warn("failed to get additional conversations for channel resolution", "error", err)
 			break
@@ -1074,10 +1217,34 @@ func (c *Client) IsBotInChannel(ctx context.Context, channelID string) bool {
 	}
 
 	// Get channel members
-	members, _, err := c.api.GetUsersInConversationContext(ctx, &slack.GetUsersInConversationParameters{
-		ChannelID: channelID,
-		Limit:     200,
-	})
+	var members []string
+	err = retry.Do(
+		func() error {
+			var err error
+			members, _, err = c.api.GetUsersInConversationContext(ctx, &slack.GetUsersInConversationParameters{
+				ChannelID: channelID,
+				Limit:     200,
+			})
+			if err != nil {
+				if isRateLimitError(err) {
+					return err // Retry
+				}
+				// Don't retry channel_not_found or not_in_channel - these are user errors
+				if strings.Contains(err.Error(), "channel_not_found") || strings.Contains(err.Error(), "not_in_channel") {
+					return retry.Unrecoverable(err)
+				}
+				return err // Retry other errors
+			}
+			return nil
+		},
+		retry.Attempts(5),
+		retry.Delay(2*time.Second),
+		retry.MaxDelay(2*time.Minute),
+		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
+		retry.LastErrorOnly(true),
+		retry.Context(ctx),
+	)
 	if err != nil {
 		// Check if it's a channel not found error
 		if strings.Contains(err.Error(), "channel_not_found") {

@@ -20,7 +20,6 @@ import (
 	"github.com/codeGROOVE-dev/slacker/pkg/github"
 	"github.com/codeGROOVE-dev/slacker/pkg/notify"
 	"github.com/codeGROOVE-dev/slacker/pkg/slack"
-	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
 	"github.com/gorilla/mux"
 	"golang.org/x/sync/errgroup"
@@ -33,6 +32,13 @@ const (
 )
 
 func main() {
+	// Configure logging with source locations for better debugging
+	logHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		AddSource: true,
+		Level:     slog.LevelInfo,
+	})
+	slog.SetDefault(slog.New(logHandler))
+
 	// Load configuration from environment.
 	cfg, err := loadConfig()
 	if err != nil {
@@ -53,15 +59,11 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigChan
-		slog.Info("received shutdown signal, gracefully stopping")
+		sig := <-sigChan
+		slog.Info("received shutdown signal, starting graceful stop",
+			"signal", sig.String(),
+			"signal_number", sig)
 		cancel()
-
-		// Force exit after 30 seconds if graceful shutdown doesn't complete.
-		// This allows time for in-flight GitHub API calls to finish.
-		time.Sleep(30 * time.Second)
-		slog.Error("graceful shutdown timeout, forcing exit")
-		panic("shutdown timeout exceeded")
 	}()
 
 	// Log configuration without secrets.
@@ -69,13 +71,9 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 		"data_dir", cfg.DataDir,
 		"sprinkler_url", cfg.SprinklerURL,
 		"github_app_id", cfg.GitHubAppID,
-		"has_slack_token", cfg.SlackToken != "",
 		"has_slack_signing_secret", cfg.SlackSigningSecret != "",
 		"has_github_private_key", cfg.GitHubPrivateKey != "",
 		"startup_message", "Starting Slacker server...")
-
-	// Initialize state manager with file persistence.
-	stateManager := state.New(cfg.DataDir)
 
 	// Initialize config manager for repo configs.
 	configManager := config.New(ctx)
@@ -88,11 +86,15 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 		return 1
 	}
 
-	// Initialize Slack client.
-	slackClient := slack.New(cfg.SlackToken, cfg.SlackSigningSecret)
+	// Initialize Slack manager for multi-workspace support.
+	// Tokens are fetched from GSM based on team_id from org configs.
+	slackManager := slack.NewManager(cfg.SlackSigningSecret)
 
-	// Initialize notification manager.
-	notifier := notify.New(slackClient, stateManager, configManager)
+	// Initialize notification manager for multi-workspace notifications.
+	notifier := notify.New(slackManager, configManager)
+
+	// Initialize event router for multi-workspace event handling.
+	eventRouter := slack.NewEventRouter(slackManager)
 
 	// Setup HTTP routes with security middleware.
 	router := mux.NewRouter()
@@ -102,10 +104,10 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	router.HandleFunc("/health", healthHandler).Methods("GET")
 	router.HandleFunc("/healthz", makeHealthzHandler(githubManager)).Methods("GET")
 
-	// Slack endpoints
-	router.HandleFunc("/slack/events", slackClient.EventsHandler).Methods("POST")
-	router.HandleFunc("/slack/interactions", slackClient.InteractionsHandler).Methods("POST")
-	router.HandleFunc("/slack/slash", slackClient.SlashCommandHandler).Methods("POST")
+	// Slack endpoints - routed to workspace-specific clients
+	router.HandleFunc("/slack/events", eventRouter.HandleEvents).Methods("POST")
+	router.HandleFunc("/slack/interactions", eventRouter.HandleInteractions).Methods("POST")
+	router.HandleFunc("/slack/slash", eventRouter.HandleSlashCommand).Methods("POST")
 
 	// Determine port.
 	port := os.Getenv("PORT")
@@ -147,7 +149,7 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	// This runs indefinitely and handles its own retries - should never return an error
 	// unless the context is cancelled (clean shutdown).
 	eg.Go(func() error {
-		if err := runBotCoordinators(ctx, slackClient, githubManager, stateManager, configManager, notifier, cfg.SprinklerURL); err != nil {
+		if err := runBotCoordinators(ctx, slackManager, githubManager, configManager, notifier, cfg.SprinklerURL); err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil
 			}
@@ -175,6 +177,7 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 		slog.Error("server error", "error", err)
 		return 1
 	}
+
 	slog.Info("server stopped")
 	return 0
 }
@@ -184,9 +187,8 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 // Failed coordinators are automatically restarted every minute.
 func runBotCoordinators(
 	ctx context.Context,
-	slackClient *slack.Client,
+	slackManager *slack.Manager,
 	githubManager *github.Manager,
-	stateManager *state.Manager,
 	configManager *config.Manager,
 	notifier *notify.Manager,
 	sprinklerURL string,
@@ -230,10 +232,8 @@ func runBotCoordinators(
 			githubClient, exists := githubManager.ClientForOrg(org)
 			if !exists {
 				slog.Warn("no GitHub client for org", "org", org)
-				// Mark as failed so we retry later
-				mu.Lock()
+				// Mark as failed so we retry later (already holding mu)
 				failedCoordinators[org] = time.Now()
-				mu.Unlock()
 				continue
 			}
 
@@ -247,33 +247,47 @@ func runBotCoordinators(
 			}
 
 			cfg, exists := configManager.Config(org)
-			if !exists || cfg.Global.Slack == "" {
+			if !exists || cfg.Global.TeamID == "" {
 				slog.Debug("skipping org without Slack configuration", "org", org)
 				continue
 			}
 
-			// Create coordinator for this org
-			coordinator := bot.New(
-				ctx,
-				slackClient,
-				githubClient,
-				stateManager,
-				configManager,
-				notifier,
-				sprinklerURL,
-			)
+			// Get team_id from config
+			teamID := cfg.Global.TeamID
 
-			// Start coordinator in goroutine
+			// Get Slack client for this workspace
+			slackClient, err := slackManager.GetClient(ctx, teamID)
+			if err != nil {
+				slog.Error("failed to get Slack client for workspace",
+					"org", org,
+					"team_id", teamID,
+					"error", err)
+				// Mark as failed so we retry later (already holding mu)
+				failedCoordinators[org] = time.Now()
+				continue
+			}
+
+			// Start coordinator in goroutine with org-specific context
 			orgCtx, cancel := context.WithCancel(ctx)
 			activeCoordinators[org] = cancel
 
 			// Clear from failed list since we're starting it
 			delete(failedCoordinators, org)
 
-			go func(org string, coord *bot.Coordinator) {
+			// Create coordinator for this org with org-specific context
+			coordinator := bot.New(
+				orgCtx,
+				slackClient,
+				githubClient,
+				configManager,
+				notifier,
+				sprinklerURL,
+			)
+
+			go func(org, teamID string, coord *bot.Coordinator, orgCtx context.Context) {
 				slog.Info("starting coordinator for org",
 					"org", org,
-					"workspace", cfg.Global.Slack,
+					"team_id", teamID,
 					"sprinkler_url", sprinklerURL)
 
 				err := coord.RunWithSprinklerClient(orgCtx)
@@ -306,7 +320,7 @@ func runBotCoordinators(
 				mu.Lock()
 				delete(activeCoordinators, org)
 				mu.Unlock()
-			}(org, coordinator)
+			}(org, teamID, coordinator, orgCtx)
 		}
 	}
 
@@ -371,13 +385,13 @@ func runBotCoordinators(
 		case <-retryTicker.C:
 			mu.Lock()
 			failedCount := len(failedCoordinators)
+			mu.Unlock()
+
 			if failedCount > 0 {
 				slog.Info("retrying failed coordinators",
-					"failed_count", failedCount,
-					"active_coordinators", len(activeCoordinators))
+					"failed_count", failedCount)
 
 				// Refresh installations to get latest GitHub clients
-				mu.Unlock()
 				if err := githubManager.RefreshInstallations(ctx); err != nil {
 					if !errors.Is(err, context.Canceled) {
 						slog.Error("failed to refresh installations during retry", "error", err)
@@ -387,24 +401,38 @@ func runBotCoordinators(
 
 				// Try to start failed coordinators
 				startCoordinators()
-				slog.Info("retry attempt complete",
-					"active_coordinators", len(activeCoordinators))
-			} else {
+
+				mu.Lock()
+				activeCount := len(activeCoordinators)
 				mu.Unlock()
+
+				slog.Info("retry attempt complete",
+					"active_coordinators", activeCount)
 			}
 
 		case <-installationTicker.C:
+			mu.Lock()
+			activeCount := len(activeCoordinators)
+			mu.Unlock()
+
 			slog.Info("refreshing GitHub installations",
-				"active_coordinators", len(activeCoordinators))
+				"active_coordinators", activeCount)
+
 			if err := githubManager.RefreshInstallations(ctx); err != nil {
 				if !errors.Is(err, context.Canceled) {
 					slog.Error("failed to refresh installations", "error", err)
 				}
 				continue
 			}
+
 			startCoordinators()
+
+			mu.Lock()
+			newActiveCount := len(activeCoordinators)
+			mu.Unlock()
+
 			slog.Info("refresh complete",
-				"active_coordinators", len(activeCoordinators))
+				"active_coordinators", newActiveCount)
 		}
 	}
 }
@@ -426,7 +454,7 @@ func loadConfig() (*config.ServerConfig, error) {
 		// Try Secret Manager using gsm library
 		slog.Info("attempting to fetch secret from Secret Manager",
 			"name", name)
-		value, err := gsm.Secret(ctx, name)
+		value, err := gsm.Fetch(ctx, name)
 		if err != nil {
 			slog.Error("failed to fetch secret from Secret Manager",
 				"name", name,
@@ -470,7 +498,6 @@ func loadConfig() (*config.ServerConfig, error) {
 
 	cfg := &config.ServerConfig{
 		DataDir:            dataDir,
-		SlackToken:         getSecretValue("SLACK_BOT_TOKEN"),
 		SlackSigningSecret: getSecretValue("SLACK_SIGNING_SECRET"),
 		GitHubAppID:        os.Getenv("GITHUB_APP_ID"), // Not a secret, just config
 		GitHubPrivateKey:   githubPrivateKey,
@@ -478,15 +505,11 @@ func loadConfig() (*config.ServerConfig, error) {
 	}
 
 	slog.Info("configuration loaded",
-		"has_slack_token", cfg.SlackToken != "",
 		"has_slack_signing_secret", cfg.SlackSigningSecret != "",
 		"has_github_app_id", cfg.GitHubAppID != "",
 		"has_github_private_key", cfg.GitHubPrivateKey != "")
 
 	// Validate required fields
-	if cfg.SlackToken == "" {
-		return nil, errors.New("missing required configuration: SLACK_BOT_TOKEN (env var or secret)")
-	}
 	if cfg.SlackSigningSecret == "" {
 		return nil, errors.New("missing required configuration: SLACK_SIGNING_SECRET (env var or secret)")
 	}
