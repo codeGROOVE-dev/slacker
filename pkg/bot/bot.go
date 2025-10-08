@@ -15,7 +15,6 @@ import (
 	"github.com/codeGROOVE-dev/slacker/pkg/github"
 	"github.com/codeGROOVE-dev/slacker/pkg/notify"
 	slackpkg "github.com/codeGROOVE-dev/slacker/pkg/slack"
-	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
@@ -62,7 +61,6 @@ func (tc *ThreadCache) Set(prKey string, info ThreadInfo) {
 type Coordinator struct {
 	slack         *slackpkg.Client
 	github        *github.Client
-	stateManager  *state.Manager
 	configManager *config.Manager
 	notifier      *notify.Manager
 	userMapper    *usermapping.Service
@@ -76,7 +74,6 @@ func New(
 	ctx context.Context,
 	slackClient *slackpkg.Client,
 	githubClient *github.Client,
-	stateManager *state.Manager,
 	configManager *config.Manager,
 	notifier *notify.Manager,
 	sprinklerURL string,
@@ -84,7 +81,6 @@ func New(
 	c := &Coordinator{
 		slack:         slackClient,
 		github:        githubClient,
-		stateManager:  stateManager,
 		configManager: configManager,
 		notifier:      notifier,
 		userMapper:    usermapping.New(slackClient.API(), githubClient.InstallationToken(ctx)),
@@ -380,13 +376,15 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 		"action", event.Action)
 
 	// Load workspace and organization configuration
-	workspaceID := "default"
 	if err := c.configManager.LoadConfig(ctx, owner); err != nil {
 		slog.Error("failed to load config for org",
 			"org", owner,
 			"error", err)
 		return
 	}
+
+	// Get workspace name from config for proper multi-workspace support
+	workspaceID := c.configManager.WorkspaceName(owner)
 
 	// Get channels for this PR
 	channels := c.configManager.ChannelsForRepo(owner, repo)
@@ -416,20 +414,6 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 		"state", prState,
 		"blocked_on_users", len(blockedOn),
 		"blocked_on", blockedOn)
-
-	// Update or create PR state
-	prStateObj := &state.PRState{
-		Owner:       owner,
-		Repo:        repo,
-		Number:      prNumber,
-		Title:       event.PullRequest.Title,
-		Author:      event.PullRequest.User.Login,
-		State:       prState,
-		BlockedOn:   blockedOn,
-		LastUpdated: time.Now(),
-	}
-
-	c.stateManager.SetPRState(workspaceID, prStateObj)
 
 	// Process channels in parallel for better performance
 	c.processChannelsInParallel(ctx, owner, repo, prNumber, prState, event, channels, workspaceID, checkResult)
@@ -736,17 +720,8 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 		return
 	}
 
-	// Update PR state to use the first successful thread (for backwards compatibility)
-	pr, exists := c.stateManager.PRState(workspaceID, owner, repo, prNumber)
-	if exists && pr != nil && pr.ThreadTS == "" {
-		// Must call SetPRState to properly save the update
-		pr.ThreadTS = threadTS
-		pr.ChannelID = channelID
-		c.stateManager.SetPRState(workspaceID, pr)
-	}
-
 	// Track that we notified users in this channel for DM delay logic
-	c.stateManager.UpdateChannelNotification(workspaceID, owner, repo, prNumber)
+	c.notifier.Tracker.UpdateChannelNotification(workspaceID, owner, repo, prNumber)
 
 	// Update message prefix if state changed
 	if !wasNewlyCreated && oldState != "" && oldState != prState {

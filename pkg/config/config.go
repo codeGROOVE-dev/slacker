@@ -23,7 +23,6 @@ const (
 // ServerConfig holds the server configuration from environment variables.
 type ServerConfig struct {
 	DataDir            string
-	SlackToken         string
 	SlackSigningSecret string
 	GitHubAppID        string
 	GitHubPrivateKey   string
@@ -37,13 +36,10 @@ type RepoConfig struct {
 		Mute  bool     `yaml:"mute"`
 	} `yaml:"channels"`
 	Global struct {
-		Prefix                 string `yaml:"prefix"`
-		Slack                  string `yaml:"slack"`
-		Domain                 string `yaml:"domain"`
-		ChannelNotifyDelayMins int    `yaml:"channel_notify_delay_mins"`
-		DailyReminders         bool   `yaml:"daily_reminders"`
-	} `yaml:"global"` // Default: 60
-	// Default: true
+		TeamID       string `yaml:"team_id"`
+		EmailDomain  string `yaml:"email_domain"`
+		DailyReminders bool   `yaml:"daily_reminders"`
+	} `yaml:"global"`
 }
 
 // configCacheEntry represents a cached configuration entry.
@@ -59,14 +55,6 @@ type configCache struct {
 	mu      sync.RWMutex
 	hits    int64
 	misses  int64
-}
-
-// newConfigCache creates a new configuration cache with specified TTL.
-func newConfigCache(ttl time.Duration) *configCache {
-	return &configCache{
-		entries: make(map[string]configCacheEntry),
-		ttl:     ttl,
-	}
 }
 
 // get retrieves a cached configuration if it exists and is not expired.
@@ -139,7 +127,10 @@ func New(ctx context.Context) *Manager {
 	return &Manager{
 		configs: make(map[string]*RepoConfig),
 		clients: make(map[string]*github.Client),
-		cache:   newConfigCache(20 * time.Minute), // 20-minute TTL as requested
+		cache: &configCache{
+			entries: make(map[string]configCacheEntry),
+			ttl:     20 * time.Minute,
+		},
 	}
 }
 
@@ -263,17 +254,13 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 		// Use default empty config if not found
 		defaultConfig := &RepoConfig{
 			Global: struct {
-				Prefix                 string `yaml:"prefix"`
-				Slack                  string `yaml:"slack"`
-				Domain                 string `yaml:"domain"`
-				ChannelNotifyDelayMins int    `yaml:"channel_notify_delay_mins"`
-				DailyReminders         bool   `yaml:"daily_reminders"`
+				TeamID       string `yaml:"team_id"`
+				EmailDomain  string `yaml:"email_domain"`
+				DailyReminders bool   `yaml:"daily_reminders"`
 			}{
-				Prefix:                 ":postal_horn:",
-				Slack:                  "",
-				Domain:                 "",
-				ChannelNotifyDelayMins: 60,
-				DailyReminders:         true,
+				TeamID:       "",
+				EmailDomain:  "",
+				DailyReminders: true,
 			},
 			Channels: make(map[string]struct {
 				Repos []string `yaml:"repos"`
@@ -288,8 +275,6 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 			logFieldOrg, org,
 			"reason", "config_load_failed",
 			"error", err,
-			"default_prefix", ":postal_horn:",
-			"default_delay_mins", 60,
 			"default_daily_reminders", true,
 			"cached", true,
 			"cache_hits", hits,
@@ -306,17 +291,13 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 	if err := yaml.Unmarshal([]byte(configContent), &config); err != nil {
 		defaultConfig := &RepoConfig{
 			Global: struct {
-				Prefix                 string `yaml:"prefix"`
-				Slack                  string `yaml:"slack"`
-				Domain                 string `yaml:"domain"`
-				ChannelNotifyDelayMins int    `yaml:"channel_notify_delay_mins"`
-				DailyReminders         bool   `yaml:"daily_reminders"`
+				TeamID       string `yaml:"team_id"`
+				EmailDomain  string `yaml:"email_domain"`
+				DailyReminders bool   `yaml:"daily_reminders"`
 			}{
-				Prefix:                 ":postal_horn:",
-				Slack:                  "",
-				Domain:                 "",
-				ChannelNotifyDelayMins: 60,
-				DailyReminders:         true,
+				TeamID:       "",
+				EmailDomain:  "",
+				DailyReminders: true,
 			},
 			Channels: make(map[string]struct {
 				Repos []string `yaml:"repos"`
@@ -342,96 +323,8 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 		logFieldOrg, org,
 		"parsed_channels", len(config.Channels),
 		"has_global_config", true,
-		"workspace_specified", config.Global.Slack != "")
-
-	// Validate workspace name matches if specified
-	if config.Global.Slack != "" && m.workspaceName != "" {
-		slog.Debug("validating workspace name",
-			logFieldOrg, org,
-			"config_workspace", config.Global.Slack,
-			"actual_workspace", m.workspaceName,
-			"validation_enabled", true)
-
-		if config.Global.Slack != m.workspaceName {
-			// Return empty config for workspace mismatch
-			emptyConfig := &RepoConfig{
-				Global: struct {
-					Prefix                 string `yaml:"prefix"`
-					Slack                  string `yaml:"slack"`
-					Domain                 string `yaml:"domain"`
-					ChannelNotifyDelayMins int    `yaml:"channel_notify_delay_mins"`
-					DailyReminders         bool   `yaml:"daily_reminders"`
-				}{
-					Prefix:                 ":postal_horn:",
-					Slack:                  "",
-					Domain:                 "",
-					ChannelNotifyDelayMins: 60,
-					DailyReminders:         true,
-				},
-				Channels: make(map[string]struct {
-					Repos []string `yaml:"repos"`
-					Mute  bool     `yaml:"mute"`
-				}),
-			}
-			m.configs[org] = emptyConfig
-			m.cache.set(org, emptyConfig)
-
-			hits, misses := m.cache.stats()
-			slog.Warn("workspace mismatch - config is for different Slack workspace",
-				logFieldOrg, org,
-				"config_workspace", config.Global.Slack,
-				"actual_workspace", m.workspaceName,
-				"action", "skipping_config",
-				"will_use_empty_config", true,
-				"notifications_will_be_disabled", true,
-				"cached", true,
-				"cache_hits", hits,
-				"cache_misses", misses)
-			return nil
-		}
-
-		slog.Info("workspace validation successful",
-			logFieldOrg, org,
-			"workspace", m.workspaceName,
-			"config_valid_for_workspace", true)
-	} else {
-		if config.Global.Slack == "" {
-			slog.Info("no workspace validation required - config has no workspace specified",
-				logFieldOrg, org,
-				"will_accept_any_workspace", true)
-		} else {
-			slog.Warn("workspace validation disabled - no actual workspace name available",
-				logFieldOrg, org,
-				"config_workspace", config.Global.Slack,
-				"validation_skipped", true)
-		}
-	}
-
-	// Set defaults and validate configuration
-	originalPrefix := config.Global.Prefix
-	originalDelay := config.Global.ChannelNotifyDelayMins
-	originalReminders := config.Global.DailyReminders
-
-	if config.Global.Prefix == "" {
-		config.Global.Prefix = ":postal_horn:"
-	}
-	if config.Global.ChannelNotifyDelayMins == 0 {
-		config.Global.ChannelNotifyDelayMins = 60
-	}
-	if !config.Global.DailyReminders {
-		config.Global.DailyReminders = true // YAML defaults to false for bool
-	}
-
-	defaultsApplied := []string{}
-	if originalPrefix == "" {
-		defaultsApplied = append(defaultsApplied, "prefix")
-	}
-	if originalDelay == 0 {
-		defaultsApplied = append(defaultsApplied, "delay_mins")
-	}
-	if !originalReminders {
-		defaultsApplied = append(defaultsApplied, "daily_reminders")
-	}
+		"team_id", config.Global.TeamID,
+		"email_domain", config.Global.EmailDomain)
 
 	// Count channel configurations
 	mutedChannels := 0
@@ -473,15 +366,13 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 	slog.Info("configuration successfully loaded and validated",
 		logFieldOrg, org,
 		"final_config", map[string]any{
-			"prefix":                    config.Global.Prefix,
-			"slack_workspace":           config.Global.Slack,
-			"channel_notify_delay_mins": config.Global.ChannelNotifyDelayMins,
-			"daily_reminders":           config.Global.DailyReminders,
-			"total_channels":            len(config.Channels),
-			"muted_channels":            mutedChannels,
-			"wildcard_channels":         wildcardChannels,
-			"total_repo_mappings":       totalRepos,
-			"defaults_applied":          defaultsApplied,
+			"team_id":             config.Global.TeamID,
+			"email_domain":        config.Global.EmailDomain,
+			"daily_reminders":     config.Global.DailyReminders,
+			"total_channels":      len(config.Channels),
+			"muted_channels":      mutedChannels,
+			"wildcard_channels":   wildcardChannels,
+			"total_repo_mappings": totalRepos,
 		},
 		"cached", true,
 		"cache_hits", hits,
@@ -619,17 +510,6 @@ func (*Manager) autoDiscoverChannels(org, repo string) []string {
 	return []string{channelName}
 }
 
-// Prefix returns the prefix for messages in an org.
-func (m *Manager) Prefix(org string) string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	config, exists := m.configs[org]
-	if !exists || config.Global.Prefix == "" {
-		return ":postal_horn:"
-	}
-	return config.Global.Prefix
-}
 
 // Domain returns the email domain for GitHub-to-Slack user mapping for the given organization.
 func (m *Manager) Domain(org string) string {
@@ -640,7 +520,7 @@ func (m *Manager) Domain(org string) string {
 	if !exists {
 		return ""
 	}
-	return config.Global.Domain
+	return config.Global.EmailDomain
 }
 
 // IsChannelMuted checks if a specific channel is muted for an org.
@@ -659,17 +539,6 @@ func (m *Manager) IsChannelMuted(org, channel string) bool {
 	return false
 }
 
-// ChannelNotifyDelayMins returns the notification delay in minutes for an org.
-func (m *Manager) ChannelNotifyDelayMins(org string) int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	config, exists := m.configs[org]
-	if !exists {
-		return 60 // Default
-	}
-	return config.Global.ChannelNotifyDelayMins
-}
 
 // DailyRemindersEnabled returns whether daily reminders are enabled for an org.
 func (m *Manager) DailyRemindersEnabled(org string) bool {
@@ -706,4 +575,17 @@ func (m *Manager) InvalidateAllConfigs() {
 // CacheStats returns cache hit and miss statistics for monitoring performance.
 func (m *Manager) CacheStats() (hits, misses int64) {
 	return m.cache.stats()
+}
+
+// WorkspaceName returns the Slack workspace team_id for an organization.
+// Returns empty string if no workspace is configured.
+func (m *Manager) WorkspaceName(org string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	config, exists := m.configs[org]
+	if !exists {
+		return ""
+	}
+	return config.Global.TeamID
 }

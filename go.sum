@@ -6,6 +6,8 @@ github.com/codeGROOVE-dev/gh-mailto v0.0.0-20250910154406-84dc83d8f666 h1:BxnWBL
 github.com/codeGROOVE-dev/gh-mailto v0.0.0-20250910154406-84dc83d8f666/go.mod h1:4Hr2ySB8dcpeZqZq/7UbXdEJ/5RK9coYGHvW90ZfieE=
 github.com/codeGROOVE-dev/gsm v0.0.0-20251006212002-b898800f0bbb h1:wFVF6xrohWXYCbozb0RBjdnD4E6n+AWyndXumTVdQUg=
 github.com/codeGROOVE-dev/gsm v0.0.0-20251006212002-b898800f0bbb/go.mod h1:KV+w19ubP32PxZPE1hOtlCpTaNpF0Bpb32w5djO8UTg=
+github.com/codeGROOVE-dev/gsm v0.0.0-20251007153111-74e7bbe21f47 h1:stZnLJroJ2aLVQ9Zgu4TdxuKax0cSb7CBVWmbVrI18A=
+github.com/codeGROOVE-dev/gsm v0.0.0-20251007153111-74e7bbe21f47/go.mod h1:KV+w19ubP32PxZPE1hOtlCpTaNpF0Bpb32w5djO8UTg=
 github.com/codeGROOVE-dev/prx v0.0.0-20251001143458-17e6b58fb46c h1:/rrjFoqwFqKNzc1f14vQt6QJ9U5tQ4Uh6U8hgixkSqw=
 github.com/codeGROOVE-dev/prx v0.0.0-20251001143458-17e6b58fb46c/go.mod h1:7qLbi18baOyS8yO/6/64SBIqtyzSzLFdsDST15NPH3w=
 github.com/codeGROOVE-dev/retry v1.2.0 h1:xYpYPX2PQZmdHwuiQAGGzsBm392xIMl4nfMEFApQnu8=
@@ -14,6 +16,8 @@ github.com/codeGROOVE-dev/sprinkler v0.0.0-20251006230512-cc6accef7f7a h1:RNG9GG
 github.com/codeGROOVE-dev/sprinkler v0.0.0-20251006230512-cc6accef7f7a/go.mod h1:RZ/Te7HkY5upHQlnmf3kV4GHVM0R8AK3U+yPItCZAoQ=
 github.com/codeGROOVE-dev/sprinkler v0.0.0-20251007014926-7fed60b70e75 h1:I+gBQZoB2QCiV++lNOxUNMiNvyfeyhN7oy89U/hTjtw=
 github.com/codeGROOVE-dev/sprinkler v0.0.0-20251007014926-7fed60b70e75/go.mod h1:RZ/Te7HkY5upHQlnmf3kV4GHVM0R8AK3U+yPItCZAoQ=
+github.com/codeGROOVE-dev/sprinkler v0.0.0-20251007124424-61c4773962eb h1:fuS/zfHeI5ZlpNjsYwRAAtF4uHuaGzjYzgjyxsQFgbM=
+github.com/codeGROOVE-dev/sprinkler v0.0.0-20251007124424-61c4773962eb/go.mod h1:RZ/Te7HkY5upHQlnmf3kV4GHVM0R8AK3U+yPItCZAoQ=
 github.com/codeGROOVE-dev/turnclient v0.0.0-20251001194229-2aaea2e63cc7 h1:iRWrlJusl5FiEC1sCiPoW8IFei5bebAIornGtQFUHbc=
 github.com/codeGROOVE-dev/turnclient v0.0.0-20251001194229-2aaea2e63cc7/go.mod h1:Rt0k+aoZ13TvXKl9n2AeBabWIXZ/xIvurdwFTgyNk0w=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=

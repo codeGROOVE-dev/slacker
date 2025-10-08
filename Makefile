@@ -1,11 +1,18 @@
-.PHONY: all build test clean fmt vet run-server deploy
+.PHONY: all build build-server build-registrar test clean fmt vet run-server run-registrar deploy
 
 # Default target
 all: fmt vet lint test build
 
+# Build all binaries
+build: build-server build-registrar
+
 # Build the server binary
-build:
+build-server:
 	go build -v -o bin/slacker ./cmd/server
+
+# Build the slack-registrar binary
+build-registrar:
+	go build -v -o bin/slack-registrar ./cmd/slack-registrar
 
 # Run tests with race detection
 test:
@@ -26,8 +33,12 @@ clean:
 	go clean -cache
 
 # Run the server
-run-server: build
+run-server: build-server
 	./bin/slacker
+
+# Run the registrar
+run-registrar: build-registrar
+	./bin/slack-registrar
 
 # Deploy the server
 deploy:

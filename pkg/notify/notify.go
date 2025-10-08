@@ -8,28 +8,29 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/slacker/pkg/slack"
-	"github.com/codeGROOVE-dev/slacker/pkg/state"
 )
 
-// Manager handles user notifications.
+// Manager handles user notifications across multiple workspaces.
 type Manager struct {
-	slack         *slack.Client
-	stateManager  *state.Manager
+	slackManager  *slack.Manager
+	Tracker       *NotificationTracker
 	configManager interface {
-		ChannelNotifyDelayMins(org string) int
 		DailyRemindersEnabled(org string) bool
 	}
 }
 
 // New creates a new notification manager.
-func New(slackClient *slack.Client, stateManager *state.Manager, configManager interface {
-	ChannelNotifyDelayMins(org string) int
+func New(slackManager *slack.Manager, configManager interface {
 	DailyRemindersEnabled(org string) bool
 },
 ) *Manager {
 	return &Manager{
-		slack:         slackClient,
-		stateManager:  stateManager,
+		slackManager: slackManager,
+		Tracker: &NotificationTracker{
+			lastDM:                  make(map[string]time.Time),
+			lastDaily:               make(map[string]time.Time),
+			lastChannelNotification: make(map[string]time.Time),
+		},
 		configManager: configManager,
 	}
 }
@@ -57,8 +58,19 @@ func (*Manager) Run(ctx context.Context) error {
 	}
 }
 
+// PRInfo contains the minimal information needed to notify about a PR.
+type PRInfo struct {
+	Owner   string
+	Repo    string
+	Number  int
+	Title   string
+	Author  string
+	State   string
+	HTMLURL string
+}
+
 // NotifyUser sends a smart notification to a user about a PR using the configured logic.
-func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID string, pr *state.PRState) error {
+func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID string, pr PRInfo) error {
 	slog.Info("evaluating notification for user",
 		"user", userID,
 		"workspace", workspaceID,
@@ -66,70 +78,25 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 		"repo", pr.Repo,
 		"pr_number", pr.Number,
 		"pr_state", pr.State,
-		"channel", channelID,
-		"blocked_on", pr.BlockedOn)
+		"channel", channelID)
 
-	notificationState := m.stateManager.GetNotificationState(workspaceID, userID)
-	delayMins := m.configManager.ChannelNotifyDelayMins(pr.Owner)
-
-	slog.Debug("notification state and config",
-		"user", userID,
-		"last_dm", notificationState.LastDMNotification,
-		"last_daily", notificationState.LastDailyReminder,
-		"delay_config_mins", delayMins,
-		"pr_last_channel_notification", pr.LastChannelNotification)
-
-	// Smart logic: If we've already tagged user in a public channel they are in,
-	// don't send DM until it's been an hour since channel notification and
-	// they haven't reacted or participated in the thread or updated the PR.
-	if !pr.LastChannelNotification.IsZero() && channelID != "" {
-		// User was notified in a channel - apply delay logic
-		timeSinceChannelNotification := time.Since(pr.LastChannelNotification)
-		delayDuration := time.Duration(delayMins) * time.Minute
-
-		slog.Info("applying channel notification delay logic",
-			"user", userID,
-			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
-			"time_since_channel_notification", timeSinceChannelNotification,
-			"configured_delay", delayDuration,
-			"will_delay", timeSinceChannelNotification < delayDuration)
-
-		if timeSinceChannelNotification < delayDuration {
-			slog.Info("skipping DM - user recently notified in channel, applying delay",
-				"user", userID,
-				"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
-				"channel", channelID,
-				"time_since_channel", timeSinceChannelNotification,
-				"delay_remaining", delayDuration-timeSinceChannelNotification)
-			return nil
-		}
-
-		slog.Info("channel notification delay period expired, proceeding with DM",
-			"user", userID,
-			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
-			"time_since_channel", timeSinceChannelNotification,
-			"delay_duration", delayDuration)
-
-		// TODO: Check if user has reacted or participated in thread
-		// TODO: Check if PR has been updated
-		// For now, proceed with notification after delay
-	} else {
-		if pr.LastChannelNotification.IsZero() {
-			slog.Info("no prior channel notification found, sending immediate DM",
-				"user", userID,
-				"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
-				"reason", "user_not_notified_in_channel")
-		} else {
-			slog.Info("user not in notification channel, sending immediate DM",
-				"user", userID,
-				"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
-				"channel", channelID,
-				"reason", "user_not_in_channel")
-		}
+	// Get the Slack client for this workspace
+	slackClient, err := m.slackManager.GetClient(ctx, workspaceID)
+	if err != nil {
+		slog.Error("failed to get Slack client for workspace",
+			"workspace", workspaceID,
+			"error", err)
+		return fmt.Errorf("failed to get Slack client: %w", err)
 	}
 
+	lastDM := m.Tracker.LastDMNotification(workspaceID, userID)
+
+	slog.Debug("notification state",
+		"user", userID,
+		"last_dm", lastDM)
+
 	// Check if user is active on Slack.
-	isActive := m.slack.IsUserActive(ctx, userID)
+	isActive := slackClient.IsUserActive(ctx, userID)
 	slog.Debug("checking user activity status",
 		"user", userID,
 		"is_active", isActive)
@@ -143,7 +110,7 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 	}
 
 	// Avoid spamming - don't send DM if we recently sent one
-	timeSinceLastDM := time.Since(notificationState.LastDMNotification)
+	timeSinceLastDM := time.Since(lastDM)
 	antiSpamDelay := 30 * time.Minute
 
 	slog.Debug("checking anti-spam protection",
@@ -195,7 +162,7 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 		"message", message)
 
 	// Send DM to user.
-	if err := m.slack.SendDirectMessage(ctx, userID, message); err != nil {
+	if err := slackClient.SendDirectMessage(ctx, userID, message); err != nil {
 		slog.Error("failed to send DM notification",
 			"user", userID,
 			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
@@ -205,7 +172,7 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 	}
 
 	// Update last DM notification time.
-	m.stateManager.UpdateDMNotification(workspaceID, userID)
+	m.Tracker.UpdateDMNotification(workspaceID, userID)
 
 	slog.Info("successfully sent DM notification",
 		"user", userID,
