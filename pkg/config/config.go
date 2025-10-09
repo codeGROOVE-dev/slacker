@@ -32,13 +32,15 @@ type ServerConfig struct {
 // RepoConfig represents the slack.yaml configuration for a GitHub org.
 type RepoConfig struct {
 	Channels map[string]struct {
-		Repos []string `yaml:"repos"`
-		Mute  bool     `yaml:"mute"`
+		Repos                 []string `yaml:"repos"`
+		Mute                  bool     `yaml:"mute"`
+		ReminderDMDelay *int     `yaml:"reminder_dm_delay"` // Optional: override global delay for this channel (0 = disabled)
 	} `yaml:"channels"`
 	Global struct {
-		TeamID       string `yaml:"team_id"`
-		EmailDomain  string `yaml:"email_domain"`
-		DailyReminders bool   `yaml:"daily_reminders"`
+		TeamID                string `yaml:"team_id"`
+		EmailDomain           string `yaml:"email_domain"`
+		DailyReminders        bool   `yaml:"daily_reminders"`
+		ReminderDMDelay int    `yaml:"reminder_dm_delay"` // Minutes to wait before sending DM if user tagged in channel (0 = disabled)
 	} `yaml:"global"`
 }
 
@@ -254,17 +256,20 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 		// Use default empty config if not found
 		defaultConfig := &RepoConfig{
 			Global: struct {
-				TeamID       string `yaml:"team_id"`
-				EmailDomain  string `yaml:"email_domain"`
-				DailyReminders bool   `yaml:"daily_reminders"`
+				TeamID                string `yaml:"team_id"`
+				EmailDomain           string `yaml:"email_domain"`
+				DailyReminders        bool   `yaml:"daily_reminders"`
+				ReminderDMDelay int    `yaml:"reminder_dm_delay"`
 			}{
-				TeamID:       "",
-				EmailDomain:  "",
-				DailyReminders: true,
+				TeamID:                "",
+				EmailDomain:           "",
+				DailyReminders:        true,
+				ReminderDMDelay: 65, // Default: 65 minutes
 			},
 			Channels: make(map[string]struct {
-				Repos []string `yaml:"repos"`
-				Mute  bool     `yaml:"mute"`
+				Repos                 []string `yaml:"repos"`
+				Mute                  bool     `yaml:"mute"`
+				ReminderDMDelay *int     `yaml:"reminder_dm_delay"` // Optional: override global delay for this channel (0 = disabled)
 			}),
 		}
 		m.configs[org] = defaultConfig
@@ -291,17 +296,20 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 	if err := yaml.Unmarshal([]byte(configContent), &config); err != nil {
 		defaultConfig := &RepoConfig{
 			Global: struct {
-				TeamID       string `yaml:"team_id"`
-				EmailDomain  string `yaml:"email_domain"`
-				DailyReminders bool   `yaml:"daily_reminders"`
+				TeamID                string `yaml:"team_id"`
+				EmailDomain           string `yaml:"email_domain"`
+				DailyReminders        bool   `yaml:"daily_reminders"`
+				ReminderDMDelay int    `yaml:"reminder_dm_delay"`
 			}{
-				TeamID:       "",
-				EmailDomain:  "",
-				DailyReminders: true,
+				TeamID:                "",
+				EmailDomain:           "",
+				DailyReminders:        true,
+				ReminderDMDelay: 65, // Default: 65 minutes
 			},
 			Channels: make(map[string]struct {
-				Repos []string `yaml:"repos"`
-				Mute  bool     `yaml:"mute"`
+				Repos                 []string `yaml:"repos"`
+				Mute                  bool     `yaml:"mute"`
+				ReminderDMDelay *int     `yaml:"reminder_dm_delay"` // Optional: override global delay for this channel (0 = disabled)
 			}),
 		}
 		m.configs[org] = defaultConfig
@@ -510,7 +518,6 @@ func (*Manager) autoDiscoverChannels(org, repo string) []string {
 	return []string{channelName}
 }
 
-
 // Domain returns the email domain for GitHub-to-Slack user mapping for the given organization.
 func (m *Manager) Domain(org string) string {
 	m.mu.RLock()
@@ -539,7 +546,6 @@ func (m *Manager) IsChannelMuted(org, channel string) bool {
 	return false
 }
 
-
 // DailyRemindersEnabled returns whether daily reminders are enabled for an org.
 func (m *Manager) DailyRemindersEnabled(org string) bool {
 	m.mu.RLock()
@@ -550,6 +556,32 @@ func (m *Manager) DailyRemindersEnabled(org string) bool {
 		return true // Default
 	}
 	return config.Global.DailyReminders
+}
+
+// ReminderDMDelay returns the follow-up reminder delay in minutes for a specific channel.
+// Returns the channel-specific delay if set, otherwise the global delay (default: 65 minutes).
+// A value of 0 means the feature is disabled.
+func (m *Manager) ReminderDMDelay(org, channel string) int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	config, exists := m.configs[org]
+	if !exists {
+		return 65 // Default: 65 minutes
+	}
+
+	// Check for channel-specific override
+	if channelConfig, ok := config.Channels[channel]; ok {
+		if channelConfig.ReminderDMDelay != nil {
+			return *channelConfig.ReminderDMDelay
+		}
+	}
+
+	// Return global setting (or default if not set)
+	if config.Global.ReminderDMDelay > 0 {
+		return config.Global.ReminderDMDelay
+	}
+	return 65 // Default: 65 minutes
 }
 
 // ReloadConfig reloads the configuration for an org (e.g., when .codeGROOVE repo is updated).

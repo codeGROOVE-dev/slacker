@@ -100,6 +100,9 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	router := mux.NewRouter()
 	router.Use(securityHeadersMiddleware)
 
+	// Root endpoint - blank
+	router.HandleFunc("/", blankHandler).Methods("GET")
+
 	// Health endpoints
 	router.HandleFunc("/health", healthHandler).Methods("GET")
 	router.HandleFunc("/healthz", makeHealthzHandler(githubManager)).Methods("GET")
@@ -521,6 +524,11 @@ func loadConfig() (*config.ServerConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+func blankHandler(w http.ResponseWriter, _ *http.Request) {
+	// Blank homepage - no content
+	w.WriteHeader(http.StatusOK)
 }
 
 func healthHandler(w http.ResponseWriter, _ *http.Request) {

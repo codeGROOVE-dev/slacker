@@ -1192,6 +1192,74 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 	return channelName // Return original if not found
 }
 
+// IsUserInChannel checks if a specific user is a member of the specified channel.
+func (c *Client) IsUserInChannel(ctx context.Context, channelID, userID string) bool {
+	// Check cache first
+	cacheKey := fmt.Sprintf("user_in_channel_%s_%s", channelID, userID)
+	if cached, found := c.cache.get(cacheKey); found {
+		if isMember, ok := cached.(bool); ok {
+			slog.Debug("using cached user channel membership", "channel_id", channelID, "user_id", userID, "is_member", isMember)
+			return isMember
+		}
+		slog.Warn("cached user channel membership has incorrect type, refreshing")
+		c.cache.invalidate(cacheKey)
+	}
+
+	slog.Debug("user channel membership not cached, checking via API", logFieldChannelID, channelID, "user_id", userID)
+
+	// Get channel members
+	var members []string
+	err := retry.Do(
+		func() error {
+			var err error
+			members, _, err = c.api.GetUsersInConversationContext(ctx, &slack.GetUsersInConversationParameters{
+				ChannelID: channelID,
+				Limit:     200,
+			})
+			if err != nil {
+				if isRateLimitError(err) {
+					return err // Retry
+				}
+				// Don't retry channel_not_found or not_in_channel
+				if strings.Contains(err.Error(), "channel_not_found") || strings.Contains(err.Error(), "not_in_channel") {
+					return retry.Unrecoverable(err)
+				}
+				return err // Retry other errors
+			}
+			return nil
+		},
+		retry.Attempts(5),
+		retry.Delay(2*time.Second),
+		retry.MaxDelay(2*time.Minute),
+		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
+		retry.LastErrorOnly(true),
+		retry.Context(ctx),
+	)
+	if err != nil {
+		slog.Warn("failed to get channel members for user membership check",
+			"error", err,
+			logFieldChannelID, channelID,
+			"user_id", userID)
+		return false
+	}
+
+	// Check if user ID is in the members list
+	for _, member := range members {
+		if member == userID {
+			slog.Debug("user is a member of channel", "channel_id", channelID, "user_id", userID)
+			// Cache positive result for 5 minutes (users join/leave channels frequently)
+			c.cache.set(cacheKey, true, 5*time.Minute)
+			return true
+		}
+	}
+
+	slog.Debug("user is not a member of channel", "channel_id", channelID, "user_id", userID)
+	// Cache negative result for SHORT time (user might be added)
+	c.cache.set(cacheKey, false, 1*time.Minute)
+	return false
+}
+
 // IsBotInChannel checks if the bot is a member of the specified channel with adaptive caching.
 func (c *Client) IsBotInChannel(ctx context.Context, channelID string) bool {
 	// Check cache first

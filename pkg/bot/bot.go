@@ -723,6 +723,24 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 	// Track that we notified users in this channel for DM delay logic
 	c.notifier.Tracker.UpdateChannelNotification(workspaceID, owner, repo, prNumber)
 
+	// Track user tags in channel for delayed DM logic
+	// Extract GitHub usernames who are blocked on this PR
+	blockedUsers := c.extractBlockedUsersFromTurnclient(checkResult)
+	domain := c.configManager.Domain(owner)
+	for _, githubUser := range blockedUsers {
+		// Map GitHub username to Slack user ID
+		slackUserID, err := c.userMapper.GetSlackHandle(ctx, githubUser, owner, domain)
+		if err == nil && slackUserID != "" {
+			c.notifier.Tracker.UpdateUserPRChannelTag(workspaceID, slackUserID, owner, repo, prNumber)
+			slog.Debug("tracked user tag in channel",
+				"workspace", workspaceID,
+				"github_user", githubUser,
+				"slack_user", slackUserID,
+				"channel", channelDisplay,
+				"pr", fmt.Sprintf(prFormatString, owner, repo, prNumber))
+		}
+	}
+
 	// Update message prefix if state changed
 	if !wasNewlyCreated && oldState != "" && oldState != prState {
 		slog.Debug("updating message prefix for state change",

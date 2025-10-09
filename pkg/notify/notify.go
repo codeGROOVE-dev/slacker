@@ -16,12 +16,14 @@ type Manager struct {
 	Tracker       *NotificationTracker
 	configManager interface {
 		DailyRemindersEnabled(org string) bool
+		ReminderDMDelay(org, channel string) int
 	}
 }
 
 // New creates a new notification manager.
 func New(slackManager *slack.Manager, configManager interface {
 	DailyRemindersEnabled(org string) bool
+	ReminderDMDelay(org, channel string) int
 },
 ) *Manager {
 	return &Manager{
@@ -30,6 +32,7 @@ func New(slackManager *slack.Manager, configManager interface {
 			lastDM:                  make(map[string]time.Time),
 			lastDaily:               make(map[string]time.Time),
 			lastChannelNotification: make(map[string]time.Time),
+			lastUserPRChannelTag:    make(map[string]time.Time),
 		},
 		configManager: configManager,
 	}
@@ -70,7 +73,9 @@ type PRInfo struct {
 }
 
 // NotifyUser sends a smart notification to a user about a PR using the configured logic.
-func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID string, pr PRInfo) error {
+// Implements delayed DM logic: if user was tagged in channel, delay by configured time.
+// If user is not in channel where tagged, send DM immediately.
+func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID, channelName string, pr PRInfo) error {
 	slog.Info("evaluating notification for user",
 		"user", userID,
 		"workspace", workspaceID,
@@ -78,7 +83,8 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 		"repo", pr.Repo,
 		"pr_number", pr.Number,
 		"pr_state", pr.State,
-		"channel", channelID)
+		"channel", channelID,
+		"channel_name", channelName)
 
 	// Get the Slack client for this workspace
 	slackClient, err := m.slackManager.GetClient(ctx, workspaceID)
@@ -90,10 +96,12 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 	}
 
 	lastDM := m.Tracker.LastDMNotification(workspaceID, userID)
+	lastChannelTag := m.Tracker.LastUserPRChannelTag(workspaceID, userID, pr.Owner, pr.Repo, pr.Number)
 
 	slog.Debug("notification state",
 		"user", userID,
-		"last_dm", lastDM)
+		"last_dm", lastDM,
+		"last_channel_tag", lastChannelTag)
 
 	// Check if user is active on Slack.
 	isActive := slackClient.IsUserActive(ctx, userID)
@@ -111,7 +119,7 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 
 	// Avoid spamming - don't send DM if we recently sent one
 	timeSinceLastDM := time.Since(lastDM)
-	antiSpamDelay := 30 * time.Minute
+	antiSpamDelay := 1 * time.Minute
 
 	slog.Debug("checking anti-spam protection",
 		"user", userID,
@@ -127,6 +135,66 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 			"anti_spam_delay", antiSpamDelay,
 			"time_until_next_allowed", antiSpamDelay-timeSinceLastDM)
 		return nil
+	}
+
+	// Check if we should delay this DM based on channel tag timing
+	if !lastChannelTag.IsZero() {
+		// User was tagged in a channel - check if they're in that channel
+		userInChannel := slackClient.IsUserInChannel(ctx, channelID, userID)
+
+		// Get configured delay for this channel/org
+		delayMins := m.configManager.ReminderDMDelay(pr.Owner, channelName)
+
+		slog.Debug("evaluating follow-up reminder delay",
+			"user", userID,
+			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+			"user_in_channel", userInChannel,
+			"channel_tag_time", lastChannelTag,
+			"configured_delay_mins", delayMins)
+
+		if delayMins == 0 {
+			slog.Info("follow-up reminders disabled for this channel - skipping DM",
+				"user", userID,
+				"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+				"channel", channelName,
+				"channel_id", channelID)
+			return nil
+		}
+
+		if userInChannel {
+			// User is in the channel - apply delay
+			timeSinceTag := time.Since(lastChannelTag)
+			delayDuration := time.Duration(delayMins) * time.Minute
+
+			if timeSinceTag < delayDuration {
+				slog.Info("deferring DM - user was tagged in channel recently",
+					"user", userID,
+					"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+					"channel", channelName,
+					"time_since_tag", timeSinceTag,
+					"configured_delay", delayDuration,
+					"time_until_dm", delayDuration-timeSinceTag)
+				return nil
+			}
+
+			slog.Info("sending delayed follow-up DM - user was tagged but delay elapsed",
+				"user", userID,
+				"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+				"channel", channelName,
+				"time_since_tag", timeSinceTag,
+				"configured_delay", delayDuration)
+		} else {
+			// User is NOT in the channel - send DM immediately
+			slog.Info("sending immediate DM - user not in channel where tagged",
+				"user", userID,
+				"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+				"channel", channelName,
+				"channel_id", channelID)
+		}
+	} else {
+		slog.Debug("no channel tag found - sending DM without delay",
+			"user", userID,
+			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number))
 	}
 
 	// Format notification message
