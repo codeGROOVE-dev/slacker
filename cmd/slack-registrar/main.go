@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/gsm"
-	"github.com/codeGROOVE-dev/slacker/pkg/slack"
+	"github.com/codeGROOVE-dev/slacker/internal/slack"
 	"github.com/gorilla/mux"
 )
 

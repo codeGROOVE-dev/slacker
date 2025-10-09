@@ -11,11 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/codeGROOVE-dev/slacker/pkg/config"
-	"github.com/codeGROOVE-dev/slacker/pkg/github"
-	"github.com/codeGROOVE-dev/slacker/pkg/notify"
-	slackpkg "github.com/codeGROOVE-dev/slacker/pkg/slack"
-	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
+	"github.com/codeGROOVE-dev/slacker/internal/config"
+	"github.com/codeGROOVE-dev/slacker/internal/github"
+	"github.com/codeGROOVE-dev/slacker/internal/notify"
+	slackpkg "github.com/codeGROOVE-dev/slacker/internal/slack"
+	"github.com/codeGROOVE-dev/slacker/internal/usermapping"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
 

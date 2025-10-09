@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/codeGROOVE-dev/slacker/pkg/slack"
+	"github.com/codeGROOVE-dev/slacker/internal/slack"
 )
 
 // Manager handles user notifications across multiple workspaces.
