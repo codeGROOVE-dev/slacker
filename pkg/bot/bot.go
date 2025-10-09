@@ -95,7 +95,7 @@ func New(
 	configManager.SetGitHubClient(org, githubClient.Client())
 
 	// Get workspace info and set in config manager for validation.
-	if teamInfo, err := slackClient.GetWorkspaceInfo(ctx); err == nil {
+	if teamInfo, err := slackClient.WorkspaceInfo(ctx); err == nil {
 		// Use the team domain as workspace identifier
 		workspaceName := teamInfo.Domain + ".slack.com"
 		c.workspaceName = workspaceName
@@ -198,7 +198,7 @@ func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL st
 		"pr_url", prURL)
 
 	// Get bot info to identify our messages
-	botInfo, err := c.slack.GetBotInfo(ctx)
+	botInfo, err := c.slack.BotInfo(ctx)
 	if err != nil {
 		slog.Warn("failed to get bot info, cannot search for existing threads",
 			logFieldChannel, channelID,
@@ -220,7 +220,7 @@ func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL st
 		"looking_for_url", prURL)
 
 	// Get channel history - limit to 1000 messages for performance
-	history, err := c.slack.GetChannelHistory(ctx, channelID, oldestTimestamp, "", historyPageSize)
+	history, err := c.slack.ChannelHistory(ctx, channelID, oldestTimestamp, "", historyPageSize)
 	if err != nil {
 		slog.Warn("failed to get channel history",
 			logFieldChannel, channelID,
@@ -418,21 +418,99 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 	// Process channels in parallel for better performance
 	c.processChannelsInParallel(ctx, owner, repo, prNumber, prState, event, channels, workspaceID, checkResult)
 
-	// Handle user notifications (same as before)
+	// Handle user notifications - send DMs to blocked users
+	// This happens AFTER channel processing completes to ensure tags are tracked first
 	if len(blockedOn) > 0 {
-		for _, userID := range blockedOn {
-			slog.Debug("user is blocking PR - would check for notification timing",
-				logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-				"github_user", userID,
-				"pr_state", prState,
-				"pr_author", event.PullRequest.User.Login,
-				"needs_slack_mapping", true)
+		// Deduplicate blocked users (same user might be blocked for multiple reasons)
+		uniqueUsers := make(map[string]bool)
+		for _, githubUser := range blockedOn {
+			uniqueUsers[githubUser] = true
 		}
+
+		slog.Info("preparing to send DM notifications",
+			logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+			"total_blocked_users", len(blockedOn),
+			"unique_users", len(uniqueUsers),
+			"will_send_async", true)
+
+		// Send DMs asynchronously to avoid blocking event processing
+		// Use a detached context with timeout to allow graceful completion even if parent context is cancelled
+		dmCtx, dmCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		go func() {
+			defer dmCancel()
+			c.sendDMNotifications(dmCtx, workspaceID, owner, repo, prNumber, uniqueUsers, event, prState)
+		}()
 	} else {
 		slog.Info("no users blocking PR - no notifications needed",
 			logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
 			"pr_state", prState)
 	}
+}
+
+// sendDMNotifications sends DM notifications to unique blocked users asynchronously.
+// This runs in a separate goroutine to avoid blocking event processing.
+func (c *Coordinator) sendDMNotifications(ctx context.Context, workspaceID, owner, repo string, prNumber int, uniqueUsers map[string]bool, event struct {
+	Action      string `json:"action"`
+	Number      int    `json:"number"`
+	PullRequest struct {
+		Number  int    `json:"number"`
+		HTMLURL string `json:"html_url"`
+		Title   string `json:"title"`
+		User    struct {
+			Login string `json:"login"`
+		} `json:"user"`
+	} `json:"pull_request"`
+}, prState string,
+) {
+	domain := c.configManager.Domain(owner)
+
+	for githubUser := range uniqueUsers {
+		// Map GitHub username to Slack user ID
+		slackUserID, err := c.userMapper.SlackHandle(ctx, githubUser, owner, domain)
+		if err != nil || slackUserID == "" {
+			slog.Debug("could not map GitHub user to Slack - skipping DM",
+				logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+				"github_user", githubUser,
+				"error", err)
+			continue
+		}
+
+		// Get tag info to determine which channel the user was tagged in
+		tagInfo := c.notifier.Tracker.LastUserPRChannelTag(workspaceID, slackUserID, owner, repo, prNumber)
+
+		// For channel name lookup (needed for config), we need to resolve the channel ID back to name
+		// This is optional - if we can't resolve it, NotifyUser will use defaults
+		var channelName string
+		if tagInfo.ChannelID != "" {
+			// We don't have a reverse lookup, so just pass empty string
+			// NotifyUser will use default delay if channelName is empty
+			channelName = ""
+		}
+
+		// Send notification using smart delay logic
+		prInfo := notify.PRInfo{
+			Owner:   owner,
+			Repo:    repo,
+			Number:  prNumber,
+			Title:   event.PullRequest.Title,
+			Author:  event.PullRequest.User.Login,
+			State:   prState,
+			HTMLURL: event.PullRequest.HTMLURL,
+		}
+
+		err = c.notifier.NotifyUser(ctx, workspaceID, slackUserID, tagInfo.ChannelID, channelName, prInfo)
+		if err != nil {
+			slog.Warn("failed to notify user",
+				logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+				"github_user", githubUser,
+				"slack_user", slackUserID,
+				"error", err)
+		}
+	}
+
+	slog.Info("completed DM notification processing",
+		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+		"users_processed", len(uniqueUsers))
 }
 
 // extractStateFromTurnclient extracts PR state from turnclient response without additional API calls.
@@ -729,14 +807,16 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 	domain := c.configManager.Domain(owner)
 	for _, githubUser := range blockedUsers {
 		// Map GitHub username to Slack user ID
-		slackUserID, err := c.userMapper.GetSlackHandle(ctx, githubUser, owner, domain)
+		slackUserID, err := c.userMapper.SlackHandle(ctx, githubUser, owner, domain)
 		if err == nil && slackUserID != "" {
-			c.notifier.Tracker.UpdateUserPRChannelTag(workspaceID, slackUserID, owner, repo, prNumber)
+			// Track with channelID - this will only update on FIRST call per user/PR
+			c.notifier.Tracker.UpdateUserPRChannelTag(workspaceID, slackUserID, channelID, owner, repo, prNumber)
 			slog.Debug("tracked user tag in channel",
 				"workspace", workspaceID,
 				"github_user", githubUser,
 				"slack_user", slackUserID,
 				"channel", channelDisplay,
+				"channel_id", channelID,
 				"pr", fmt.Sprintf(prFormatString, owner, repo, prNumber))
 		}
 	}

@@ -36,9 +36,9 @@ func NewManager(signingSecret string) *Manager {
 	}
 }
 
-// GetClient returns a Slack client for the given workspace.
+// Client returns a Slack client for the given workspace.
 // If the client doesn't exist in cache, it fetches the token from GSM.
-func (m *Manager) GetClient(ctx context.Context, teamID string) (*Client, error) {
+func (m *Manager) Client(ctx context.Context, teamID string) (*Client, error) {
 	// Check cache first
 	m.mu.RLock()
 	client, exists := m.clients[teamID]

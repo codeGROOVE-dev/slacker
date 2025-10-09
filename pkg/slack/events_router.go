@@ -71,7 +71,7 @@ func (er *EventRouter) HandleEvents(w http.ResponseWriter, r *http.Request) {
 		"event_type", eventWrapper.Type)
 
 	// Get the workspace-specific client
-	client, err := er.manager.GetClient(r.Context(), teamID)
+	client, err := er.manager.Client(r.Context(), teamID)
 	if err != nil {
 		slog.Error("failed to get client for workspace",
 			"team_id", teamID,
@@ -125,7 +125,7 @@ func (er *EventRouter) HandleInteractions(w http.ResponseWriter, r *http.Request
 	slog.Debug("routing interaction to workspace", "team_id", teamID)
 
 	// Get the workspace-specific client
-	client, err := er.manager.GetClient(r.Context(), teamID)
+	client, err := er.manager.Client(r.Context(), teamID)
 	if err != nil {
 		slog.Error("failed to get client for workspace",
 			"team_id", teamID,
@@ -160,7 +160,7 @@ func (er *EventRouter) HandleSlashCommand(w http.ResponseWriter, r *http.Request
 		"command", r.FormValue("command"))
 
 	// Get the workspace-specific client
-	client, err := er.manager.GetClient(r.Context(), teamID)
+	client, err := er.manager.Client(r.Context(), teamID)
 	if err != nil {
 		slog.Error("failed to get client for workspace",
 			"team_id", teamID,

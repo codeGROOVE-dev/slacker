@@ -32,14 +32,14 @@ type ServerConfig struct {
 // RepoConfig represents the slack.yaml configuration for a GitHub org.
 type RepoConfig struct {
 	Channels map[string]struct {
-		Repos                 []string `yaml:"repos"`
-		Mute                  bool     `yaml:"mute"`
+		Repos           []string `yaml:"repos"`
+		Mute            bool     `yaml:"mute"`
 		ReminderDMDelay *int     `yaml:"reminder_dm_delay"` // Optional: override global delay for this channel (0 = disabled)
 	} `yaml:"channels"`
 	Global struct {
-		TeamID                string `yaml:"team_id"`
-		EmailDomain           string `yaml:"email_domain"`
-		DailyReminders        bool   `yaml:"daily_reminders"`
+		TeamID          string `yaml:"team_id"`
+		EmailDomain     string `yaml:"email_domain"`
+		DailyReminders  bool   `yaml:"daily_reminders"`
 		ReminderDMDelay int    `yaml:"reminder_dm_delay"` // Minutes to wait before sending DM if user tagged in channel (0 = disabled)
 	} `yaml:"global"`
 }
@@ -256,19 +256,19 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 		// Use default empty config if not found
 		defaultConfig := &RepoConfig{
 			Global: struct {
-				TeamID                string `yaml:"team_id"`
-				EmailDomain           string `yaml:"email_domain"`
-				DailyReminders        bool   `yaml:"daily_reminders"`
+				TeamID          string `yaml:"team_id"`
+				EmailDomain     string `yaml:"email_domain"`
+				DailyReminders  bool   `yaml:"daily_reminders"`
 				ReminderDMDelay int    `yaml:"reminder_dm_delay"`
 			}{
-				TeamID:                "",
-				EmailDomain:           "",
-				DailyReminders:        true,
+				TeamID:          "",
+				EmailDomain:     "",
+				DailyReminders:  true,
 				ReminderDMDelay: 65, // Default: 65 minutes
 			},
 			Channels: make(map[string]struct {
-				Repos                 []string `yaml:"repos"`
-				Mute                  bool     `yaml:"mute"`
+				Repos           []string `yaml:"repos"`
+				Mute            bool     `yaml:"mute"`
 				ReminderDMDelay *int     `yaml:"reminder_dm_delay"` // Optional: override global delay for this channel (0 = disabled)
 			}),
 		}
@@ -296,19 +296,19 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 	if err := yaml.Unmarshal([]byte(configContent), &config); err != nil {
 		defaultConfig := &RepoConfig{
 			Global: struct {
-				TeamID                string `yaml:"team_id"`
-				EmailDomain           string `yaml:"email_domain"`
-				DailyReminders        bool   `yaml:"daily_reminders"`
+				TeamID          string `yaml:"team_id"`
+				EmailDomain     string `yaml:"email_domain"`
+				DailyReminders  bool   `yaml:"daily_reminders"`
 				ReminderDMDelay int    `yaml:"reminder_dm_delay"`
 			}{
-				TeamID:                "",
-				EmailDomain:           "",
-				DailyReminders:        true,
+				TeamID:          "",
+				EmailDomain:     "",
+				DailyReminders:  true,
 				ReminderDMDelay: 65, // Default: 65 minutes
 			},
 			Channels: make(map[string]struct {
-				Repos                 []string `yaml:"repos"`
-				Mute                  bool     `yaml:"mute"`
+				Repos           []string `yaml:"repos"`
+				Mute            bool     `yaml:"mute"`
 				ReminderDMDelay *int     `yaml:"reminder_dm_delay"` // Optional: override global delay for this channel (0 = disabled)
 			}),
 		}

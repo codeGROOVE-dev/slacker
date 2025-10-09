@@ -64,9 +64,9 @@ func New(slackClient *slack.Client, githubToken string) *Service {
 	}
 }
 
-// GetSlackHandle attempts to find a Slack handle for a GitHub username.
+// SlackHandle attempts to find a Slack handle for a GitHub username.
 // It uses email matching to find the best Slack user match.
-func (s *Service) GetSlackHandle(ctx context.Context, githubUsername, organization, domain string) (string, error) {
+func (s *Service) SlackHandle(ctx context.Context, githubUsername, organization, domain string) (string, error) {
 	// Check cache first
 	if mapping := s.getCachedMapping(githubUsername); mapping != nil {
 		slog.Debug("using cached GitHub-to-Slack mapping",
@@ -214,9 +214,9 @@ func (s *Service) GetSlackHandle(ctx context.Context, githubUsername, organizati
 	return "", nil
 }
 
-// GetSlackHandles performs batch lookup of multiple GitHub users to Slack handles.
+// SlackHandles performs batch lookup of multiple GitHub users to Slack handles.
 // Returns a map of GitHub username to Slack handle (empty string if not found).
-func (s *Service) GetSlackHandles(ctx context.Context, githubUsernames []string, organization, domain string) (map[string]string, error) {
+func (s *Service) SlackHandles(ctx context.Context, githubUsernames []string, organization, domain string) (map[string]string, error) {
 	if len(githubUsernames) == 0 {
 		return make(map[string]string), nil
 	}
@@ -231,7 +231,7 @@ func (s *Service) GetSlackHandles(ctx context.Context, githubUsernames []string,
 
 	// Process users concurrently but respect semaphore limits
 	for _, username := range githubUsernames {
-		slackHandle, err := s.GetSlackHandle(ctx, username, organization, domain)
+		slackHandle, err := s.SlackHandle(ctx, username, organization, domain)
 		if err != nil {
 			slog.Warn("failed to lookup Slack handle for GitHub user",
 				"github_user", username,
@@ -264,7 +264,7 @@ func (s *Service) FormatUserMention(ctx context.Context, githubUsername, organiz
 		return ""
 	}
 
-	slackHandle, err := s.GetSlackHandle(ctx, githubUsername, organization, domain)
+	slackHandle, err := s.SlackHandle(ctx, githubUsername, organization, domain)
 	if err != nil || slackHandle == "" {
 		slog.Debug("falling back to GitHub username for mention",
 			"github_user", githubUsername,
@@ -282,7 +282,7 @@ func (s *Service) FormatUserMentions(ctx context.Context, githubUsernames []stri
 		return ""
 	}
 
-	handles, err := s.GetSlackHandles(ctx, githubUsernames, organization, domain)
+	handles, err := s.SlackHandles(ctx, githubUsernames, organization, domain)
 	if err != nil {
 		slog.Warn("failed to get Slack handles for batch formatting",
 			"github_users", githubUsernames,

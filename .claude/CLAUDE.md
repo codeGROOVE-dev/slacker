@@ -33,9 +33,10 @@ Ready to Review is an elegant modern Slack bot written in Go that integrates wit
   - If user is IN the channel where they were tagged → wait for configured delay before sending DM
   - If user is NOT in the channel where they were tagged → send DM immediately
   - Set `reminder_dm_delay: 0` to disable delayed reminders
+  - **One DM per user per PR**: Even if PR is posted to multiple channels, each user gets exactly one DM
 - **Daily reminders**: Send between 8-9am local time if enabled and >8 hours since last notification
 - **Anti-spam**: Rate limit DMs to same user (1min minimum between DMs)
-- Format: `:postal_horn: Update README.md • goose#51 by @slackUser - waiting for your review`
+- Format: `:hourglass: Update README.md <url|goose#51> · author → review` (matches channel message style)
 
 ### 4. Configuration
 - Read YAML config from `/.codeGROOVE/slack.yaml` in target repos

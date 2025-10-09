@@ -259,7 +259,7 @@ func runBotCoordinators(
 			teamID := cfg.Global.TeamID
 
 			// Get Slack client for this workspace
-			slackClient, err := slackManager.GetClient(ctx, teamID)
+			slackClient, err := slackManager.Client(ctx, teamID)
 			if err != nil {
 				slog.Error("failed to get Slack client for workspace",
 					"org", org,

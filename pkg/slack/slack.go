@@ -108,8 +108,8 @@ func New(token, signingSecret string) *Client {
 	}
 }
 
-// GetWorkspaceInfo returns information about the current workspace (cached for 1 hour).
-func (c *Client) GetWorkspaceInfo(ctx context.Context) (*slack.TeamInfo, error) {
+// WorkspaceInfo returns information about the current workspace (cached for 1 hour).
+func (c *Client) WorkspaceInfo(ctx context.Context) (*slack.TeamInfo, error) {
 	cacheKey := "team_info"
 
 	// Try cache first
@@ -932,8 +932,8 @@ func (c *Client) API() *slack.Client {
 	return c.api
 }
 
-// GetChannelHistory retrieves channel message history with optional time filtering.
-func (c *Client) GetChannelHistory(
+// ChannelHistory retrieves channel message history with optional time filtering.
+func (c *Client) ChannelHistory(
 	ctx context.Context, channelID string, oldest, latest string, limit int,
 ) (*slack.GetConversationHistoryResponse, error) {
 	params := &slack.GetConversationHistoryParameters{
@@ -981,8 +981,8 @@ func (c *Client) GetChannelHistory(
 	return result, err
 }
 
-// GetBotInfo returns information about the authenticated bot user (cached for 30 minutes).
-func (c *Client) GetBotInfo(ctx context.Context) (*slack.AuthTestResponse, error) {
+// BotInfo returns information about the authenticated bot user (cached for 30 minutes).
+func (c *Client) BotInfo(ctx context.Context) (*slack.AuthTestResponse, error) {
 	cacheKey := "bot_auth_test"
 
 	// Try cache first
@@ -1276,7 +1276,7 @@ func (c *Client) IsBotInChannel(ctx context.Context, channelID string) bool {
 	slog.Debug("channel membership not cached, checking via API", logFieldChannelID, channelID)
 
 	// Get bot user info first (this is now cached)
-	authTest, err := c.GetBotInfo(ctx)
+	authTest, err := c.BotInfo(ctx)
 	if err != nil {
 		slog.Error("failed to get bot user info for channel membership check",
 			"error", err,

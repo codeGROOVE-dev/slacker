@@ -32,7 +32,7 @@ func New(slackManager *slack.Manager, configManager interface {
 			lastDM:                  make(map[string]time.Time),
 			lastDaily:               make(map[string]time.Time),
 			lastChannelNotification: make(map[string]time.Time),
-			lastUserPRChannelTag:    make(map[string]time.Time),
+			lastUserPRChannelTag:    make(map[string]TagInfo),
 		},
 		configManager: configManager,
 	}
@@ -72,6 +72,28 @@ type PRInfo struct {
 	HTMLURL string
 }
 
+// getPrefixForState returns the emoji prefix for a given PR state.
+func getPrefixForState(prState string) string {
+	switch prState {
+	case "tests_running":
+		return ":test_tube:"
+	case "tests_broken":
+		return ":cockroach:"
+	case "awaiting_review":
+		return ":hourglass:"
+	case "changes_requested":
+		return ":carpentry_saw:"
+	case "approved":
+		return ":white_check_mark:"
+	case "merged":
+		return ":rocket:"
+	case "closed":
+		return ":man_facepalming:"
+	default:
+		return ":postal_horn:"
+	}
+}
+
 // NotifyUser sends a smart notification to a user about a PR using the configured logic.
 // Implements delayed DM logic: if user was tagged in channel, delay by configured time.
 // If user is not in channel where tagged, send DM immediately.
@@ -87,7 +109,7 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 		"channel_name", channelName)
 
 	// Get the Slack client for this workspace
-	slackClient, err := m.slackManager.GetClient(ctx, workspaceID)
+	slackClient, err := m.slackManager.Client(ctx, workspaceID)
 	if err != nil {
 		slog.Error("failed to get Slack client for workspace",
 			"workspace", workspaceID,
@@ -96,12 +118,13 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 	}
 
 	lastDM := m.Tracker.LastDMNotification(workspaceID, userID)
-	lastChannelTag := m.Tracker.LastUserPRChannelTag(workspaceID, userID, pr.Owner, pr.Repo, pr.Number)
+	tagInfo := m.Tracker.LastUserPRChannelTag(workspaceID, userID, pr.Owner, pr.Repo, pr.Number)
 
 	slog.Debug("notification state",
 		"user", userID,
 		"last_dm", lastDM,
-		"last_channel_tag", lastChannelTag)
+		"last_channel_tag", tagInfo.Timestamp,
+		"tag_channel_id", tagInfo.ChannelID)
 
 	// Check if user is active on Slack.
 	isActive := slackClient.IsUserActive(ctx, userID)
@@ -138,18 +161,26 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 	}
 
 	// Check if we should delay this DM based on channel tag timing
-	if !lastChannelTag.IsZero() {
-		// User was tagged in a channel - check if they're in that channel
-		userInChannel := slackClient.IsUserInChannel(ctx, channelID, userID)
+	if !tagInfo.Timestamp.IsZero() {
+		// User was tagged in a channel - use the ACTUAL channel they were tagged in
+		taggedChannelID := tagInfo.ChannelID
 
-		// Get configured delay for this channel/org
-		delayMins := m.configManager.ReminderDMDelay(pr.Owner, channelName)
+		// Check if they're in that specific channel
+		userInChannel := slackClient.IsUserInChannel(ctx, taggedChannelID, userID)
+
+		// Get configured delay for this channel/org (we need channel name for config lookup)
+		// If channelName wasn't provided, we can't look up config - use default
+		delayMins := 65 // Default
+		if channelName != "" {
+			delayMins = m.configManager.ReminderDMDelay(pr.Owner, channelName)
+		}
 
 		slog.Debug("evaluating follow-up reminder delay",
 			"user", userID,
 			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
 			"user_in_channel", userInChannel,
-			"channel_tag_time", lastChannelTag,
+			"channel_tag_time", tagInfo.Timestamp,
+			"tagged_channel_id", taggedChannelID,
 			"configured_delay_mins", delayMins)
 
 		if delayMins == 0 {
@@ -157,20 +188,20 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 				"user", userID,
 				"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
 				"channel", channelName,
-				"channel_id", channelID)
+				"channel_id", taggedChannelID)
 			return nil
 		}
 
 		if userInChannel {
 			// User is in the channel - apply delay
-			timeSinceTag := time.Since(lastChannelTag)
+			timeSinceTag := time.Since(tagInfo.Timestamp)
 			delayDuration := time.Duration(delayMins) * time.Minute
 
 			if timeSinceTag < delayDuration {
 				slog.Info("deferring DM - user was tagged in channel recently",
 					"user", userID,
 					"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
-					"channel", channelName,
+					"channel_id", taggedChannelID,
 					"time_since_tag", timeSinceTag,
 					"configured_delay", delayDuration,
 					"time_until_dm", delayDuration-timeSinceTag)
@@ -180,7 +211,7 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 			slog.Info("sending delayed follow-up DM - user was tagged but delay elapsed",
 				"user", userID,
 				"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
-				"channel", channelName,
+				"channel_id", taggedChannelID,
 				"time_since_tag", timeSinceTag,
 				"configured_delay", delayDuration)
 		} else {
@@ -188,8 +219,7 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 			slog.Info("sending immediate DM - user not in channel where tagged",
 				"user", userID,
 				"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
-				"channel", channelName,
-				"channel_id", channelID)
+				"channel_id", taggedChannelID)
 		}
 	} else {
 		slog.Debug("no channel tag found - sending DM without delay",
@@ -197,25 +227,31 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number))
 	}
 
-	// Format notification message
+	// Format notification message using same style as channel messages
+	// Use state-based emoji prefix like channel messages do
+	prefix := getPrefixForState(pr.State)
+
+	// Format: :emoji: Title <url|repo#123> · author → action
 	var action string
 	switch pr.State {
-	case "broken_heart":
-		action = "waiting for you to fix tests"
-	case "hourglass":
-		action = "waiting for your review"
-	case "carpentry_saw":
-		action = "waiting for you to address review feedback"
-	case "check":
-		action = "approved and ready to merge"
+	case "tests_broken":
+		action = "fix tests"
+	case "awaiting_review":
+		action = "review"
+	case "changes_requested":
+		action = "address feedback"
+	case "approved":
+		action = "merge"
 	default:
-		action = "needs your attention"
+		action = "attention needed"
 	}
 
+	// Use same compact format as channel messages
 	message := fmt.Sprintf(
-		":postal_horn: %s • %s/%s#%d by @%s - %s",
+		"%s %s <%s|%s#%d> · %s → %s",
+		prefix,
 		pr.Title,
-		pr.Owner,
+		pr.HTMLURL,
 		pr.Repo,
 		pr.Number,
 		pr.Author,

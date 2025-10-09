@@ -81,7 +81,7 @@ func TestService_GetSlackHandle_Success(t *testing.T) {
 		lookupSem:    make(chan struct{}, 5),
 	}
 
-	result, err := service.GetSlackHandle(ctx, githubUser, organization, domain)
+	result, err := service.SlackHandle(ctx, githubUser, organization, domain)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestService_GetSlackHandle_FallbackToGitHub(t *testing.T) {
 		lookupSem:    make(chan struct{}, 5),
 	}
 
-	result, err := service.GetSlackHandle(ctx, githubUser, organization, domain)
+	result, err := service.SlackHandle(ctx, githubUser, organization, domain)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestService_MultipleEmailMatches(t *testing.T) {
 		lookupSem:    make(chan struct{}, 5),
 	}
 
-	result, err := service.GetSlackHandle(ctx, githubUser, organization, domain)
+	result, err := service.SlackHandle(ctx, githubUser, organization, domain)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
