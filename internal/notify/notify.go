@@ -39,9 +39,13 @@ func New(slackManager *slack.Manager, configManager interface {
 }
 
 // Run starts the notification scheduler.
-func (*Manager) Run(ctx context.Context) error {
+func (m *Manager) Run(ctx context.Context) error {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
+
+	// Cleanup old entries every hour to prevent unbounded memory growth
+	cleanupTicker := time.NewTicker(1 * time.Hour)
+	defer cleanupTicker.Stop()
 
 	for {
 		select {
@@ -57,6 +61,11 @@ func (*Manager) Run(ctx context.Context) error {
 			// 2. For each workspace, check all users with pending PRs
 			// 3. Apply notification logic based on preferences
 			// 4. Send notifications as needed
+		case <-cleanupTicker.C:
+			// Clean up entries older than 7 days
+			// This keeps recent data for rate limiting while preventing unbounded growth
+			m.Tracker.Cleanup(7 * 24 * time.Hour)
+			slog.Debug("cleaned up old notification tracker entries")
 		}
 	}
 }

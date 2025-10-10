@@ -60,11 +60,17 @@ func (c *apiCache) set(key string, value any, ttl time.Duration) {
 }
 
 // get retrieves a value from the cache if not expired.
+// Expired entries are automatically removed.
 func (c *apiCache) get(key string) (any, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock() // Use Lock instead of RLock to allow deletion
+	defer c.mu.Unlock()
 	entry, exists := c.entries[key]
-	if !exists || time.Now().After(entry.expiresAt) {
+	if !exists {
+		c.misses++
+		return nil, false
+	}
+	if time.Now().After(entry.expiresAt) {
+		delete(c.entries, key) // Clean up expired entry
 		c.misses++
 		return nil, false
 	}

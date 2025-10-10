@@ -63,6 +63,8 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 				// Use background context for event processing to avoid losing events
 				// during shutdown. The coordinator's context is for the connection
 				// lifecycle, not individual events.
+				// Note: No panic recovery - we want panics to propagate and restart the service (Cloud Run will handle it)
+				// A quiet failure is worse than a visible crash that triggers automatic recovery
 				eventCtx := context.Background()
 
 				slog.Info("processing sprinkler event",
@@ -175,6 +177,23 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 	// Start the client (this will handle reconnection, ping/pong, etc.)
 	// Note: Start() may return when connection is lost, so we loop to restart it
 	slog.Info("starting sprinkler client", "organization", organization)
+
+	// Start cleanup ticker for thread cache
+	// Clean up threads older than 30 days to prevent unbounded growth
+	cleanupTicker := time.NewTicker(6 * time.Hour)
+	defer cleanupTicker.Stop()
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-cleanupTicker.C:
+				c.threadCache.Cleanup(30 * 24 * time.Hour)
+				slog.Debug("cleaned up old thread cache entries", "organization", organization)
+			}
+		}
+	}()
 
 	retryDelay := 5 * time.Second
 	maxRetryDelay := 60 * time.Second

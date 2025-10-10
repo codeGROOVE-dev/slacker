@@ -14,6 +14,7 @@ import (
 	"github.com/codeGROOVE-dev/gsm"
 	"github.com/codeGROOVE-dev/slacker/internal/slack"
 	"github.com/gorilla/mux"
+	"golang.org/x/time/rate"
 )
 
 func main() {
@@ -44,16 +45,20 @@ func main() {
 	router := mux.NewRouter()
 	router.Use(securityHeadersMiddleware)
 
+	// Rate limiter for OAuth endpoints: 10 requests per second, burst of 20
+	// This prevents abuse while allowing legitimate installation flows
+	oauthLimiter := rate.NewLimiter(10, 20)
+
 	// Health check
 	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "ok")
 	}).Methods("GET")
 
-	// OAuth endpoints
-	router.HandleFunc("/", oauthHandler.HandleInstall).Methods("GET")
-	router.HandleFunc("/install", oauthHandler.HandleInstall).Methods("GET")
-	router.HandleFunc("/oauth/callback", oauthHandler.HandleCallback).Methods("GET")
+	// OAuth endpoints with rate limiting
+	router.Handle("/", rateLimitMiddleware(oauthLimiter)(http.HandlerFunc(oauthHandler.HandleInstall))).Methods("GET")
+	router.Handle("/install", rateLimitMiddleware(oauthLimiter)(http.HandlerFunc(oauthHandler.HandleInstall))).Methods("GET")
+	router.Handle("/oauth/callback", rateLimitMiddleware(oauthLimiter)(http.HandlerFunc(oauthHandler.HandleCallback))).Methods("GET")
 	router.HandleFunc("/debug", oauthHandler.HandleDebug).Methods("GET")
 
 	// Determine port
@@ -149,6 +154,20 @@ func loadConfig(ctx context.Context) (*Config, error) {
 		"has_signing_secret", cfg.SlackSigningSecret != "")
 
 	return cfg, nil
+}
+
+// rateLimitMiddleware applies rate limiting to prevent abuse.
+func rateLimitMiddleware(limiter *rate.Limiter) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !limiter.Allow() {
+				http.Error(w, "Too many requests - please try again later", http.StatusTooManyRequests)
+				slog.Warn("rate limit exceeded", "path", r.URL.Path, "remote_addr", r.RemoteAddr)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // securityHeadersMiddleware adds security headers to all responses.

@@ -97,3 +97,40 @@ func (t *NotificationTracker) UpdateUserPRChannelTag(workspaceID, userID, channe
 		}
 	}
 }
+
+// Cleanup removes entries older than the specified age from all maps.
+// This prevents unbounded memory growth while keeping recent entries for rate limiting.
+func (t *NotificationTracker) Cleanup(maxAge time.Duration) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	cutoff := time.Now().Add(-maxAge)
+
+	// Clean up DM notifications
+	for key, ts := range t.lastDM {
+		if ts.Before(cutoff) {
+			delete(t.lastDM, key)
+		}
+	}
+
+	// Clean up daily reminders
+	for key, ts := range t.lastDaily {
+		if ts.Before(cutoff) {
+			delete(t.lastDaily, key)
+		}
+	}
+
+	// Clean up channel notifications
+	for key, ts := range t.lastChannelNotification {
+		if ts.Before(cutoff) {
+			delete(t.lastChannelNotification, key)
+		}
+	}
+
+	// Clean up user PR channel tags
+	for key, info := range t.lastUserPRChannelTag {
+		if info.Timestamp.Before(cutoff) {
+			delete(t.lastUserPRChannelTag, key)
+		}
+	}
+}

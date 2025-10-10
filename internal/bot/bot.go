@@ -37,9 +37,10 @@ type ThreadCache struct {
 
 // ThreadInfo stores thread information for a PR.
 type ThreadInfo struct {
-	ThreadTS  string `json:"thread_ts"`
-	ChannelID string `json:"channel_id"`
-	LastState string `json:"last_state"`
+	ThreadTS  string    `json:"thread_ts"`
+	ChannelID string    `json:"channel_id"`
+	LastState string    `json:"last_state"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Get retrieves thread info for a PR.
@@ -54,7 +55,22 @@ func (tc *ThreadCache) Get(prKey string) (ThreadInfo, bool) {
 func (tc *ThreadCache) Set(prKey string, info ThreadInfo) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
+	info.UpdatedAt = time.Now()
 	tc.prThreads[prKey] = info
+}
+
+// Cleanup removes entries older than the specified age.
+// This prevents unbounded memory growth for closed/merged PRs.
+func (tc *ThreadCache) Cleanup(maxAge time.Duration) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+
+	cutoff := time.Now().Add(-maxAge)
+	for key, info := range tc.prThreads {
+		if info.UpdatedAt.Before(cutoff) {
+			delete(tc.prThreads, key)
+		}
+	}
 }
 
 // Coordinator coordinates between GitHub, Slack, and notifications for a single org.
@@ -435,6 +451,8 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 
 		// Send DMs asynchronously to avoid blocking event processing
 		// Use a detached context with timeout to allow graceful completion even if parent context is cancelled
+		// Note: No panic recovery - we want panics to propagate and restart the service (Cloud Run will handle it)
+		// A quiet failure is worse than a visible crash that triggers automatic recovery
 		dmCtx, dmCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 		go func() {
 			defer dmCancel()
@@ -710,6 +728,8 @@ func (c *Coordinator) processChannelsInParallel(ctx context.Context, owner, repo
 
 	// Process channels in parallel for better performance
 	// Use WaitGroup instead of errgroup since we don't want one failure to cancel others
+	// Note: No panic recovery - we want panics to propagate and restart the service (Cloud Run will handle it)
+	// A quiet failure is worse than a visible crash that triggers automatic recovery
 	var wg sync.WaitGroup
 	wg.Add(len(validChannels))
 
