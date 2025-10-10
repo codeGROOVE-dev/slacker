@@ -15,11 +15,11 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/gsm"
-	"github.com/codeGROOVE-dev/slacker/pkg/bot"
-	"github.com/codeGROOVE-dev/slacker/pkg/config"
-	"github.com/codeGROOVE-dev/slacker/pkg/github"
-	"github.com/codeGROOVE-dev/slacker/pkg/notify"
-	"github.com/codeGROOVE-dev/slacker/pkg/slack"
+	"github.com/codeGROOVE-dev/slacker/internal/bot"
+	"github.com/codeGROOVE-dev/slacker/internal/config"
+	"github.com/codeGROOVE-dev/slacker/internal/github"
+	"github.com/codeGROOVE-dev/slacker/internal/notify"
+	"github.com/codeGROOVE-dev/slacker/internal/slack"
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
 	"github.com/gorilla/mux"
 	"golang.org/x/sync/errgroup"
@@ -99,6 +99,9 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	// Setup HTTP routes with security middleware.
 	router := mux.NewRouter()
 	router.Use(securityHeadersMiddleware)
+
+	// Root endpoint - blank
+	router.HandleFunc("/", blankHandler).Methods("GET")
 
 	// Health endpoints
 	router.HandleFunc("/health", healthHandler).Methods("GET")
@@ -256,7 +259,7 @@ func runBotCoordinators(
 			teamID := cfg.Global.TeamID
 
 			// Get Slack client for this workspace
-			slackClient, err := slackManager.GetClient(ctx, teamID)
+			slackClient, err := slackManager.Client(ctx, teamID)
 			if err != nil {
 				slog.Error("failed to get Slack client for workspace",
 					"org", org,
@@ -521,6 +524,11 @@ func loadConfig() (*config.ServerConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+func blankHandler(w http.ResponseWriter, _ *http.Request) {
+	// Blank homepage - no content
+	w.WriteHeader(http.StatusOK)
 }
 
 func healthHandler(w http.ResponseWriter, _ *http.Request) {

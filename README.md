@@ -2,7 +2,7 @@
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/codeGROOVE-dev/slacker)](https://goreportcard.com/report/github.com/codeGROOVE-dev/slacker)
 [![GoDoc](https://godoc.org/github.com/codeGROOVE-dev/slacker?status.svg)](https://godoc.org/github.com/codeGROOVE-dev/slacker)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/codeGROOVE-dev/slacker)](go.mod)
 
 ![Ready-to-Review Slacker](media/Slackerposter.jpg)

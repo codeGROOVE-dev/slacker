@@ -204,7 +204,7 @@ func (h *OAuthHandler) HandleInstall(w http.ResponseWriter, r *http.Request) {
 			             https://platform.slack-edge.com/img/add_to_slack@2x.png 2x" />
 		</a>
 	</div>
-	<p><small>By installing, you agree to our terms and privacy policy.</small></p>
+	<p><small>By installing, you agree to our <a href="https://github.com/codeGROOVE-dev/policy/blob/main/TOS.md">terms of service</a> and <a href="https://github.com/codeGROOVE-dev/policy/blob/main/PRIVACY.md">privacy policy</a>.</small></p>
 </body>
 </html>
 `, authURL)

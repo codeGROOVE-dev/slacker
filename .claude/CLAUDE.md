@@ -29,11 +29,14 @@ Ready to Review is an elegant modern Slack bot written in Go that integrates wit
 - Alternative web dashboard available at https://dash.ready-to-review.dev/
 
 ### 3. Smart Notifications
-- **Smart DM Logic**: If user tagged in channel, delay DMs by configured time (default: 60min)
-- **Immediate DMs**: If user not in notification channel, send DM immediately
+- **Smart DM Logic**: If user tagged in channel, delay DMs by configured time (default: 65min)
+  - If user is IN the channel where they were tagged → wait for configured delay before sending DM
+  - If user is NOT in the channel where they were tagged → send DM immediately
+  - Set `reminder_dm_delay: 0` to disable delayed reminders
+  - **One DM per user per PR**: Even if PR is posted to multiple channels, each user gets exactly one DM
 - **Daily reminders**: Send between 8-9am local time if enabled and >8 hours since last notification
-- **Anti-spam**: Rate limit DMs to same user (30min minimum between DMs)
-- Format: `:postal_horn: Update README.md • goose#51 by @slackUser - waiting for your review`
+- **Anti-spam**: Rate limit DMs to same user (1min minimum between DMs)
+- Format: `:hourglass: Update README.md <url|goose#51> · author → review` (matches channel message style)
 
 ### 4. Configuration
 - Read YAML config from `/.codeGROOVE/slack.yaml` in target repos
@@ -45,7 +48,7 @@ Ready to Review is an elegant modern Slack bot written in Go that integrates wit
 global:
     prefix: ":postal_horn:"
     slack: codegroove-workspace.slack.com
-    channel_notify_delay_mins: 60
+    reminder_dm_delay: 65  # Minutes to wait before DMing users tagged in channel (0 = disabled)
     daily_reminders: true
 
 channels:
@@ -58,11 +61,12 @@ channels:
         repos:
             - "*"
 
-    # Override auto-discovery - explicit mapping
+    # Override auto-discovery - explicit mapping with custom delay
     social:
         repos:
             - sprinkler
             - slacker
+        reminder_dm_delay: 30  # Override global delay for this channel
 ```
 
 ### 5. Channel Auto-Discovery
