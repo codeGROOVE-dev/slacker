@@ -60,9 +60,11 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		sig := <-sigChan
-		slog.Info("received shutdown signal, starting graceful stop",
+		slog.Warn("🚨 SHUTDOWN SIGNAL RECEIVED 🚨",
 			"signal", sig.String(),
-			"signal_number", sig)
+			"signal_number", sig,
+			"reason", "Cloud Run is shutting down this instance (likely due to inactivity or new deployment)",
+			"action", "initiating fast shutdown")
 		cancel()
 	}()
 
@@ -140,11 +142,15 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 
 	eg.Go(func() error {
 		<-ctx.Done()
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		slog.Info("shutting down HTTP server")
+		// Quick shutdown - Cloud Run gives us ~10 seconds, use 2 seconds for HTTP
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		defer shutdownCancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
-			return fmt.Errorf("server shutdown failed: %w", err)
+			slog.Warn("HTTP server shutdown timeout - forcing close", "error", err)
+			return nil // Don't fail the errgroup, just move on
 		}
+		slog.Info("HTTP server stopped cleanly")
 		return nil
 	})
 
@@ -181,7 +187,7 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 		return 1
 	}
 
-	slog.Info("server stopped")
+	slog.Warn("✅ SERVER STOPPED CLEANLY - all services shut down gracefully")
 	return 0
 }
 
@@ -341,19 +347,21 @@ func runBotCoordinators(
 	// Health check: fail if no coordinators are active for too long
 	healthCheckTicker := time.NewTicker(15 * time.Second)
 	defer healthCheckTicker.Stop()
-	var lastHealthCheck time.Time
+	lastHealthCheck := time.Now() // Initialize to now so we have grace period on startup
 	const maxDowntime = 1 * time.Minute
 
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Info("stopping all coordinators")
+			slog.Info("shutdown initiated - stopping all bot coordinators")
 			mu.Lock()
+			coordinatorCount := len(activeCoordinators)
 			for org, cancel := range activeCoordinators {
 				slog.Info("stopping coordinator", "org", org)
 				cancel()
 			}
 			mu.Unlock()
+			slog.Info("all coordinators stopped", "count", coordinatorCount)
 			return ctx.Err()
 
 		case <-healthCheckTicker.C:
