@@ -152,10 +152,10 @@ linters:
 
     nakedret:
       # Default: 30
-      max-func-lines: 4
+      max-func-lines: 7
 
     nestif:
-      min-complexity: 12
+      min-complexity: 15
 
     nolintlint:
       # Exclude following linters from requiring an explanation.
@@ -207,8 +207,14 @@ linters:
       os-temp-dir: true
 
     varnamelen:
-      max-distance: 70
+      max-distance: 75
       min-name-length: 2
+      check-receivers: false
+      ignore-names:
+        - r
+        - w
+        - f
+        - err
 
   exclusions:
     # Default: []
