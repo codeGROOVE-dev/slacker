@@ -138,7 +138,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 		Login string `json:"login"`
 	} `json:"user"`
 }, checkResult *turn.CheckResponse,
-) (string, bool, error) {
+) (threadTS string, wasNewlyCreated bool, err error) {
 	prKey := fmt.Sprintf("%s/%s#%d", owner, repo, prNumber)
 
 	slog.Debug("finding or creating PR thread",
@@ -161,7 +161,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 	// Use a reasonable search window - last 30 days or creation time if available
 	// TODO: Once we have PR creation date in the struct, use that instead
 	searchFrom := time.Now().AddDate(0, 0, -30) // 30 days fallback
-	threadTS := c.searchForPRThread(ctx, channelID, prURL, searchFrom)
+	threadTS = c.searchForPRThread(ctx, channelID, prURL, searchFrom)
 	if threadTS != "" {
 		slog.Info("found existing PR thread via search",
 			"pr", prKey,

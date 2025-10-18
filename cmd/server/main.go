@@ -23,12 +23,14 @@ import (
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
 	"github.com/gorilla/mux"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 // Server configuration constants.
 const (
-	serverReadTimeout  = 15 * time.Second
-	serverWriteTimeout = 15 * time.Second
+	serverReadTimeout     = 15 * time.Second
+	serverWriteTimeout    = 15 * time.Second
+	oauthRateLimiterBurst = 20 // Maximum burst of OAuth requests allowed
 )
 
 func main() {
@@ -134,18 +136,23 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	router.HandleFunc("/health", healthHandler).Methods("GET")
 	router.HandleFunc("/healthz", makeHealthzHandler(githubManager)).Methods("GET")
 
-	// Slack OAuth endpoints - for app installation
+	// Slack OAuth endpoints - for app installation with rate limiting
 	if oauthHandler != nil {
-		router.HandleFunc("/slack/install", oauthHandler.HandleInstall).Methods("GET")
-		router.HandleFunc("/slack/oauth/callback", oauthHandler.HandleCallback).Methods("GET")
+		// SECURITY: Rate limiter for OAuth endpoints: 10 requests per second, burst of oauthRateLimiterBurst
+		// This prevents abuse while allowing legitimate installation flows
+		oauthLimiter := rate.NewLimiter(10, oauthRateLimiterBurst)
+
+		router.Handle("/slack/install", rateLimitMiddleware(oauthLimiter)(http.HandlerFunc(oauthHandler.HandleInstall))).Methods("GET")
+		router.Handle("/slack/oauth/callback", rateLimitMiddleware(oauthLimiter)(http.HandlerFunc(oauthHandler.HandleCallback))).Methods("GET")
 
 		// Debug endpoint - DO NOT EXPOSE IN PRODUCTION
 		// Remove this endpoint entirely or protect with strong authentication
 		// router.HandleFunc("/slack/debug", oauthHandler.HandleDebug).Methods("GET")
 
-		slog.Info("registered OAuth endpoints",
+		slog.Info("registered OAuth endpoints with rate limiting",
 			"install_url", "/slack/install",
-			"callback_url", "/slack/oauth/callback")
+			"callback_url", "/slack/oauth/callback",
+			"rate_limit", "10/s burst 20")
 	}
 
 	// Slack endpoints - routed to workspace-specific clients
@@ -625,4 +632,18 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// rateLimitMiddleware applies rate limiting to prevent abuse.
+func rateLimitMiddleware(limiter *rate.Limiter) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !limiter.Allow() {
+				http.Error(w, "Too many requests - please try again later", http.StatusTooManyRequests)
+				slog.Warn("rate limit exceeded", "path", r.URL.Path, "remote_addr", r.RemoteAddr)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }

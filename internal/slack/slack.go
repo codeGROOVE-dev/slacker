@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -652,7 +653,7 @@ func (c *Client) EventsHandler(writer http.ResponseWriter, r *http.Request) {
 	// Verify the signature.
 	signature := r.Header.Get("X-Slack-Signature")
 	timestamp := r.Header.Get("X-Slack-Request-Timestamp")
-	if !c.verifySignature(signature, timestamp, body) {
+	if !c.verifyRequestSignature(signature, timestamp, body) {
 		slog.Warn("failed to verify signature")
 		writer.WriteHeader(http.StatusUnauthorized)
 		return
@@ -806,8 +807,9 @@ func (*Client) handleR2RCommand(cmd *slack.SlashCommand) string {
 	case "dashboard":
 		// Note: In a full implementation, we'd send blocks here instead of plain text.
 		// For now, return a link to the web dashboard.
+		// SECURITY: URL encode user ID to prevent injection attacks
 		return fmt.Sprintf("View your dashboard at: https://dash.ready-to-review.dev/?user=%s\n"+
-			"Or use the Home tab in this app for the native Slack experience.", cmd.UserID)
+			"Or use the Home tab in this app for the native Slack experience.", url.QueryEscape(cmd.UserID))
 	case "settings":
 		return "Open the Home tab in this app to configure your notification preferences."
 	case "help":
@@ -824,11 +826,11 @@ func (*Client) handleR2RCommand(cmd *slack.SlashCommand) string {
 
 // VerifySignature verifies a Slack request signature (exported for use by EventRouter).
 func (c *Client) VerifySignature(signature, timestamp string, body []byte) bool {
-	return c.verifySignature(signature, timestamp, body)
+	return c.verifyRequestSignature(signature, timestamp, body)
 }
 
-// verifySignature verifies a Slack request signature.
-func (c *Client) verifySignature(signature, timestamp string, body []byte) bool {
+// verifyRequestSignature verifies a Slack request signature.
+func (c *Client) verifyRequestSignature(signature, timestamp string, body []byte) bool {
 	// Check timestamp to prevent replay attacks (60 seconds window).
 	ts, err := strconv.ParseInt(timestamp, 10, 64)
 	if err != nil {
@@ -863,7 +865,7 @@ func (c *Client) verifyRequest(r *http.Request) bool {
 	// Restore the body for subsequent reads.
 	r.Body = io.NopCloser(bytes.NewBuffer(body))
 
-	return c.verifySignature(signature, timestamp, body)
+	return c.verifyRequestSignature(signature, timestamp, body)
 }
 
 // isRateLimitError checks if error is a rate limit error.

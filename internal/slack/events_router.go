@@ -23,9 +23,9 @@ func NewEventRouter(manager *Manager) *EventRouter {
 }
 
 // HandleEvents routes incoming Slack events to the appropriate workspace client.
-func (er *EventRouter) HandleEvents(w http.ResponseWriter, r *http.Request) {
+func (er *EventRouter) HandleEvents(w http.ResponseWriter, req *http.Request) {
 	// Read body for verification and parsing
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(req.Body)
 	if err != nil {
 		slog.Error("failed to read request body", "error", err)
 		w.WriteHeader(http.StatusBadRequest)
@@ -70,7 +70,7 @@ func (er *EventRouter) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get the workspace-specific client to access its signing secret for verification
-	client, err := er.manager.Client(r.Context(), teamID)
+	client, err := er.manager.Client(req.Context(), teamID)
 	if err != nil {
 		slog.Error("failed to get client for workspace",
 			"team_id", teamID,
@@ -81,14 +81,14 @@ func (er *EventRouter) HandleEvents(w http.ResponseWriter, r *http.Request) {
 
 	// CRITICAL: Verify Slack signature BEFORE processing the event
 	// This prevents attackers from forging events claiming to be from arbitrary workspaces
-	signature := r.Header.Get("X-Slack-Signature")
-	timestamp := r.Header.Get("X-Slack-Request-Timestamp")
+	signature := req.Header.Get("X-Slack-Signature")
+	timestamp := req.Header.Get("X-Slack-Request-Timestamp")
 	if !client.VerifySignature(signature, timestamp, body) {
 		slog.Warn("webhook signature verification failed - possible attack",
 			"team_id", teamID,
 			"event_type", eventWrapper.Type,
-			"remote_addr", r.RemoteAddr,
-			"user_agent", r.Header.Get("User-Agent"))
+			"remote_addr", req.RemoteAddr,
+			"user_agent", req.Header.Get("User-Agent"))
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
@@ -99,14 +99,14 @@ func (er *EventRouter) HandleEvents(w http.ResponseWriter, r *http.Request) {
 
 	// Forward to the workspace-specific client's event handler
 	// We need to reconstruct the request with the original body
-	r.Body = io.NopCloser(&readerWrapper{data: body})
-	client.EventsHandler(w, r)
+	req.Body = io.NopCloser(&readerWrapper{data: body})
+	client.EventsHandler(w, req)
 }
 
 // HandleInteractions routes Slack interactions to the appropriate workspace client.
-func (er *EventRouter) HandleInteractions(w http.ResponseWriter, r *http.Request) {
+func (er *EventRouter) HandleInteractions(w http.ResponseWriter, req *http.Request) {
 	// Read body for signature verification
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(req.Body)
 	if err != nil {
 		slog.Error("failed to read request body", "error", err)
 		w.WriteHeader(http.StatusBadRequest)
@@ -115,7 +115,7 @@ func (er *EventRouter) HandleInteractions(w http.ResponseWriter, r *http.Request
 
 	// Parse payload to extract team_id FIRST (before signature verification)
 	// Interactions come as form-encoded with a "payload" field
-	payload := r.FormValue("payload")
+	payload := req.FormValue("payload")
 	if payload == "" {
 		// Try reading from body
 		payload = string(body)
@@ -140,7 +140,7 @@ func (er *EventRouter) HandleInteractions(w http.ResponseWriter, r *http.Request
 	}
 
 	// Get the workspace-specific client to access its signing secret for verification
-	client, err := er.manager.Client(r.Context(), teamID)
+	client, err := er.manager.Client(req.Context(), teamID)
 	if err != nil {
 		slog.Error("failed to get client for workspace",
 			"team_id", teamID,
@@ -150,13 +150,13 @@ func (er *EventRouter) HandleInteractions(w http.ResponseWriter, r *http.Request
 	}
 
 	// CRITICAL: Verify Slack signature BEFORE processing the interaction
-	signature := r.Header.Get("X-Slack-Signature")
-	timestamp := r.Header.Get("X-Slack-Request-Timestamp")
+	signature := req.Header.Get("X-Slack-Signature")
+	timestamp := req.Header.Get("X-Slack-Request-Timestamp")
 	if !client.VerifySignature(signature, timestamp, body) {
 		slog.Warn("interaction signature verification failed - possible attack",
 			"team_id", teamID,
-			"remote_addr", r.RemoteAddr,
-			"user_agent", r.Header.Get("User-Agent"))
+			"remote_addr", req.RemoteAddr,
+			"user_agent", req.Header.Get("User-Agent"))
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
@@ -164,14 +164,14 @@ func (er *EventRouter) HandleInteractions(w http.ResponseWriter, r *http.Request
 	slog.Debug("routing interaction to workspace", "team_id", teamID)
 
 	// Forward to the workspace-specific client's interaction handler
-	r.Body = io.NopCloser(&readerWrapper{data: body})
-	client.InteractionsHandler(w, r)
+	req.Body = io.NopCloser(&readerWrapper{data: body})
+	client.InteractionsHandler(w, req)
 }
 
 // HandleSlashCommand routes slash commands to the appropriate workspace client.
-func (er *EventRouter) HandleSlashCommand(w http.ResponseWriter, r *http.Request) {
+func (er *EventRouter) HandleSlashCommand(w http.ResponseWriter, req *http.Request) {
 	// Read body for signature verification BEFORE parsing form
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(req.Body)
 	if err != nil {
 		slog.Error("failed to read request body", "error", err)
 		w.WriteHeader(http.StatusBadRequest)
@@ -179,16 +179,16 @@ func (er *EventRouter) HandleSlashCommand(w http.ResponseWriter, r *http.Request
 	}
 
 	// Restore body for form parsing
-	r.Body = io.NopCloser(&readerWrapper{data: body})
+	req.Body = io.NopCloser(&readerWrapper{data: body})
 
 	// Parse form to get team_id
-	if err := r.ParseForm(); err != nil {
+	if err := req.ParseForm(); err != nil {
 		slog.Error("failed to parse form", "error", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	teamID := r.FormValue("team_id")
+	teamID := req.FormValue("team_id")
 	if teamID == "" {
 		slog.Error("slash command missing team_id")
 		w.WriteHeader(http.StatusBadRequest)
@@ -196,7 +196,7 @@ func (er *EventRouter) HandleSlashCommand(w http.ResponseWriter, r *http.Request
 	}
 
 	// Get the workspace-specific client to access its signing secret for verification
-	client, err := er.manager.Client(r.Context(), teamID)
+	client, err := er.manager.Client(req.Context(), teamID)
 	if err != nil {
 		slog.Error("failed to get client for workspace",
 			"team_id", teamID,
@@ -206,26 +206,26 @@ func (er *EventRouter) HandleSlashCommand(w http.ResponseWriter, r *http.Request
 	}
 
 	// CRITICAL: Verify Slack signature BEFORE processing the command
-	signature := r.Header.Get("X-Slack-Signature")
-	timestamp := r.Header.Get("X-Slack-Request-Timestamp")
+	signature := req.Header.Get("X-Slack-Signature")
+	timestamp := req.Header.Get("X-Slack-Request-Timestamp")
 	if !client.VerifySignature(signature, timestamp, body) {
 		slog.Warn("slash command signature verification failed - possible attack",
 			"team_id", teamID,
-			"command", r.FormValue("command"),
-			"remote_addr", r.RemoteAddr,
-			"user_agent", r.Header.Get("User-Agent"))
+			"command", req.FormValue("command"),
+			"remote_addr", req.RemoteAddr,
+			"user_agent", req.Header.Get("User-Agent"))
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
 	slog.Debug("routing slash command to workspace",
 		"team_id", teamID,
-		"command", r.FormValue("command"))
+		"command", req.FormValue("command"))
 
 	// Forward to the workspace-specific client's slash command handler
 	// Restore body again since it was consumed by signature verification
-	r.Body = io.NopCloser(&readerWrapper{data: body})
-	client.SlashCommandHandler(w, r)
+	req.Body = io.NopCloser(&readerWrapper{data: body})
+	client.SlashCommandHandler(w, req)
 }
 
 // readerWrapper wraps a byte slice as an io.Reader.

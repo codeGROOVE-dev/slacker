@@ -20,6 +20,12 @@ const (
 	logFieldOrg = "org"
 )
 
+// Constants for configuration defaults.
+const (
+	defaultReminderDMDelayMinutes = 65               // Default delay in minutes before sending DM if user tagged in channel
+	defaultConfigCacheTTL         = 20 * time.Minute // Default TTL for configuration cache entries
+)
+
 // ServerConfig holds the server configuration from environment variables.
 type ServerConfig struct {
 	DataDir            string
@@ -131,7 +137,7 @@ func New(ctx context.Context) *Manager {
 		clients: make(map[string]*github.Client),
 		cache: &configCache{
 			entries: make(map[string]configCacheEntry),
-			ttl:     20 * time.Minute,
+			ttl:     defaultConfigCacheTTL,
 		},
 	}
 }
@@ -264,7 +270,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 				TeamID:          "",
 				EmailDomain:     "",
 				DailyReminders:  true,
-				ReminderDMDelay: 65, // Default: 65 minutes
+				ReminderDMDelay: defaultReminderDMDelayMinutes,
 			},
 			Channels: make(map[string]struct {
 				Repos           []string `yaml:"repos"`
@@ -304,7 +310,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 				TeamID:          "",
 				EmailDomain:     "",
 				DailyReminders:  true,
-				ReminderDMDelay: 65, // Default: 65 minutes
+				ReminderDMDelay: defaultReminderDMDelayMinutes,
 			},
 			Channels: make(map[string]struct {
 				Repos           []string `yaml:"repos"`
@@ -567,7 +573,7 @@ func (m *Manager) ReminderDMDelay(org, channel string) int {
 
 	config, exists := m.configs[org]
 	if !exists {
-		return 65 // Default: 65 minutes
+		return defaultReminderDMDelayMinutes
 	}
 
 	// Check for channel-specific override
@@ -581,7 +587,7 @@ func (m *Manager) ReminderDMDelay(org, channel string) int {
 	if config.Global.ReminderDMDelay > 0 {
 		return config.Global.ReminderDMDelay
 	}
-	return 65 // Default: 65 minutes
+	return defaultReminderDMDelayMinutes
 }
 
 // ReloadConfig reloads the configuration for an org (e.g., when .codeGROOVE repo is updated).

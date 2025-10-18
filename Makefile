@@ -72,8 +72,28 @@ endif
 LINTERS :=
 FIXERS :=
 
+SHELLCHECK_VERSION ?= v0.10.0
+SHELLCHECK_BIN := $(LINT_ROOT)/out/linters/shellcheck-$(SHELLCHECK_VERSION)-$(LINT_ARCH)
+$(SHELLCHECK_BIN):
+	mkdir -p $(LINT_ROOT)/out/linters
+	curl -sSfL -o $@.tar.xz https://github.com/koalaman/shellcheck/releases/download/$(SHELLCHECK_VERSION)/shellcheck-$(SHELLCHECK_VERSION).$(LINT_OS_LOWER).$(LINT_ARCH).tar.xz \
+		|| echo "Unable to fetch shellcheck for $(LINT_OS)/$(LINT_ARCH): falling back to locally install"
+	test -f $@.tar.xz \
+		&& tar -C $(LINT_ROOT)/out/linters -xJf $@.tar.xz \
+		&& mv $(LINT_ROOT)/out/linters/shellcheck-$(SHELLCHECK_VERSION)/shellcheck $@ \
+		|| printf "#!/usr/bin/env shellcheck\n" > $@
+	chmod u+x $@
+
+LINTERS += shellcheck-lint
+shellcheck-lint: $(SHELLCHECK_BIN)
+	$(SHELLCHECK_BIN) $(shell find . -name "*.sh")
+
+FIXERS += shellcheck-fix
+shellcheck-fix: $(SHELLCHECK_BIN)
+	$(SHELLCHECK_BIN) $(shell find . -name "*.sh") -f diff | { read -t 1 line || exit 0; { echo "$$line" && cat; } | git apply -p2; }
+
 GOLANGCI_LINT_CONFIG := $(LINT_ROOT)/.golangci.yml
-GOLANGCI_LINT_VERSION ?= v2.4.0
+GOLANGCI_LINT_VERSION ?= v2.5.0
 GOLANGCI_LINT_BIN := $(LINT_ROOT)/out/linters/golangci-lint-$(GOLANGCI_LINT_VERSION)-$(LINT_ARCH)
 $(GOLANGCI_LINT_BIN):
 	mkdir -p $(LINT_ROOT)/out/linters

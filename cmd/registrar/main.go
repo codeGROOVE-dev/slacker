@@ -18,6 +18,13 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// Constants for server configuration.
+const (
+	oauthRateLimiterBurst = 20               // Maximum burst of OAuth requests allowed
+	serverReadTimeout     = 15 * time.Second // Maximum duration for reading the entire request
+	serverWriteTimeout    = 15 * time.Second // Maximum duration before timing out writes of the response
+)
+
 func main() {
 	// Configure logging
 	logHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -35,7 +42,6 @@ func main() {
 		cancel()
 		os.Exit(1)
 	}
-	defer cancel()
 
 	// Initialize Slack manager (signing secret not needed for OAuth-only service)
 	slackManager := slack.NewManager("")
@@ -47,9 +53,9 @@ func main() {
 	router := mux.NewRouter()
 	router.Use(securityHeadersMiddleware)
 
-	// Rate limiter for OAuth endpoints: 10 requests per second, burst of 20
+	// Rate limiter for OAuth endpoints: 10 requests per second, burst of oauthRateLimiterBurst
 	// This prevents abuse while allowing legitimate installation flows
-	oauthLimiter := rate.NewLimiter(10, 20)
+	oauthLimiter := rate.NewLimiter(10, oauthRateLimiterBurst)
 
 	// Health check
 	router.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -78,8 +84,8 @@ func main() {
 	server := &http.Server{
 		Addr:         ":" + port,
 		Handler:      router,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		ReadTimeout:  serverReadTimeout,
+		WriteTimeout: serverWriteTimeout,
 	}
 
 	// Handle graceful shutdown
@@ -110,6 +116,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	cancel()
 	slog.Info("server stopped")
 }
 
