@@ -9,23 +9,35 @@
 
 Slack bot that tracks GitHub pull requests and notifies reviewers when it's their turn. Part of the https://codegroove.dev/ ecosystem of developer acceleration tools.
 
+## Quick Start
+
+Ready to get started? Install the Slack app and configure your repositories:
+
+<a href="https://slack.com/oauth/v2/authorize?client_id=9426269265270.9443955134789&scope=channels:history,channels:read,chat:write,chat:write.public,commands,im:write,reactions:write,team:read,users:read,users:read.email,groups:read,groups:history&user_scope="><img alt="Add to Slack" height="40" width="139" src="https://platform.slack-edge.com/img/add_to_slack.png" srcSet="https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x" /></a>
+
+**→ [Setup Guide](docs/SETUP.md)** - Complete setup instructions, emoji meanings, and notification settings
+
 ## Features
 
-- Creates Slack threads for new PRs
-- Tracks PR state with reaction emojis
+- Creates Slack threads for new PRs with status emojis
 - Smart notifications: Delays DMs if user already notified in channel
 - Native Slack app home dashboard
-- Configurable notification settings via YAML
+- Channel auto-discovery: repos automatically map to same-named channels
+- Configurable notification settings via YAML in your repos
 - Multi-org and multi-workspace support
-- Daily reminder system
+- Daily reminder system with timezone detection
 
-## Installation
+## Self-Hosting
+
+Want to run your own instance? Follow the installation steps below.
 
 ```bash
 git clone https://github.com/codeGROOVE-dev/slacker.git
 cd slacker
 make build
 ```
+
+See [docs/SLACK_SETUP.md](docs/SLACK_SETUP.md) for detailed Slack app configuration.
 
 ## Slack App Configuration
 
