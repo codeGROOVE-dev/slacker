@@ -1,4 +1,4 @@
-.PHONY: all build build-server build-registrar test clean fmt vet run-server run-registrar deploy
+.PHONY: all build build-server build-registrar test clean fmt vet run-server run-registrar deploy deploy-server deploy-registrar
 
 # Default target
 all: fmt vet lint test build
@@ -10,9 +10,9 @@ build: build-server build-registrar
 build-server:
 	go build -v -o bin/slacker ./cmd/server
 
-# Build the slack-registrar binary
+# Build the registrar binary
 build-registrar:
-	go build -v -o bin/slack-registrar ./cmd/slack-registrar
+	go build -v -o bin/slack-registrar ./cmd/registrar
 
 # Run tests with race detection
 test:
@@ -40,9 +40,16 @@ run-server: build-server
 run-registrar: build-registrar
 	./bin/slack-registrar
 
-# Deploy the server
-deploy:
-	./hacks/deploy.sh cmd/server/
+# Deploy both server and registrar
+deploy: deploy-server deploy-registrar
+
+# Deploy the server (as slacker in Cloud Run)
+deploy-server:
+	APP_NAME=slacker ./hacks/deploy.sh cmd/server/
+
+# Deploy the registrar (as slacker-registrar in Cloud Run)
+deploy-registrar:
+	APP_NAME=slacker-registrar ./hacks/deploy.sh cmd/registrar/
 
 # BEGIN: lint-install .
 # http://github.com/codeGROOVE-dev/lint-install

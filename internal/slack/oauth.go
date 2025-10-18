@@ -49,7 +49,7 @@ func (h *OAuthHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("received OAuth callback",
-		"code_prefix", code[:min(len(code), 10)]+"...")
+		"code_prefix", code[:minInt(len(code), 10)]+"...")
 
 	// Exchange code for token with retry
 	var resp *slack.OAuthV2Response
@@ -124,7 +124,7 @@ func (h *OAuthHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	// Return success page
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `
+	if _, err := fmt.Fprintf(w, `
 <!DOCTYPE html>
 <html>
 <head>
@@ -142,7 +142,10 @@ func (h *OAuthHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	<p>You can now close this window and return to Slack.</p>
 </body>
 </html>
-`, teamName)
+`, teamName); err != nil {
+		slog.Error("failed to write success page", "error", err)
+		return
+	}
 
 	slog.Info("OAuth installation completed successfully",
 		"team_id", teamID,
@@ -150,7 +153,7 @@ func (h *OAuthHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleInstall serves the "Add to Slack" installation page.
-func (h *OAuthHandler) HandleInstall(w http.ResponseWriter, r *http.Request) {
+func (h *OAuthHandler) HandleInstall(w http.ResponseWriter, _ *http.Request) {
 	// Build OAuth authorization URL
 	scopes := []string{
 		"app_mentions:read",
@@ -180,7 +183,7 @@ func (h *OAuthHandler) HandleInstall(w http.ResponseWriter, r *http.Request) {
 	// Return installation page with "Add to Slack" button
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `
+	if _, err := fmt.Fprintf(w, `
 <!DOCTYPE html>
 <html>
 <head>
@@ -207,7 +210,9 @@ func (h *OAuthHandler) HandleInstall(w http.ResponseWriter, r *http.Request) {
 	<p><small>By installing, you agree to our <a href="https://github.com/codeGROOVE-dev/policy/blob/main/TOS.md">terms of service</a> and <a href="https://github.com/codeGROOVE-dev/policy/blob/main/PRIVACY.md">privacy policy</a>.</small></p>
 </body>
 </html>
-`, authURL)
+`, authURL); err != nil {
+		slog.Error("failed to write installation page", "error", err)
+	}
 }
 
 // joinScopes joins scope names with commas for OAuth URL.
@@ -222,8 +227,8 @@ func joinScopes(scopes []string) string {
 	return result
 }
 
-// min returns the smaller of two ints.
-func min(a, b int) int {
+// minInt returns the smaller of two ints.
+func minInt(a, b int) int {
 	if a < b {
 		return a
 	}
@@ -238,7 +243,7 @@ type OAuthResponse struct {
 }
 
 // HandleDebug returns JSON with installed workspaces (for debugging).
-func (h *OAuthHandler) HandleDebug(w http.ResponseWriter, r *http.Request) {
+func (h *OAuthHandler) HandleDebug(w http.ResponseWriter, _ *http.Request) {
 	workspaces := h.manager.ListWorkspaces()
 
 	response := make([]OAuthResponse, 0, len(workspaces))
@@ -251,10 +256,12 @@ func (h *OAuthHandler) HandleDebug(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"workspaces": response,
 		"count":      len(response),
-	})
+	}); err != nil {
+		slog.Error("failed to encode debug response", "error", err)
+	}
 
 	slog.Debug("served OAuth debug endpoint",
 		"workspace_count", len(response))

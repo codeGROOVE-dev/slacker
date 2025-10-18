@@ -98,6 +98,31 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	// Initialize event router for multi-workspace event handling.
 	eventRouter := slack.NewEventRouter(slackManager)
 
+	// Initialize OAuth handler for Slack app installation.
+	// These credentials are needed for the OAuth flow.
+	slackClientID := os.Getenv("SLACK_CLIENT_ID")
+	slackClientSecret := os.Getenv("SLACK_CLIENT_SECRET")
+	if slackClientSecret == "" {
+		// Try fetching from Secret Manager
+		var err error
+		slackClientSecret, err = gsm.Fetch(ctx, "SLACK_CLIENT_SECRET")
+		if err != nil {
+			slog.Warn("SLACK_CLIENT_SECRET not found - OAuth installation will not work",
+				"error", err)
+		}
+	}
+
+	var oauthHandler *slack.OAuthHandler
+	if slackClientID != "" && slackClientSecret != "" {
+		oauthHandler = slack.NewOAuthHandler(slackManager, slackClientID, slackClientSecret)
+		slog.Info("OAuth handler initialized",
+			"client_id", slackClientID)
+	} else {
+		slog.Warn("OAuth not configured - app installation via web will not work",
+			"has_client_id", slackClientID != "",
+			"has_client_secret", slackClientSecret != "")
+	}
+
 	// Setup HTTP routes with security middleware.
 	router := mux.NewRouter()
 	router.Use(securityHeadersMiddleware)
@@ -108,6 +133,20 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	// Health endpoints
 	router.HandleFunc("/health", healthHandler).Methods("GET")
 	router.HandleFunc("/healthz", makeHealthzHandler(githubManager)).Methods("GET")
+
+	// Slack OAuth endpoints - for app installation
+	if oauthHandler != nil {
+		router.HandleFunc("/slack/install", oauthHandler.HandleInstall).Methods("GET")
+		router.HandleFunc("/slack/oauth/callback", oauthHandler.HandleCallback).Methods("GET")
+
+		// Debug endpoint - DO NOT EXPOSE IN PRODUCTION
+		// Remove this endpoint entirely or protect with strong authentication
+		// router.HandleFunc("/slack/debug", oauthHandler.HandleDebug).Methods("GET")
+
+		slog.Info("registered OAuth endpoints",
+			"install_url", "/slack/install",
+			"callback_url", "/slack/oauth/callback")
+	}
 
 	// Slack endpoints - routed to workspace-specific clients
 	router.HandleFunc("/slack/events", eventRouter.HandleEvents).Methods("POST")

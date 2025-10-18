@@ -822,6 +822,11 @@ func (*Client) handleR2RCommand(cmd *slack.SlashCommand) string {
 	}
 }
 
+// VerifySignature verifies a Slack request signature (exported for use by EventRouter).
+func (c *Client) VerifySignature(signature, timestamp string, body []byte) bool {
+	return c.verifySignature(signature, timestamp, body)
+}
+
 // verifySignature verifies a Slack request signature.
 func (c *Client) verifySignature(signature, timestamp string, body []byte) bool {
 	// Check timestamp to prevent replay attacks (60 seconds window).

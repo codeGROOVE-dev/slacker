@@ -6,8 +6,8 @@ require (
 	github.com/codeGROOVE-dev/gh-mailto v0.0.0-20250910154406-84dc83d8f666
 	github.com/codeGROOVE-dev/gsm v0.0.0-20251007153111-74e7bbe21f47
 	github.com/codeGROOVE-dev/retry v1.2.0
-	github.com/codeGROOVE-dev/sprinkler v0.0.0-20251008180759-b99d89e20e02
-	github.com/codeGROOVE-dev/turnclient v0.0.0-20251008180632-e41425bfe2ea
+	github.com/codeGROOVE-dev/sprinkler v0.0.0-20251016145102-d41de481b9e6
+	github.com/codeGROOVE-dev/turnclient v0.0.0-20251016170035-1698daf57581
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/go-github/v50 v50.2.0
 	github.com/gorilla/mux v1.8.1
@@ -21,7 +21,7 @@ require (
 require (
 	github.com/ProtonMail/go-crypto v1.3.0 // indirect
 	github.com/cloudflare/circl v1.6.1 // indirect
-	github.com/codeGROOVE-dev/prx v0.0.0-20251007195330-2dd5420bc23c // indirect
+	github.com/codeGROOVE-dev/prx v0.0.0-20251016165946-00c6c6e90c29 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/shurcooL/githubv4 v0.0.0-20240727222349-48295856cce7 // indirect
