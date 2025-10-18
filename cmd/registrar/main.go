@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -17,6 +18,13 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// Constants for server configuration.
+const (
+	oauthRateLimiterBurst = 20               // Maximum burst of OAuth requests allowed
+	serverReadTimeout     = 15 * time.Second // Maximum duration for reading the entire request
+	serverWriteTimeout    = 15 * time.Second // Maximum duration before timing out writes of the response
+)
+
 func main() {
 	// Configure logging
 	logHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -26,17 +34,17 @@ func main() {
 	slog.SetDefault(slog.New(logHandler))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Load configuration
 	cfg, err := loadConfig(ctx)
 	if err != nil {
 		slog.Error("failed to load configuration", "error", err)
+		cancel()
 		os.Exit(1)
 	}
 
-	// Initialize Slack manager
-	slackManager := slack.NewManager(cfg.SlackSigningSecret)
+	// Initialize Slack manager (signing secret not needed for OAuth-only service)
+	slackManager := slack.NewManager("")
 
 	// Initialize OAuth handler
 	oauthHandler := slack.NewOAuthHandler(slackManager, cfg.SlackClientID, cfg.SlackClientSecret)
@@ -45,21 +53,26 @@ func main() {
 	router := mux.NewRouter()
 	router.Use(securityHeadersMiddleware)
 
-	// Rate limiter for OAuth endpoints: 10 requests per second, burst of 20
+	// Rate limiter for OAuth endpoints: 10 requests per second, burst of oauthRateLimiterBurst
 	// This prevents abuse while allowing legitimate installation flows
-	oauthLimiter := rate.NewLimiter(10, 20)
+	oauthLimiter := rate.NewLimiter(10, oauthRateLimiterBurst)
 
 	// Health check
-	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	router.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "ok")
+		if _, err := fmt.Fprint(w, "ok"); err != nil {
+			slog.Error("failed to write health response", "error", err)
+		}
 	}).Methods("GET")
 
 	// OAuth endpoints with rate limiting
 	router.Handle("/", rateLimitMiddleware(oauthLimiter)(http.HandlerFunc(oauthHandler.HandleInstall))).Methods("GET")
 	router.Handle("/install", rateLimitMiddleware(oauthLimiter)(http.HandlerFunc(oauthHandler.HandleInstall))).Methods("GET")
 	router.Handle("/oauth/callback", rateLimitMiddleware(oauthLimiter)(http.HandlerFunc(oauthHandler.HandleCallback))).Methods("GET")
-	router.HandleFunc("/debug", oauthHandler.HandleDebug).Methods("GET")
+
+	// Debug endpoint - DO NOT EXPOSE IN PRODUCTION
+	// Remove this endpoint entirely or protect with strong authentication
+	// router.HandleFunc("/debug", oauthHandler.HandleDebug).Methods("GET")
 
 	// Determine port
 	port := os.Getenv("PORT")
@@ -71,8 +84,8 @@ func main() {
 	server := &http.Server{
 		Addr:         ":" + port,
 		Handler:      router,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		ReadTimeout:  serverReadTimeout,
+		WriteTimeout: serverWriteTimeout,
 	}
 
 	// Handle graceful shutdown
@@ -99,17 +112,18 @@ func main() {
 
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("server failed", "error", err)
+		cancel()
 		os.Exit(1)
 	}
 
+	cancel()
 	slog.Info("server stopped")
 }
 
 // Config holds the registrar configuration.
 type Config struct {
-	SlackClientID      string
-	SlackClientSecret  string
-	SlackSigningSecret string
+	SlackClientID     string
+	SlackClientSecret string
 }
 
 // loadConfig loads configuration from environment and Secret Manager.
@@ -117,41 +131,39 @@ func loadConfig(ctx context.Context) (*Config, error) {
 	getSecret := func(name string) string {
 		// Try environment variable first
 		if value := os.Getenv(name); value != "" {
+			slog.Info("using environment variable", "name", name)
 			return value
 		}
 
 		// Try Secret Manager
+		slog.Info("fetching from Secret Manager", "name", name)
 		value, err := gsm.Fetch(ctx, name)
 		if err != nil {
-			slog.Warn("failed to fetch secret",
+			slog.Warn("failed to fetch secret from GSM",
 				"name", name,
 				"error", err)
 			return ""
 		}
+		slog.Info("successfully fetched from Secret Manager", "name", name)
 		return value
 	}
 
 	cfg := &Config{
-		SlackClientID:      os.Getenv("SLACK_CLIENT_ID"),
-		SlackClientSecret:  getSecret("SLACK_CLIENT_SECRET"),
-		SlackSigningSecret: getSecret("SLACK_SIGNING_SECRET"),
+		SlackClientID:     getSecret("SLACK_CLIENT_ID"),
+		SlackClientSecret: getSecret("SLACK_CLIENT_SECRET"),
 	}
 
 	// Validate required fields
 	if cfg.SlackClientID == "" {
-		return nil, fmt.Errorf("missing required: SLACK_CLIENT_ID")
+		return nil, errors.New("missing required: SLACK_CLIENT_ID (env var or GSM)")
 	}
 	if cfg.SlackClientSecret == "" {
-		return nil, fmt.Errorf("missing required: SLACK_CLIENT_SECRET")
-	}
-	if cfg.SlackSigningSecret == "" {
-		return nil, fmt.Errorf("missing required: SLACK_SIGNING_SECRET")
+		return nil, errors.New("missing required: SLACK_CLIENT_SECRET (env var or GSM)")
 	}
 
-	slog.Info("configuration loaded",
+	slog.Info("configuration loaded successfully",
 		"client_id", cfg.SlackClientID,
-		"has_client_secret", cfg.SlackClientSecret != "",
-		"has_signing_secret", cfg.SlackSigningSecret != "")
+		"has_client_secret", cfg.SlackClientSecret != "")
 
 	return cfg, nil
 }

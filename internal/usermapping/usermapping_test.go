@@ -2,6 +2,7 @@ package usermapping
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,9 @@ import (
 	ghmailto "github.com/codeGROOVE-dev/gh-mailto/pkg/gh-mailto"
 	"github.com/slack-go/slack"
 )
+
+// Sentinel error for mock "not found" responses.
+var errMockNotFound = errors.New("mock: not found")
 
 // MockSlackAPI mocks the Slack API for testing.
 type MockSlackAPI struct {
@@ -19,7 +23,7 @@ func (m *MockSlackAPI) GetUserByEmailContext(ctx context.Context, email string) 
 	if m.getUserByEmailFunc != nil {
 		return m.getUserByEmailFunc(ctx, email)
 	}
-	return nil, nil
+	return nil, errMockNotFound
 }
 
 // MockGitHubLookup mocks the GitHub email lookup for testing.
@@ -70,7 +74,7 @@ func TestService_GetSlackHandle_Success(t *testing.T) {
 					Deleted: false,
 				}, nil
 			}
-			return nil, nil
+			return nil, errMockNotFound
 		},
 	}
 
@@ -287,7 +291,7 @@ func TestService_MultipleEmailMatches(t *testing.T) {
 					Deleted: false,
 				}, nil
 			}
-			return nil, nil
+			return nil, errMockNotFound
 		},
 	}
 

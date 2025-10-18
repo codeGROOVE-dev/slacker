@@ -1,4 +1,3 @@
-// Package slack provides multi-workspace Slack client management.
 package slack
 
 import (
@@ -66,7 +65,7 @@ func (m *Manager) Client(ctx context.Context, teamID string) (*Client, error) {
 		slog.Warn("failed to fetch metadata for workspace, will use defaults",
 			"team_id", teamID,
 			"error", err)
-		metadataJSON = fmt.Sprintf(`{"team_id":"%s","team_name":"unknown"}`, teamID)
+		metadataJSON = fmt.Sprintf(`{"team_id":%q,"team_name":"unknown"}`, teamID)
 	}
 
 	var metadata WorkspaceMetadata

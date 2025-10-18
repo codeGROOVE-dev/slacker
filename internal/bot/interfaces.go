@@ -1,7 +1,7 @@
-// Package bot defines minimal interfaces for dependencies.
+package bot
+
 // Interfaces are defined here, where they're consumed, not where they're implemented.
 // This is Go best practice: accept interfaces, return structs.
-package bot
 
 import (
 	"context"
@@ -26,18 +26,18 @@ type SlackClient interface {
 type GitHubClient interface {
 	InstallationToken(ctx context.Context) string
 	Organization() string
-	Client() interface{}
+	Client() any
 }
 
 // ConfigManager defines configuration operations.
 type ConfigManager interface {
-	Config(org string) (interface{}, bool)
+	Config(org string) (any, bool)
 	LoadConfig(ctx context.Context, org string) error
 	ReloadConfig(ctx context.Context, org string) error
 	Domain(org string) string
 	WorkspaceName(org string) string
 	ChannelsForRepo(org, repo string) []string
-	SetGitHubClient(org string, client interface{})
+	SetGitHubClient(org string, client any)
 	SetWorkspaceName(workspaceName string)
 }
 

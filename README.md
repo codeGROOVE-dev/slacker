@@ -29,15 +29,25 @@ Ready to get started? Install the Slack app and configure your repositories:
 
 ## Self-Hosting
 
-Want to run your own instance? Follow the installation steps below.
+Want to run your own instance? See the comprehensive deployment guide:
+
+**→ [Deployment Guide](docs/DEPLOYMENT.md)** - Slack app setup, OAuth credentials, and Cloud Run deployment
+
+Quick start:
 
 ```bash
 git clone https://github.com/codeGROOVE-dev/slacker.git
 cd slacker
 make build
+
+# Single-workspace (self-hosting for your org):
+make deploy-server
+
+# Multi-workspace (SaaS/Marketplace):
+make deploy
 ```
 
-See [docs/SLACK_SETUP.md](docs/SLACK_SETUP.md) for detailed Slack app configuration.
+**Note:** `make deploy` deploys both server and registrar for multi-workspace support. Use `make deploy-server` for single-workspace installations.
 
 ## Slack App Configuration
 
@@ -146,3 +156,10 @@ make build      # Build binary
 
 - [sprinkler](https://github.com/codeGROOVE-dev/sprinkler) - WebSocket hub for GitHub webhooks
 - [turnclient](https://github.com/codeGROOVE-dev/turnclient) - PR state analysis
+
+## Documentation
+
+- **[Setup Guide](docs/SETUP.md)** - End-user setup for SaaS version
+- **[Deployment Guide](docs/DEPLOYMENT.md)** - Self-hosting and OAuth configuration
+- **[Architecture](docs/ARCHITECTURE.md)** - Code structure and design decisions
+- **[Contributing](docs/CONTRIBUTING.md)** - Development guidelines

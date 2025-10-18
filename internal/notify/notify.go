@@ -10,6 +10,11 @@ import (
 	"github.com/codeGROOVE-dev/slacker/internal/slack"
 )
 
+// Constants for notification defaults.
+const (
+	defaultReminderDMDelayMinutes = 65 // Default delay in minutes before sending DM if user tagged in channel
+)
+
 // Manager handles user notifications across multiple workspaces.
 type Manager struct {
 	slackManager  *slack.Manager
@@ -74,11 +79,11 @@ func (m *Manager) Run(ctx context.Context) error {
 type PRInfo struct {
 	Owner   string
 	Repo    string
-	Number  int
 	Title   string
 	Author  string
 	State   string
 	HTMLURL string
+	Number  int
 }
 
 // getPrefixForState returns the emoji prefix for a given PR state.
@@ -179,7 +184,7 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 
 		// Get configured delay for this channel/org (we need channel name for config lookup)
 		// If channelName wasn't provided, we can't look up config - use default
-		delayMins := 65 // Default
+		delayMins := defaultReminderDMDelayMinutes
 		if channelName != "" {
 			delayMins = m.configManager.ReminderDMDelay(pr.Owner, channelName)
 		}

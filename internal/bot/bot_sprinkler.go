@@ -1,4 +1,3 @@
-// Package bot implements the coordination logic between GitHub, Slack, and notifications.
 package bot
 
 import (
@@ -18,6 +17,135 @@ const (
 	githubURLMinParts = 7
 )
 
+// parsePRNumberFromURL extracts the PR number from a GitHub URL.
+func parsePRNumberFromURL(url string) (int, error) {
+	parts := strings.Split(url, "/")
+	if len(parts) < githubURLMinParts || parts[2] != "github.com" || parts[5] != "pull" {
+		return 0, fmt.Errorf("invalid GitHub URL format: %s (expected https://github.com/owner/repo/pull/123)", url)
+	}
+
+	num, err := strconv.Atoi(parts[6])
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse PR number: %w", err)
+	}
+
+	if num == 0 {
+		return 0, errors.New("invalid PR number (zero)")
+	}
+
+	return num, nil
+}
+
+// extractRepoFromURL extracts the owner/repo from a GitHub URL.
+func extractRepoFromURL(url string) (string, error) {
+	parts := strings.Split(url, "/")
+	if len(parts) >= 5 && parts[2] == "github.com" {
+		return parts[3] + "/" + parts[4], nil
+	}
+	return "", fmt.Errorf("could not extract repo from URL: %s", url)
+}
+
+// handleSprinklerEvent processes a single event from sprinkler.
+func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Event, organization string) {
+	slog.Info("processing sprinkler event",
+		"organization", organization,
+		"type", event.Type,
+		"url", event.URL,
+		"timestamp", event.Timestamp)
+
+	// Log the sprinkler event data for debugging
+	var rawKeys []string
+	if event.Raw != nil {
+		rawKeys = make([]string, 0, len(event.Raw))
+		for k := range event.Raw {
+			rawKeys = append(rawKeys, k)
+		}
+	}
+	slog.Debug("sprinkler event metadata",
+		"organization", organization,
+		"type", event.Type,
+		"url", event.URL,
+		"timestamp", event.Timestamp,
+		"raw_keys", rawKeys)
+
+	// Sprinkler only provides metadata - extract PR number from URL
+	if event.URL == "" {
+		slog.Error("sprinkler event missing URL - cannot determine PR number",
+			"organization", organization,
+			"type", event.Type)
+		return
+	}
+
+	prNumber, err := parsePRNumberFromURL(event.URL)
+	if err != nil {
+		slog.Error("failed to parse PR number from URL",
+			"organization", organization,
+			"url", event.URL,
+			"error", err)
+		return
+	}
+
+	slog.Debug("extracted PR number from URL",
+		"organization", organization,
+		"pr_number", prNumber,
+		"url", event.URL)
+
+	repo, err := extractRepoFromURL(event.URL)
+	if err != nil {
+		slog.Error("could not extract repo from URL",
+			"organization", organization,
+			"url", event.URL,
+			"error", err)
+		return
+	}
+
+	msg := SprinklerMessage{
+		Type:      event.Type,
+		Event:     event.Type,
+		Repo:      repo,
+		PRNumber:  prNumber,
+		URL:       event.URL,
+		Timestamp: event.Timestamp,
+	}
+
+	if err := c.processEvent(ctx, msg); err != nil {
+		slog.Error("error processing event",
+			"organization", organization,
+			"error", err,
+			"type", event.Type,
+			"url", event.URL,
+			"repo", repo)
+	}
+}
+
+// handleAuthError handles authentication errors by refreshing the token and recreating the client.
+func (c *Coordinator) handleAuthError(
+	ctx context.Context,
+	organization string,
+	createConfig func(context.Context, string) client.Config,
+) (*client.Client, error) {
+	if refreshErr := c.github.RefreshToken(ctx); refreshErr != nil {
+		slog.Error("failed to refresh token",
+			"organization", organization,
+			"refresh_error", refreshErr)
+		return nil, refreshErr
+	}
+
+	freshToken := c.github.InstallationToken(ctx)
+	if freshToken == "" {
+		return nil, errors.New("token refresh succeeded but returned empty token")
+	}
+
+	slog.Debug("creating new sprinkler client with refreshed token", "organization", organization)
+	newClient, err := client.New(createConfig(ctx, freshToken))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create sprinkler client after token refresh: %w", err)
+	}
+
+	slog.Info("successfully refreshed token and recreated sprinkler client", "organization", organization)
+	return newClient, nil
+}
+
 // RunWithSprinklerClient runs the bot using the official sprinkler client library.
 func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 	slog.Info("starting bot coordinator with sprinkler client")
@@ -34,7 +162,7 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 
 	// createClientConfig creates a new sprinkler client config with fresh token.
 	// This is a helper to avoid duplicating config setup.
-	createClientConfig := func(token string) client.Config {
+	createClientConfig := func(ctx context.Context, token string) client.Config {
 		return client.Config{
 			ServerURL:    c.sprinklerURL,
 			Organization: organization,
@@ -60,116 +188,16 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 					"organization", organization)
 			},
 			OnEvent: func(event client.Event) {
-				// Use background context for event processing to avoid losing events
-				// during shutdown. The coordinator's context is for the connection
-				// lifecycle, not individual events.
-				// Note: No panic recovery - we want panics to propagate and restart the service (Cloud Run will handle it)
-				// A quiet failure is worse than a visible crash that triggers automatic recovery
-				eventCtx := context.Background()
-
-				slog.Info("processing sprinkler event",
-					"organization", organization,
-					"type", event.Type,
-					"url", event.URL,
-					"timestamp", event.Timestamp)
-
-				// Log the sprinkler event data for debugging
-				var rawKeys []string
-				if event.Raw != nil {
-					rawKeys = make([]string, 0, len(event.Raw))
-					for k := range event.Raw {
-						rawKeys = append(rawKeys, k)
-					}
-				}
-				slog.Debug("sprinkler event metadata",
-					"organization", organization,
-					"type", event.Type,
-					"url", event.URL,
-					"timestamp", event.Timestamp,
-					"raw_keys", rawKeys)
-
-				// Sprinkler only provides metadata - extract PR number from URL
-				if event.URL == "" {
-					slog.Error("sprinkler event missing URL - cannot determine PR number",
-						"organization", organization,
-						"type", event.Type)
-					return
-				}
-
-				// Parse URL like https://github.com/owner/repo/pull/123
-				parts := strings.Split(event.URL, "/")
-				if len(parts) < githubURLMinParts || parts[2] != "github.com" || parts[5] != "pull" {
-					slog.Error("invalid GitHub URL format from sprinkler",
-						"organization", organization,
-						"url", event.URL,
-						"expected_format", "https://github.com/owner/repo/pull/123")
-					return
-				}
-
-				num, err := strconv.Atoi(parts[6])
-				if err != nil {
-					slog.Error("failed to parse PR number from URL",
-						"organization", organization,
-						"url", event.URL,
-						"parse_error", err)
-					return
-				}
-
-				prNumber := num
-				slog.Debug("extracted PR number from URL",
-					"organization", organization,
-					"pr_number", prNumber,
-					"url", event.URL)
-
-				if prNumber == 0 {
-					slog.Error("invalid PR number extracted from sprinkler URL",
-						"organization", organization,
-						"url", event.URL,
-						"extracted_number", prNumber)
-					return
-				}
-
-				// Extract repo from URL if possible
-				repo := ""
-				if event.URL != "" {
-					// Parse URL like https://github.com/owner/repo/pull/123
-					parts := strings.Split(event.URL, "/")
-					if len(parts) >= 5 && parts[2] == "github.com" {
-						repo = parts[3] + "/" + parts[4]
-					}
-				}
-
-				if repo == "" {
-					slog.Error("could not extract repo from URL",
-						"organization", organization,
-						"url", event.URL,
-						"cannot_process_without_repo", true)
-					return
-				}
-
-				msg := SprinklerMessage{
-					Type:      event.Type,
-					Event:     event.Type,
-					Repo:      repo,
-					PRNumber:  prNumber,
-					URL:       event.URL,
-					Timestamp: event.Timestamp,
-				}
-
-				if err := c.processEvent(eventCtx, msg); err != nil {
-					slog.Error("error processing event",
-						"organization", organization,
-						"error", err,
-						"type", event.Type,
-						"url", event.URL,
-						"repo", repo)
-				}
+				// Use background context for event processing to avoid losing events during shutdown.
+				// Note: No panic recovery - we want panics to propagate and restart the service.
+				eventCtx := context.WithoutCancel(ctx)
+				c.handleSprinklerEvent(eventCtx, event, organization)
 			},
 		}
 	}
 
 	// Create the sprinkler client
-	sprinklerClient, err := client.New(createClientConfig(githubToken))
+	sprinklerClient, err := client.New(createClientConfig(ctx, githubToken))
 	if err != nil {
 		return fmt.Errorf("failed to create sprinkler client: %w", err)
 	}
@@ -246,44 +274,11 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 					"consecutive_errors", consecutiveErrors,
 					"error", startErr)
 
-				if refreshErr := c.github.RefreshToken(ctx); refreshErr != nil {
-					slog.Error("failed to refresh token",
-						"organization", organization,
-						"refresh_error", refreshErr,
-						"original_error", startErr)
-					// Don't exit - the outer retry loop will try again
-					select {
-					case <-ctx.Done():
-						slog.Info("context cancelled during token refresh retry wait", "organization", organization)
-						return ctx.Err()
-					case <-time.After(retryDelay):
-						continue
-					}
-				}
+				sprinklerClient.Stop() // Stop old client before creating new one
 
-				// Get fresh token after successful refresh
-				freshToken := c.github.InstallationToken(ctx)
-				if freshToken == "" {
-					slog.Error("token refresh succeeded but returned empty token",
-						"organization", organization,
-						"will_retry_with_delay", true)
-					select {
-					case <-ctx.Done():
-						return ctx.Err()
-					case <-time.After(retryDelay):
-						continue
-					}
-				}
-
-				// Stop old client before creating new one to prevent goroutine leak
-				slog.Debug("stopping old sprinkler client before recreation",
-					"organization", organization)
-				sprinklerClient.Stop()
-
-				// Create new client with fresh token and fresh config
-				newClient, err := client.New(createClientConfig(freshToken))
+				newClient, err := c.handleAuthError(ctx, organization, createClientConfig)
 				if err != nil {
-					slog.Error("failed to create sprinkler client after token refresh",
+					slog.Error("failed to handle auth error",
 						"organization", organization,
 						"error", err,
 						"will_retry", true)
@@ -296,11 +291,8 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 				}
 
 				sprinklerClient = newClient
-				// Reset delay on successful token refresh and client recreation
 				retryDelay = 5 * time.Second
 				consecutiveErrors = 0
-				slog.Info("successfully refreshed token and recreated sprinkler client",
-					"organization", organization)
 				continue
 			}
 

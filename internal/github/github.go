@@ -629,9 +629,9 @@ func (c *Client) InstallationToken(ctx context.Context) string {
 
 // Manager manages multiple GitHub App installations.
 type Manager struct {
-	appID      string
 	privateKey *rsa.PrivateKey
 	clients    map[string]*Client // org -> client
+	appID      string
 	mu         sync.RWMutex
 }
 

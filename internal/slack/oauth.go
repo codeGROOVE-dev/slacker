@@ -1,11 +1,13 @@
-// Package slack provides OAuth handling for multi-workspace installation.
 package slack
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/codeGROOVE-dev/retry"
@@ -29,22 +31,59 @@ func NewOAuthHandler(manager *Manager, clientID, clientSecret string) *OAuthHand
 }
 
 // HandleCallback handles the OAuth callback from Slack.
-func (h *OAuthHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+func (h *OAuthHandler) HandleCallback(writer http.ResponseWriter, req *http.Request) {
+	ctx := req.Context()
 
-	// Extract authorization code
-	code := r.URL.Query().Get("code")
-	if code == "" {
-		slog.Error("OAuth callback missing code parameter")
-		http.Error(w, "Missing code parameter", http.StatusBadRequest)
+	// SECURITY: Verify CSRF token via state parameter to prevent OAuth hijacking attacks
+	stateParam := req.URL.Query().Get("state")
+	if stateParam == "" {
+		slog.Error("OAuth callback missing state parameter - possible CSRF attack")
+		http.Error(writer, "Missing state parameter", http.StatusBadRequest)
 		return
 	}
 
-	errorParam := r.URL.Query().Get("error")
+	// Retrieve state from cookie
+	cookie, err := req.Cookie("oauth_state")
+	if err != nil {
+		slog.Error("OAuth callback missing state cookie - possible CSRF attack",
+			"error", err)
+		http.Error(writer, "Invalid state parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Verify state matches
+	if cookie.Value != stateParam {
+		slog.Warn("OAuth state mismatch - possible CSRF attack",
+			"cookie_state", cookie.Value[:min(len(cookie.Value), 10)]+"...",
+			"param_state", stateParam[:min(len(stateParam), 10)]+"...")
+		http.Error(writer, "Invalid state parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Clear the state cookie immediately after verification
+	http.SetCookie(writer, &http.Cookie{
+		Name:     "oauth_state",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	// Extract authorization code
+	code := req.URL.Query().Get("code")
+	if code == "" {
+		slog.Error("OAuth callback missing code parameter")
+		http.Error(writer, "Missing code parameter", http.StatusBadRequest)
+		return
+	}
+
+	errorParam := req.URL.Query().Get("error")
 	if errorParam != "" {
 		slog.Error("OAuth callback received error",
 			"error", errorParam)
-		http.Error(w, fmt.Sprintf("OAuth error: %s", errorParam), http.StatusBadRequest)
+		http.Error(writer, fmt.Sprintf("OAuth error: %s", errorParam), http.StatusBadRequest)
 		return
 	}
 
@@ -53,7 +92,7 @@ func (h *OAuthHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Exchange code for token with retry
 	var resp *slack.OAuthV2Response
-	err := retry.Do(
+	err = retry.Do(
 		func() error {
 			var err error
 			resp, err = slack.GetOAuthV2ResponseContext(
@@ -71,9 +110,9 @@ func (h *OAuthHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 			}
 			return nil
 		},
-		retry.Attempts(3),
+		retry.Attempts(5),
 		retry.Delay(time.Second),
-		retry.MaxDelay(30*time.Second),
+		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
 		retry.LastErrorOnly(true),
@@ -82,14 +121,14 @@ func (h *OAuthHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Error("failed to exchange OAuth code for token",
 			"error", err)
-		http.Error(w, "Failed to complete OAuth flow", http.StatusInternalServerError)
+		http.Error(writer, "Failed to complete OAuth flow", http.StatusInternalServerError)
 		return
 	}
 
 	if !resp.Ok {
 		slog.Error("OAuth token exchange returned not ok",
 			"error", resp.Error)
-		http.Error(w, fmt.Sprintf("OAuth error: %s", resp.Error), http.StatusInternalServerError)
+		http.Error(writer, fmt.Sprintf("OAuth error: %s", resp.Error), http.StatusInternalServerError)
 		return
 	}
 
@@ -117,14 +156,14 @@ func (h *OAuthHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 			"team_id", teamID,
 			"team_name", teamName,
 			"error", err)
-		http.Error(w, "Failed to store credentials", http.StatusInternalServerError)
+		http.Error(writer, "Failed to store credentials", http.StatusInternalServerError)
 		return
 	}
 
 	// Return success page
-	w.Header().Set("Content-Type", "text/html")
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `
+	writer.Header().Set("Content-Type", "text/html")
+	writer.WriteHeader(http.StatusOK)
+	if _, err := fmt.Fprintf(writer, `
 <!DOCTYPE html>
 <html>
 <head>
@@ -142,7 +181,10 @@ func (h *OAuthHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	<p>You can now close this window and return to Slack.</p>
 </body>
 </html>
-`, teamName)
+`, teamName); err != nil {
+		slog.Error("failed to write success page", "error", err)
+		return
+	}
 
 	slog.Info("OAuth installation completed successfully",
 		"team_id", teamID,
@@ -150,7 +192,27 @@ func (h *OAuthHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleInstall serves the "Add to Slack" installation page.
-func (h *OAuthHandler) HandleInstall(w http.ResponseWriter, r *http.Request) {
+func (h *OAuthHandler) HandleInstall(writer http.ResponseWriter, _ *http.Request) {
+	// SECURITY: Generate cryptographically secure random state token for CSRF protection
+	stateBytes := make([]byte, 32)
+	if _, err := rand.Read(stateBytes); err != nil {
+		slog.Error("failed to generate OAuth state token", "error", err)
+		http.Error(writer, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	state := base64.URLEncoding.EncodeToString(stateBytes)
+
+	// Store state in HttpOnly cookie with 10-minute expiration (OAuth should complete quickly)
+	http.SetCookie(writer, &http.Cookie{
+		Name:     "oauth_state",
+		Value:    state,
+		Path:     "/",
+		MaxAge:   600, // 10 minutes
+		HttpOnly: true,
+		Secure:   true, // HTTPS only
+		SameSite: http.SameSiteLaxMode,
+	})
+
 	// Build OAuth authorization URL
 	scopes := []string{
 		"app_mentions:read",
@@ -167,20 +229,21 @@ func (h *OAuthHandler) HandleInstall(w http.ResponseWriter, r *http.Request) {
 		"users:read",
 	}
 
-	// Slack OAuth URL format
+	// Slack OAuth URL format with state parameter for CSRF protection
 	authURL := fmt.Sprintf(
-		"https://slack.com/oauth/v2/authorize?client_id=%s&scope=%s",
+		"https://slack.com/oauth/v2/authorize?client_id=%s&scope=%s&state=%s",
 		h.clientID,
-		joinScopes(scopes),
+		strings.Join(scopes, ","),
+		state,
 	)
 
 	slog.Info("serving OAuth installation page",
 		"client_id", h.clientID)
 
 	// Return installation page with "Add to Slack" button
-	w.Header().Set("Content-Type", "text/html")
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `
+	writer.Header().Set("Content-Type", "text/html")
+	writer.WriteHeader(http.StatusOK)
+	if _, err := fmt.Fprintf(writer, `
 <!DOCTYPE html>
 <html>
 <head>
@@ -204,30 +267,15 @@ func (h *OAuthHandler) HandleInstall(w http.ResponseWriter, r *http.Request) {
 			             https://platform.slack-edge.com/img/add_to_slack@2x.png 2x" />
 		</a>
 	</div>
-	<p><small>By installing, you agree to our <a href="https://github.com/codeGROOVE-dev/policy/blob/main/TOS.md">terms of service</a> and <a href="https://github.com/codeGROOVE-dev/policy/blob/main/PRIVACY.md">privacy policy</a>.</small></p>
+	<p><small>By installing, you agree to our
+		<a href="https://github.com/codeGROOVE-dev/policy/blob/main/TOS.md">terms of service</a> and
+		<a href="https://github.com/codeGROOVE-dev/policy/blob/main/PRIVACY.md">privacy policy</a>.
+	</small></p>
 </body>
 </html>
-`, authURL)
-}
-
-// joinScopes joins scope names with commas for OAuth URL.
-func joinScopes(scopes []string) string {
-	result := ""
-	for i, scope := range scopes {
-		if i > 0 {
-			result += ","
-		}
-		result += scope
+`, authURL); err != nil {
+		slog.Error("failed to write installation page", "error", err)
 	}
-	return result
-}
-
-// min returns the smaller of two ints.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // OAuthResponse is a simplified response for debugging.
@@ -238,7 +286,7 @@ type OAuthResponse struct {
 }
 
 // HandleDebug returns JSON with installed workspaces (for debugging).
-func (h *OAuthHandler) HandleDebug(w http.ResponseWriter, r *http.Request) {
+func (h *OAuthHandler) HandleDebug(writer http.ResponseWriter, _ *http.Request) {
 	workspaces := h.manager.ListWorkspaces()
 
 	response := make([]OAuthResponse, 0, len(workspaces))
@@ -250,11 +298,13 @@ func (h *OAuthHandler) HandleDebug(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	writer.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(writer).Encode(map[string]any{
 		"workspaces": response,
 		"count":      len(response),
-	})
+	}); err != nil {
+		slog.Error("failed to encode debug response", "error", err)
+	}
 
 	slog.Debug("served OAuth debug endpoint",
 		"workspace_count", len(response))

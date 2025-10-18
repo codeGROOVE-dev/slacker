@@ -23,12 +23,14 @@ import (
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
 	"github.com/gorilla/mux"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 // Server configuration constants.
 const (
-	serverReadTimeout  = 15 * time.Second
-	serverWriteTimeout = 15 * time.Second
+	serverReadTimeout     = 15 * time.Second
+	serverWriteTimeout    = 15 * time.Second
+	oauthRateLimiterBurst = 20 // Maximum burst of OAuth requests allowed
 )
 
 func main() {
@@ -98,6 +100,31 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	// Initialize event router for multi-workspace event handling.
 	eventRouter := slack.NewEventRouter(slackManager)
 
+	// Initialize OAuth handler for Slack app installation.
+	// These credentials are needed for the OAuth flow.
+	slackClientID := os.Getenv("SLACK_CLIENT_ID")
+	slackClientSecret := os.Getenv("SLACK_CLIENT_SECRET")
+	if slackClientSecret == "" {
+		// Try fetching from Secret Manager
+		var err error
+		slackClientSecret, err = gsm.Fetch(ctx, "SLACK_CLIENT_SECRET")
+		if err != nil {
+			slog.Warn("SLACK_CLIENT_SECRET not found - OAuth installation will not work",
+				"error", err)
+		}
+	}
+
+	var oauthHandler *slack.OAuthHandler
+	if slackClientID != "" && slackClientSecret != "" {
+		oauthHandler = slack.NewOAuthHandler(slackManager, slackClientID, slackClientSecret)
+		slog.Info("OAuth handler initialized",
+			"client_id", slackClientID)
+	} else {
+		slog.Warn("OAuth not configured - app installation via web will not work",
+			"has_client_id", slackClientID != "",
+			"has_client_secret", slackClientSecret != "")
+	}
+
 	// Setup HTTP routes with security middleware.
 	router := mux.NewRouter()
 	router.Use(securityHeadersMiddleware)
@@ -108,6 +135,25 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	// Health endpoints
 	router.HandleFunc("/health", healthHandler).Methods("GET")
 	router.HandleFunc("/healthz", makeHealthzHandler(githubManager)).Methods("GET")
+
+	// Slack OAuth endpoints - for app installation with rate limiting
+	if oauthHandler != nil {
+		// SECURITY: Rate limiter for OAuth endpoints: 10 requests per second, burst of oauthRateLimiterBurst
+		// This prevents abuse while allowing legitimate installation flows
+		oauthLimiter := rate.NewLimiter(10, oauthRateLimiterBurst)
+
+		router.Handle("/slack/install", rateLimitMiddleware(oauthLimiter)(http.HandlerFunc(oauthHandler.HandleInstall))).Methods("GET")
+		router.Handle("/slack/oauth/callback", rateLimitMiddleware(oauthLimiter)(http.HandlerFunc(oauthHandler.HandleCallback))).Methods("GET")
+
+		// Debug endpoint - DO NOT EXPOSE IN PRODUCTION
+		// Remove this endpoint entirely or protect with strong authentication
+		// router.HandleFunc("/slack/debug", oauthHandler.HandleDebug).Methods("GET")
+
+		slog.Info("registered OAuth endpoints with rate limiting",
+			"install_url", "/slack/install",
+			"callback_url", "/slack/oauth/callback",
+			"rate_limit", "10/s burst 20")
+	}
 
 	// Slack endpoints - routed to workspace-specific clients
 	router.HandleFunc("/slack/events", eventRouter.HandleEvents).Methods("POST")
@@ -191,6 +237,248 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	return 0
 }
 
+// coordinatorManager holds state for managing bot coordinators across orgs.
+type coordinatorManager struct {
+	slackManager    *slack.Manager
+	githubManager   *github.Manager
+	configManager   *config.Manager
+	notifier        *notify.Manager
+	active          map[string]context.CancelFunc
+	failed          map[string]time.Time
+	lastHealthCheck time.Time
+	sprinklerURL    string
+	mu              sync.Mutex
+}
+
+// handleCoordinatorExit cleans up after a coordinator exits.
+func (cm *coordinatorManager) handleCoordinatorExit(org, sprinklerURL string, err error) {
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			slog.Info("coordinator stopped due to context cancellation", "org", org)
+		} else {
+			slog.Error("coordinator exited unexpectedly - THIS SHOULD NOT HAPPEN",
+				"org", org,
+				"error", err,
+				"error_type", fmt.Sprintf("%T", err))
+			cm.mu.Lock()
+			cm.failed[org] = time.Now()
+			cm.mu.Unlock()
+		}
+	} else {
+		slog.Error("coordinator exited with nil error - THIS SHOULD NOT HAPPEN",
+			"org", org,
+			"sprinkler_url", sprinklerURL)
+		cm.mu.Lock()
+		cm.failed[org] = time.Now()
+		cm.mu.Unlock()
+	}
+
+	cm.mu.Lock()
+	delete(cm.active, org)
+	cm.mu.Unlock()
+}
+
+// startSingleCoordinator starts a coordinator for one org.
+func (cm *coordinatorManager) startSingleCoordinator(ctx context.Context, org string) bool {
+	// Skip if already running
+	if _, exists := cm.active[org]; exists {
+		return true
+	}
+
+	// Get GitHub client for this org
+	githubClient, exists := cm.githubManager.ClientForOrg(org)
+	if !exists {
+		slog.Warn("no GitHub client for org", "org", org)
+		cm.failed[org] = time.Now()
+		return false
+	}
+
+	// Set GitHub client in config manager for this org
+	cm.configManager.SetGitHubClient(org, githubClient.Client())
+
+	// Load config to check if Slack is configured
+	if err := cm.configManager.LoadConfig(ctx, org); err != nil {
+		slog.Warn("failed to load config for org", "org", org, "error", err)
+		return false
+	}
+
+	cfg, exists := cm.configManager.Config(org)
+	if !exists || cfg.Global.TeamID == "" {
+		slog.Debug("skipping org without Slack configuration", "org", org)
+		return false
+	}
+
+	teamID := cfg.Global.TeamID
+
+	// Get Slack client for this workspace
+	slackClient, err := cm.slackManager.Client(ctx, teamID)
+	if err != nil {
+		slog.Error("failed to get Slack client for workspace",
+			"org", org,
+			"team_id", teamID,
+			"error", err)
+		cm.failed[org] = time.Now()
+		return false
+	}
+
+	// Start coordinator in goroutine with org-specific context
+	orgCtx, cancel := context.WithCancel(ctx)
+	cm.active[org] = cancel
+
+	// Clear from failed list since we're starting it
+	delete(cm.failed, org)
+
+	// Create coordinator for this org with org-specific context
+	coordinator := bot.New(
+		orgCtx,
+		slackClient,
+		githubClient,
+		cm.configManager,
+		cm.notifier,
+		cm.sprinklerURL,
+	)
+
+	go func(org, teamID string, coord *bot.Coordinator, orgCtx context.Context) {
+		slog.Info("starting coordinator for org",
+			"org", org,
+			"team_id", teamID,
+			"sprinkler_url", cm.sprinklerURL)
+
+		err := coord.RunWithSprinklerClient(orgCtx)
+		cm.handleCoordinatorExit(org, cm.sprinklerURL, err)
+	}(org, teamID, coordinator, orgCtx)
+
+	return true
+}
+
+// startCoordinators creates coordinators for all orgs that don't already have one.
+func (cm *coordinatorManager) startCoordinators(ctx context.Context) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	orgs := cm.githubManager.AllOrgs()
+	slog.Info("checking GitHub installations", "total_orgs", len(orgs))
+
+	// Create map of current orgs for quick lookup
+	currentOrgs := make(map[string]bool)
+	for _, org := range orgs {
+		currentOrgs[org] = true
+	}
+
+	// Stop coordinators for orgs that no longer exist
+	for org, cancel := range cm.active {
+		if !currentOrgs[org] {
+			slog.Info("stopping coordinator for removed org", "org", org)
+			cancel()
+			delete(cm.active, org)
+		}
+	}
+
+	// Start coordinators for new orgs
+	for _, org := range orgs {
+		cm.startSingleCoordinator(ctx, org)
+	}
+}
+
+// handleShutdown stops all coordinators and returns context error.
+func (cm *coordinatorManager) handleShutdown(ctx context.Context) error {
+	slog.Info("shutdown initiated - stopping all bot coordinators")
+	cm.mu.Lock()
+	coordinatorCount := len(cm.active)
+	for org, cancel := range cm.active {
+		slog.Info("stopping coordinator", "org", org)
+		cancel()
+	}
+	cm.mu.Unlock()
+	slog.Info("all coordinators stopped", "count", coordinatorCount)
+	return ctx.Err()
+}
+
+// handleHealthCheck performs health monitoring and fails if unhealthy too long.
+func (cm *coordinatorManager) handleHealthCheck() error {
+	const maxDowntime = 1 * time.Minute
+
+	cm.mu.Lock()
+	activeCount := len(cm.active)
+	failedCount := len(cm.failed)
+	totalOrgs := len(cm.githubManager.AllOrgs())
+	cm.mu.Unlock()
+
+	if activeCount == 0 && totalOrgs > 0 {
+		if !cm.lastHealthCheck.IsZero() && time.Since(cm.lastHealthCheck) > maxDowntime {
+			slog.Error("FATAL: no active coordinators for too long",
+				"total_orgs", totalOrgs,
+				"failed_coordinators", failedCount,
+				"last_active", cm.lastHealthCheck,
+				"downtime", time.Since(cm.lastHealthCheck))
+			return errors.New("no active coordinators for extended period")
+		}
+		slog.Warn("no active coordinators - will fail soon",
+			"total_orgs", totalOrgs,
+			"failed_coordinators", failedCount,
+			"time_until_failure", maxDowntime-time.Since(cm.lastHealthCheck))
+	} else if activeCount > 0 {
+		cm.lastHealthCheck = time.Now()
+		slog.Debug("coordinator health check passed",
+			"active_coordinators", activeCount,
+			"failed_coordinators", failedCount,
+			"total_orgs", totalOrgs)
+	}
+	return nil
+}
+
+// handleRetryFailed retries starting failed coordinators.
+func (cm *coordinatorManager) handleRetryFailed(ctx context.Context) {
+	cm.mu.Lock()
+	failedCount := len(cm.failed)
+	cm.mu.Unlock()
+
+	if failedCount == 0 {
+		return
+	}
+
+	slog.Info("retrying failed coordinators", "failed_count", failedCount)
+
+	if err := cm.githubManager.RefreshInstallations(ctx); err != nil {
+		if !errors.Is(err, context.Canceled) {
+			slog.Error("failed to refresh installations during retry", "error", err)
+		}
+		return
+	}
+
+	cm.startCoordinators(ctx)
+
+	cm.mu.Lock()
+	activeCount := len(cm.active)
+	cm.mu.Unlock()
+
+	slog.Info("retry attempt complete", "active_coordinators", activeCount)
+}
+
+// handleRefreshInstallations refreshes GitHub installations and restarts coordinators.
+func (cm *coordinatorManager) handleRefreshInstallations(ctx context.Context) {
+	cm.mu.Lock()
+	activeCount := len(cm.active)
+	cm.mu.Unlock()
+
+	slog.Info("refreshing GitHub installations", "active_coordinators", activeCount)
+
+	if err := cm.githubManager.RefreshInstallations(ctx); err != nil {
+		if !errors.Is(err, context.Canceled) {
+			slog.Error("failed to refresh installations", "error", err)
+		}
+		return
+	}
+
+	cm.startCoordinators(ctx)
+
+	cm.mu.Lock()
+	newActiveCount := len(cm.active)
+	cm.mu.Unlock()
+
+	slog.Info("refresh complete", "active_coordinators", newActiveCount)
+}
+
 // runBotCoordinators manages bot coordinators for all GitHub installations.
 // It spawns one coordinator per org and refreshes the list every 5 minutes.
 // Failed coordinators are automatically restarted every minute.
@@ -202,139 +490,19 @@ func runBotCoordinators(
 	notifier *notify.Manager,
 	sprinklerURL string,
 ) error {
-	activeCoordinators := make(map[string]context.CancelFunc)
-	failedCoordinators := make(map[string]time.Time) // Track when coordinators failed
-	var mu sync.Mutex
-
-	// startCoordinators creates coordinators for all orgs that don't already have one,
-	// and stops coordinators for orgs that no longer exist.
-	startCoordinators := func() {
-		mu.Lock()
-		defer mu.Unlock()
-
-		orgs := githubManager.AllOrgs()
-		slog.Info("checking GitHub installations", "total_orgs", len(orgs))
-
-		// Create map of current orgs for quick lookup
-		currentOrgs := make(map[string]bool)
-		for _, org := range orgs {
-			currentOrgs[org] = true
-		}
-
-		// Stop coordinators for orgs that no longer exist
-		for org, cancel := range activeCoordinators {
-			if !currentOrgs[org] {
-				slog.Info("stopping coordinator for removed org", "org", org)
-				cancel()
-				delete(activeCoordinators, org)
-			}
-		}
-
-		// Start coordinators for new orgs
-		for _, org := range orgs {
-			// Skip if already running
-			if _, exists := activeCoordinators[org]; exists {
-				continue
-			}
-
-			// Get GitHub client for this org
-			githubClient, exists := githubManager.ClientForOrg(org)
-			if !exists {
-				slog.Warn("no GitHub client for org", "org", org)
-				// Mark as failed so we retry later (already holding mu)
-				failedCoordinators[org] = time.Now()
-				continue
-			}
-
-			// Set GitHub client in config manager for this org
-			configManager.SetGitHubClient(org, githubClient.Client())
-
-			// Load config to check if Slack is configured
-			if err := configManager.LoadConfig(ctx, org); err != nil {
-				slog.Warn("failed to load config for org", "org", org, "error", err)
-				continue
-			}
-
-			cfg, exists := configManager.Config(org)
-			if !exists || cfg.Global.TeamID == "" {
-				slog.Debug("skipping org without Slack configuration", "org", org)
-				continue
-			}
-
-			// Get team_id from config
-			teamID := cfg.Global.TeamID
-
-			// Get Slack client for this workspace
-			slackClient, err := slackManager.Client(ctx, teamID)
-			if err != nil {
-				slog.Error("failed to get Slack client for workspace",
-					"org", org,
-					"team_id", teamID,
-					"error", err)
-				// Mark as failed so we retry later (already holding mu)
-				failedCoordinators[org] = time.Now()
-				continue
-			}
-
-			// Start coordinator in goroutine with org-specific context
-			orgCtx, cancel := context.WithCancel(ctx)
-			activeCoordinators[org] = cancel
-
-			// Clear from failed list since we're starting it
-			delete(failedCoordinators, org)
-
-			// Create coordinator for this org with org-specific context
-			coordinator := bot.New(
-				orgCtx,
-				slackClient,
-				githubClient,
-				configManager,
-				notifier,
-				sprinklerURL,
-			)
-
-			go func(org, teamID string, coord *bot.Coordinator, orgCtx context.Context) {
-				slog.Info("starting coordinator for org",
-					"org", org,
-					"team_id", teamID,
-					"sprinkler_url", sprinklerURL)
-
-				err := coord.RunWithSprinklerClient(orgCtx)
-
-				// Coordinator should NEVER exit unless context is cancelled
-				if err != nil {
-					if errors.Is(err, context.Canceled) {
-						slog.Info("coordinator stopped due to context cancellation", "org", org)
-					} else {
-						slog.Error("coordinator exited unexpectedly - THIS SHOULD NOT HAPPEN",
-							"org", org,
-							"error", err,
-							"error_type", fmt.Sprintf("%T", err))
-						// Mark as failed so we retry
-						mu.Lock()
-						failedCoordinators[org] = time.Now()
-						mu.Unlock()
-					}
-				} else {
-					// This should NEVER happen - RunWithSprinklerClient has infinite retry loop
-					slog.Error("coordinator exited with nil error - THIS SHOULD NOT HAPPEN",
-						"org", org,
-						"sprinkler_url", sprinklerURL)
-					mu.Lock()
-					failedCoordinators[org] = time.Now()
-					mu.Unlock()
-				}
-
-				// Clean up when coordinator exits
-				mu.Lock()
-				delete(activeCoordinators, org)
-				mu.Unlock()
-			}(org, teamID, coordinator, orgCtx)
-		}
+	cm := &coordinatorManager{
+		active:          make(map[string]context.CancelFunc),
+		failed:          make(map[string]time.Time),
+		slackManager:    slackManager,
+		githubManager:   githubManager,
+		configManager:   configManager,
+		notifier:        notifier,
+		sprinklerURL:    sprinklerURL,
+		lastHealthCheck: time.Now(),
 	}
 
 	// Start initial coordinators
-	startCoordinators()
+	cm.startCoordinators(ctx)
 
 	// Refresh installations every 5 minutes
 	installationTicker := time.NewTicker(5 * time.Minute)
@@ -347,103 +515,22 @@ func runBotCoordinators(
 	// Health check: fail if no coordinators are active for too long
 	healthCheckTicker := time.NewTicker(15 * time.Second)
 	defer healthCheckTicker.Stop()
-	lastHealthCheck := time.Now() // Initialize to now so we have grace period on startup
-	const maxDowntime = 1 * time.Minute
 
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Info("shutdown initiated - stopping all bot coordinators")
-			mu.Lock()
-			coordinatorCount := len(activeCoordinators)
-			for org, cancel := range activeCoordinators {
-				slog.Info("stopping coordinator", "org", org)
-				cancel()
-			}
-			mu.Unlock()
-			slog.Info("all coordinators stopped", "count", coordinatorCount)
-			return ctx.Err()
+			return cm.handleShutdown(ctx)
 
 		case <-healthCheckTicker.C:
-			mu.Lock()
-			activeCount := len(activeCoordinators)
-			failedCount := len(failedCoordinators)
-			totalOrgs := len(githubManager.AllOrgs())
-			mu.Unlock()
-
-			if activeCount == 0 && totalOrgs > 0 {
-				// No active coordinators but we have orgs - this is a problem
-				if !lastHealthCheck.IsZero() && time.Since(lastHealthCheck) > maxDowntime {
-					slog.Error("FATAL: no active coordinators for too long",
-						"total_orgs", totalOrgs,
-						"failed_coordinators", failedCount,
-						"last_active", lastHealthCheck,
-						"downtime", time.Since(lastHealthCheck))
-					return errors.New("no active coordinators for extended period")
-				}
-				slog.Warn("no active coordinators - will fail soon",
-					"total_orgs", totalOrgs,
-					"failed_coordinators", failedCount,
-					"time_until_failure", maxDowntime-time.Since(lastHealthCheck))
-			} else if activeCount > 0 {
-				lastHealthCheck = time.Now()
-				slog.Debug("coordinator health check passed",
-					"active_coordinators", activeCount,
-					"failed_coordinators", failedCount,
-					"total_orgs", totalOrgs)
+			if err := cm.handleHealthCheck(); err != nil {
+				return err
 			}
 
 		case <-retryTicker.C:
-			mu.Lock()
-			failedCount := len(failedCoordinators)
-			mu.Unlock()
-
-			if failedCount > 0 {
-				slog.Info("retrying failed coordinators",
-					"failed_count", failedCount)
-
-				// Refresh installations to get latest GitHub clients
-				if err := githubManager.RefreshInstallations(ctx); err != nil {
-					if !errors.Is(err, context.Canceled) {
-						slog.Error("failed to refresh installations during retry", "error", err)
-					}
-					continue
-				}
-
-				// Try to start failed coordinators
-				startCoordinators()
-
-				mu.Lock()
-				activeCount := len(activeCoordinators)
-				mu.Unlock()
-
-				slog.Info("retry attempt complete",
-					"active_coordinators", activeCount)
-			}
+			cm.handleRetryFailed(ctx)
 
 		case <-installationTicker.C:
-			mu.Lock()
-			activeCount := len(activeCoordinators)
-			mu.Unlock()
-
-			slog.Info("refreshing GitHub installations",
-				"active_coordinators", activeCount)
-
-			if err := githubManager.RefreshInstallations(ctx); err != nil {
-				if !errors.Is(err, context.Canceled) {
-					slog.Error("failed to refresh installations", "error", err)
-				}
-				continue
-			}
-
-			startCoordinators()
-
-			mu.Lock()
-			newActiveCount := len(activeCoordinators)
-			mu.Unlock()
-
-			slog.Info("refresh complete",
-				"active_coordinators", newActiveCount)
+			cm.handleRefreshInstallations(ctx)
 		}
 	}
 }
@@ -586,4 +673,18 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// rateLimitMiddleware applies rate limiting to prevent abuse.
+func rateLimitMiddleware(limiter *rate.Limiter) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !limiter.Allow() {
+				http.Error(w, "Too many requests - please try again later", http.StatusTooManyRequests)
+				slog.Warn("rate limit exceeded", "path", r.URL.Path, "remote_addr", r.RemoteAddr)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
