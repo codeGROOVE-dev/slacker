@@ -1,4 +1,3 @@
-// Package bot implements the coordination logic between GitHub, Slack, and notifications.
 package bot
 
 import (
@@ -34,7 +33,7 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 
 	// createClientConfig creates a new sprinkler client config with fresh token.
 	// This is a helper to avoid duplicating config setup.
-	createClientConfig := func(token string) client.Config {
+	createClientConfig := func(ctx context.Context, token string) client.Config {
 		return client.Config{
 			ServerURL:    c.sprinklerURL,
 			Organization: organization,
@@ -65,7 +64,7 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 				// lifecycle, not individual events.
 				// Note: No panic recovery - we want panics to propagate and restart the service (Cloud Run will handle it)
 				// A quiet failure is worse than a visible crash that triggers automatic recovery
-				eventCtx := context.Background()
+				eventCtx := context.WithoutCancel(ctx)
 
 				slog.Info("processing sprinkler event",
 					"organization", organization,
@@ -169,7 +168,7 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 	}
 
 	// Create the sprinkler client
-	sprinklerClient, err := client.New(createClientConfig(githubToken))
+	sprinklerClient, err := client.New(createClientConfig(ctx, githubToken))
 	if err != nil {
 		return fmt.Errorf("failed to create sprinkler client: %w", err)
 	}
@@ -281,7 +280,7 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 				sprinklerClient.Stop()
 
 				// Create new client with fresh token and fresh config
-				newClient, err := client.New(createClientConfig(freshToken))
+				newClient, err := client.New(createClientConfig(ctx, freshToken))
 				if err != nil {
 					slog.Error("failed to create sprinkler client after token refresh",
 						"organization", organization,

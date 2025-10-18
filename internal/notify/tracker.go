@@ -1,4 +1,3 @@
-// Package notify handles notification scheduling and delivery.
 package notify
 
 import (
@@ -10,7 +9,6 @@ import (
 // NotificationTracker tracks notification timestamps in memory.
 // Rate limiting state resets on service restart, which is acceptable.
 type NotificationTracker struct {
-	mu sync.RWMutex
 	// Key: "workspaceID:userID"
 	lastDM    map[string]time.Time
 	lastDaily map[string]time.Time
@@ -18,6 +16,7 @@ type NotificationTracker struct {
 	lastChannelNotification map[string]time.Time
 	// Key: "workspaceID:userID:owner/repo#123" -> TagInfo with channel and timestamp
 	lastUserPRChannelTag map[string]TagInfo
+	mu                   sync.RWMutex
 }
 
 // TagInfo stores when and where a user was tagged for a PR.

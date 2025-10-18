@@ -1,4 +1,4 @@
-#!/bin/sh -x
+#!/bin/bash
 # Deploy the current Go app to Google Cloud run
 #
 # usage:
@@ -7,11 +7,11 @@
 #   APP_NAME=custom-name ./hacks/deploy.sh cmd/server - override app name
 set -eux -o pipefail
 
-# Save original directory to determine app name from path
-ORIGINAL_DIR=$(pwd)
 TARGET_DIR="${1:-.}"
 
-test -n "$1" && pushd "$1"
+if [ -n "${1:-}" ]; then
+    pushd "$1"
+fi
 
 PROJECT=${GCP_PROJECT:=chat-bot-army}
 REGISTRY="${PROJECT}"
@@ -25,7 +25,7 @@ if [ -z "${APP_NAME:-}" ]; then
 
     # If we're in root directory, fall back to module name
     if [ "$APP_NAME" = "." ]; then
-        APP_NAME=$(basename $(go mod graph | head -n 1 | cut -d" " -f1))
+        APP_NAME=$(basename "$(go mod graph | head -n 1 | cut -d" " -f1)")
     fi
 fi
 

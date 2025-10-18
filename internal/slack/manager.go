@@ -1,4 +1,3 @@
-// Package slack provides multi-workspace Slack client management.
 package slack
 
 import (

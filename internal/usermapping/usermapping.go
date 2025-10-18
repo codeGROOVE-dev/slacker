@@ -26,11 +26,11 @@ const (
 
 // UserMapping represents a GitHub-to-Slack user mapping.
 type UserMapping struct {
+	CachedAt       time.Time
 	GitHubUsername string
 	SlackUserID    string
 	SlackUsername  string
 	MatchedEmail   string
-	CachedAt       time.Time
 	Confidence     int // Match confidence (0-100)
 }
 

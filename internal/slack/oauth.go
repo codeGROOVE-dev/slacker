@@ -1,4 +1,3 @@
-// Package slack provides OAuth handling for multi-workspace installation.
 package slack
 
 import (
@@ -268,7 +267,10 @@ func (h *OAuthHandler) HandleInstall(writer http.ResponseWriter, _ *http.Request
 			             https://platform.slack-edge.com/img/add_to_slack@2x.png 2x" />
 		</a>
 	</div>
-	<p><small>By installing, you agree to our <a href="https://github.com/codeGROOVE-dev/policy/blob/main/TOS.md">terms of service</a> and <a href="https://github.com/codeGROOVE-dev/policy/blob/main/PRIVACY.md">privacy policy</a>.</small></p>
+	<p><small>By installing, you agree to our
+		<a href="https://github.com/codeGROOVE-dev/policy/blob/main/TOS.md">terms of service</a> and
+		<a href="https://github.com/codeGROOVE-dev/policy/blob/main/PRIVACY.md">privacy policy</a>.
+	</small></p>
 </body>
 </html>
 `, authURL); err != nil {

@@ -1,7 +1,7 @@
-// Package bot defines minimal interfaces for dependencies.
+package bot
+
 // Interfaces are defined here, where they're consumed, not where they're implemented.
 // This is Go best practice: accept interfaces, return structs.
-package bot
 
 import (
 	"context"

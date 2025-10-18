@@ -173,9 +173,9 @@ linters:
           severity: warning
           disabled: true
         - name: cognitive-complexity
-          arguments: [55]
+          disabled: true # prefer maintidx
         - name: cyclomatic
-          arguments: [60]
+          disabled: true # prefer maintidx
         - name: function-length
           arguments: [150, 225]
         - name: line-length-limit

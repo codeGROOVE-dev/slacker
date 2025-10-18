@@ -79,11 +79,11 @@ func (m *Manager) Run(ctx context.Context) error {
 type PRInfo struct {
 	Owner   string
 	Repo    string
-	Number  int
 	Title   string
 	Author  string
 	State   string
 	HTMLURL string
+	Number  int
 }
 
 // getPrefixForState returns the emoji prefix for a given PR state.

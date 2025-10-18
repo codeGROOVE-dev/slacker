@@ -1,4 +1,3 @@
-// Package slack provides event routing for multi-workspace support.
 package slack
 
 import (

@@ -29,6 +29,16 @@ const (
 	historyPageSize = 1000
 )
 
+// prContext groups PR identification parameters to reduce function argument counts.
+type prContext struct {
+	CheckRes *turn.CheckResponse
+	Event    any // The webhook event struct
+	Owner    string
+	Repo     string
+	State    string
+	Number   int
+}
+
 // ThreadCache manages PR thread IDs for a workspace.
 type ThreadCache struct {
 	prThreads map[string]ThreadInfo // "owner/repo#123" -> thread info
@@ -37,10 +47,10 @@ type ThreadCache struct {
 
 // ThreadInfo stores thread information for a PR.
 type ThreadInfo struct {
+	UpdatedAt time.Time `json:"updated_at"`
 	ThreadTS  string    `json:"thread_ts"`
 	ChannelID string    `json:"channel_id"`
 	LastState string    `json:"last_state"`
-	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Get retrieves thread info for a PR.
@@ -131,12 +141,12 @@ func New(
 // findOrCreatePRThread finds an existing thread or creates a new one for a PR.
 // Returns (threadTS, wasNewlyCreated, error).
 func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner, repo string, prNumber int, prState string, pullRequest struct {
-	Number  int    `json:"number"`
-	HTMLURL string `json:"html_url"`
-	Title   string `json:"title"`
-	User    struct {
+	User struct {
 		Login string `json:"login"`
 	} `json:"user"`
+	HTMLURL string `json:"html_url"`
+	Title   string `json:"title"`
+	Number  int    `json:"number"`
 }, checkResult *turn.CheckResponse,
 ) (threadTS string, wasNewlyCreated bool, err error) {
 	prKey := fmt.Sprintf("%s/%s#%d", owner, repo, prNumber)
@@ -372,15 +382,15 @@ func (c *Coordinator) processEvent(ctx context.Context, msg SprinklerMessage) er
 // handlePullRequestEventWithData handles pull request events with pre-fetched data to avoid redundant API calls.
 func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner, repo string, event struct {
 	Action      string `json:"action"`
-	Number      int    `json:"number"`
 	PullRequest struct {
-		Number  int    `json:"number"`
 		HTMLURL string `json:"html_url"`
 		Title   string `json:"title"`
 		User    struct {
 			Login string `json:"login"`
 		} `json:"user"`
+		Number int `json:"number"`
 	} `json:"pull_request"`
+	Number int `json:"number"`
 }, checkResult *turn.CheckResponse, _ any,
 ) {
 	prNumber := event.Number
@@ -432,7 +442,15 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 		"blocked_on", blockedOn)
 
 	// Process channels in parallel for better performance
-	c.processChannelsInParallel(ctx, owner, repo, prNumber, prState, event, channels, workspaceID, checkResult)
+	prCtx := prContext{
+		Owner:    owner,
+		Repo:     repo,
+		Number:   prNumber,
+		State:    prState,
+		Event:    event,
+		CheckRes: checkResult,
+	}
+	c.processChannelsInParallel(ctx, prCtx, channels, workspaceID)
 
 	// Handle user notifications - send DMs to blocked users
 	// This happens AFTER channel processing completes to ensure tags are tracked first
@@ -467,18 +485,22 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 
 // sendDMNotifications sends DM notifications to unique blocked users asynchronously.
 // This runs in a separate goroutine to avoid blocking event processing.
-func (c *Coordinator) sendDMNotifications(ctx context.Context, workspaceID, owner, repo string, prNumber int, uniqueUsers map[string]bool, event struct {
-	Action      string `json:"action"`
-	Number      int    `json:"number"`
-	PullRequest struct {
-		Number  int    `json:"number"`
-		HTMLURL string `json:"html_url"`
-		Title   string `json:"title"`
-		User    struct {
-			Login string `json:"login"`
-		} `json:"user"`
-	} `json:"pull_request"`
-}, prState string,
+func (c *Coordinator) sendDMNotifications(
+	ctx context.Context, workspaceID, owner, repo string,
+	prNumber int, uniqueUsers map[string]bool,
+	event struct {
+		Action      string `json:"action"`
+		PullRequest struct {
+			HTMLURL string `json:"html_url"`
+			Title   string `json:"title"`
+			User    struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			Number int `json:"number"`
+		} `json:"pull_request"`
+		Number int `json:"number"`
+	},
+	prState string,
 ) {
 	domain := c.configManager.Domain(owner)
 
@@ -677,26 +699,33 @@ func (*Coordinator) getStateQueryParam(prState string) string {
 }
 
 // processChannelsInParallel processes multiple channels concurrently for better performance.
-func (c *Coordinator) processChannelsInParallel(ctx context.Context, owner, repo string, prNumber int, prState string, event struct {
-	Action      string `json:"action"`
-	Number      int    `json:"number"`
-	PullRequest struct {
-		Number  int    `json:"number"`
-		HTMLURL string `json:"html_url"`
-		Title   string `json:"title"`
-		User    struct {
-			Login string `json:"login"`
-		} `json:"user"`
-	} `json:"pull_request"`
-}, channels []string, workspaceID string, checkResult *turn.CheckResponse,
+func (c *Coordinator) processChannelsInParallel(
+	ctx context.Context, prCtx prContext, channels []string, workspaceID string,
 ) {
+	event, ok := prCtx.Event.(struct {
+		Action      string `json:"action"`
+		PullRequest struct {
+			HTMLURL string `json:"html_url"`
+			Title   string `json:"title"`
+			User    struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			Number int `json:"number"`
+		} `json:"pull_request"`
+		Number int `json:"number"`
+	})
+	if !ok {
+		slog.Error("invalid event type in prContext", "expected", "pull_request_event")
+		return
+	}
+
 	slog.Info("processing PR for all configured channels",
 		"workspace", c.workspaceName,
-		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+		logFieldPR, fmt.Sprintf(prFormatString, prCtx.Owner, prCtx.Repo, prCtx.Number),
 		"action", event.Action,
 		"channels_to_process", len(channels),
 		"channels", channels,
-		"pr_state", prState)
+		"pr_state", prCtx.State)
 
 	// Pre-filter channels to only those where the bot is a member (performance optimization)
 	var validChannels []string
@@ -714,14 +743,14 @@ func (c *Coordinator) processChannelsInParallel(ctx context.Context, owner, repo
 
 	if len(validChannels) == 0 {
 		slog.Info("no valid channels to process - bot not in any configured channels",
-			logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+			logFieldPR, fmt.Sprintf(prFormatString, prCtx.Owner, prCtx.Repo, prCtx.Number),
 			"total_channels", len(channels),
 			"valid_channels", 0)
 		return
 	}
 
 	slog.Info("filtered channels for processing",
-		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+		logFieldPR, fmt.Sprintf(prFormatString, prCtx.Owner, prCtx.Repo, prCtx.Number),
 		"total_channels", len(channels),
 		"valid_channels", len(validChannels),
 		"filtered_out", len(channels)-len(validChannels))
@@ -736,31 +765,40 @@ func (c *Coordinator) processChannelsInParallel(ctx context.Context, owner, repo
 	for _, channelName := range validChannels {
 		go func(ch string) {
 			defer wg.Done()
-			c.processPRForChannel(ctx, owner, repo, prNumber, prState, event, ch, workspaceID, checkResult)
+			c.processPRForChannel(ctx, prCtx, ch, workspaceID)
 		}(channelName)
 	}
 
 	// Wait for all channels to complete
 	wg.Wait()
 	slog.Debug("completed parallel channel processing",
-		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+		logFieldPR, fmt.Sprintf(prFormatString, prCtx.Owner, prCtx.Repo, prCtx.Number),
 		"channels_processed", len(validChannels))
 }
 
 // processPRForChannel handles PR processing for a single channel (extracted from the main loop).
-func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo string, prNumber int, prState string, event struct {
-	Action      string `json:"action"`
-	Number      int    `json:"number"`
-	PullRequest struct {
-		Number  int    `json:"number"`
-		HTMLURL string `json:"html_url"`
-		Title   string `json:"title"`
-		User    struct {
-			Login string `json:"login"`
-		} `json:"user"`
-	} `json:"pull_request"`
-}, channelName, workspaceID string, checkResult *turn.CheckResponse,
+func (c *Coordinator) processPRForChannel(
+	ctx context.Context, prCtx prContext, channelName, workspaceID string,
 ) {
+	owner, repo, prNumber, prState := prCtx.Owner, prCtx.Repo, prCtx.Number, prCtx.State
+	checkResult := prCtx.CheckRes
+	event, ok := prCtx.Event.(struct {
+		Action      string `json:"action"`
+		PullRequest struct {
+			HTMLURL string `json:"html_url"`
+			Title   string `json:"title"`
+			User    struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			Number int `json:"number"`
+		} `json:"pull_request"`
+		Number int `json:"number"`
+	})
+	if !ok {
+		slog.Error("invalid event type in prContext", "expected", "pull_request_event", "channel", channelName)
+		return
+	}
+
 	// Resolve channel name to ID for API calls
 	channelID := c.slack.ResolveChannelID(ctx, channelName)
 
@@ -794,17 +832,17 @@ func (c *Coordinator) processPRForChannel(ctx context.Context, owner, repo strin
 	// Find or create thread for this PR in this channel
 	// Convert to the expected struct format
 	pullRequestStruct := struct {
-		Number  int    `json:"number"`
-		HTMLURL string `json:"html_url"`
-		Title   string `json:"title"`
-		User    struct {
+		User struct {
 			Login string `json:"login"`
 		} `json:"user"`
+		HTMLURL string `json:"html_url"`
+		Title   string `json:"title"`
+		Number  int    `json:"number"`
 	}{
-		Number:  event.PullRequest.Number,
-		Title:   event.PullRequest.Title,
 		User:    event.PullRequest.User,
 		HTMLURL: event.PullRequest.HTMLURL,
+		Title:   event.PullRequest.Title,
+		Number:  event.PullRequest.Number,
 	}
 	threadTS, wasNewlyCreated, err := c.findOrCreatePRThread(ctx, channelID, owner, repo, prNumber, prState, pullRequestStruct, checkResult)
 	if err != nil {
@@ -987,35 +1025,35 @@ func (c *Coordinator) handlePullRequestFromSprinkler(
 	// Create a synthetic webhook event to reuse existing logic with real PR data
 	event := struct {
 		Action      string `json:"action"`
-		Number      int    `json:"number"`
 		PullRequest struct {
-			Number  int    `json:"number"`
 			HTMLURL string `json:"html_url"`
 			Title   string `json:"title"`
 			User    struct {
 				Login string `json:"login"`
 			} `json:"user"`
+			Number int `json:"number"`
 		} `json:"pull_request"`
+		Number int `json:"number"`
 	}{
 		Action: "synchronize", // Use synchronize as default for sprinkler notifications
-		Number: prNumber,
 		PullRequest: struct {
-			Number  int    `json:"number"`
 			HTMLURL string `json:"html_url"`
 			Title   string `json:"title"`
 			User    struct {
 				Login string `json:"login"`
 			} `json:"user"`
+			Number int `json:"number"`
 		}{
-			Number:  prNumber,
-			Title:   pr.Title,
 			HTMLURL: prURL,
+			Title:   pr.Title,
 			User: struct {
 				Login string `json:"login"`
 			}{
 				Login: pr.Author,
 			},
+			Number: prNumber,
 		},
+		Number: prNumber,
 	}
 
 	// Call optimized handler with pre-fetched data to avoid redundant API calls
@@ -1035,12 +1073,12 @@ func (*Coordinator) handlePullRequestReviewFromSprinkler(ctx context.Context, ow
 
 // createPRThread creates a new thread in Slack for a PR.
 func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo string, number int, prState string, pr struct {
-	Number  int    `json:"number"`
-	HTMLURL string `json:"html_url"`
-	Title   string `json:"title"`
-	User    struct {
+	User struct {
 		Login string `json:"login"`
 	} `json:"user"`
+	HTMLURL string `json:"html_url"`
+	Title   string `json:"title"`
+	Number  int    `json:"number"`
 }, checkResult *turn.CheckResponse,
 ) (string, error) {
 	// Get state-based prefix and domain for user mapping
