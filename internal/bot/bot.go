@@ -1021,24 +1021,33 @@ func (c *Coordinator) processPRForChannel(
 	// Track that we notified users in this channel for DM delay logic
 	c.notifier.Tracker.UpdateChannelNotification(workspaceID, owner, repo, prNumber)
 
-	// Track user tags in channel for delayed DM logic
+	// Track user tags in channel asynchronously to avoid blocking thread creation
+	// This is the critical performance optimization - email lookups take 13-20 seconds each
 	// Extract GitHub usernames who are blocked on this PR
 	blockedUsers := c.extractBlockedUsersFromTurnclient(checkResult)
 	domain := c.configManager.Domain(owner)
-	for _, githubUser := range blockedUsers {
-		// Map GitHub username to Slack user ID
-		slackUserID, err := c.userMapper.SlackHandle(ctx, githubUser, owner, domain)
-		if err == nil && slackUserID != "" {
-			// Track with channelID - this will only update on FIRST call per user/PR
-			c.notifier.Tracker.UpdateUserPRChannelTag(workspaceID, slackUserID, channelID, owner, repo, prNumber)
-			slog.Debug("tracked user tag in channel",
-				"workspace", workspaceID,
-				"github_user", githubUser,
-				"slack_user", slackUserID,
-				"channel", channelDisplay,
-				"channel_id", channelID,
-				"pr", fmt.Sprintf(prFormatString, owner, repo, prNumber))
-		}
+	if len(blockedUsers) > 0 {
+		// Run email lookups in background to avoid blocking message delivery
+		// Use detached context to allow completion even if parent context is cancelled
+		lookupCtx, lookupCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		go func() {
+			defer lookupCancel()
+			for _, githubUser := range blockedUsers {
+				// Map GitHub username to Slack user ID
+				slackUserID, err := c.userMapper.SlackHandle(lookupCtx, githubUser, owner, domain)
+				if err == nil && slackUserID != "" {
+					// Track with channelID - this will only update on FIRST call per user/PR
+					c.notifier.Tracker.UpdateUserPRChannelTag(workspaceID, slackUserID, channelID, owner, repo, prNumber)
+					slog.Debug("tracked user tag in channel (async)",
+						"workspace", workspaceID,
+						"github_user", githubUser,
+						"slack_user", slackUserID,
+						"channel", channelDisplay,
+						"channel_id", channelID,
+						"pr", fmt.Sprintf(prFormatString, owner, repo, prNumber))
+				}
+			}
+		}()
 	}
 
 	// Build what the message SHOULD be based on current PR state
@@ -1247,6 +1256,8 @@ func (*Coordinator) handlePullRequestReviewFromSprinkler(ctx context.Context, ow
 }
 
 // createPRThread creates a new thread in Slack for a PR.
+// Critical performance optimization: Posts thread immediately WITHOUT user mentions,
+// then updates asynchronously once email lookups complete (which take 13-20 seconds each).
 func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo string, number int, prState string, pr struct {
 	User struct {
 		Login string `json:"login"`
@@ -1257,15 +1268,15 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 	CreatedAt time.Time `json:"created_at"`
 }, checkResult *turn.CheckResponse,
 ) (threadTS string, messageText string, err error) {
-	// Get state-based prefix and domain for user mapping
+	// Get state-based prefix
 	prefix := notify.PrefixForState(prState)
-	domain := c.configManager.Domain(owner)
 
 	// Add state query param to URL for debugging
 	urlWithState := pr.HTMLURL + c.getStateQueryParam(prState)
 
-	// Format message: :emoji: Title repo#123 · author → action (user1, user2)
-	text := fmt.Sprintf("%s %s <%s|%s#%d> · %s",
+	// Format initial message WITHOUT user mentions (fast path)
+	// Format: :emoji: Title repo#123 · author
+	initialText := fmt.Sprintf("%s %s <%s|%s#%d> · %s",
 		prefix,
 		pr.Title,
 		urlWithState,
@@ -1273,12 +1284,6 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 		number,
 		pr.User.Login,
 	)
-
-	// Add next actions if we have any
-	nextActions := c.formatNextActions(ctx, checkResult, owner, domain)
-	if nextActions != "" {
-		text += fmt.Sprintf(" → %s", nextActions)
-	}
 
 	// Resolve channel name to ID for consistent API calls
 	resolvedChannel := c.slack.ResolveChannelID(ctx, channel)
@@ -1288,20 +1293,56 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 		slog.Debug("channel resolution did not change value", "channel", channel, "might_be_channel_id_already", resolvedChannel[0] == 'C')
 	}
 
-	// Create thread with resolved channel ID.
-	threadTS, err = c.slack.PostThread(ctx, resolvedChannel, text, nil)
+	// Create thread with resolved channel ID - post immediately without waiting for user lookups
+	threadTS, err = c.slack.PostThread(ctx, resolvedChannel, initialText, nil)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to post thread: %w", err)
 	}
 
-	// Add initial reaction based on state from turnclient if available
-	// For createPRThread, we may not have turnclient data available, so this is optional
-	// The reaction will be set properly when the PR is processed through the main flow
-	slog.Debug("thread created, reaction will be set by main processing flow",
+	slog.Info("thread created immediately (async user mention enrichment pending)",
 		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, number),
 		logFieldChannel, resolvedChannel,
 		"thread_ts", threadTS,
-		"message_text", text)
+		"message_preview", initialText[:min(100, len(initialText))],
+		"will_update_with_mentions", true)
 
-	return threadTS, text, nil
+	// Asynchronously add user mentions once email lookups complete
+	// This avoids blocking thread creation on slow email lookups (13-20 seconds each)
+	domain := c.configManager.Domain(owner)
+	if checkResult != nil && len(checkResult.Analysis.NextAction) > 0 {
+		// Use detached context to allow completion even if parent context is cancelled
+		enrichCtx, enrichCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		// Capture variables to avoid data race
+		capturedThreadTS := threadTS
+		capturedOwner := owner
+		capturedRepo := repo
+		capturedNumber := number
+		capturedChannel := resolvedChannel
+		capturedInitialText := initialText
+		go func() {
+			defer enrichCancel()
+
+			// Perform email lookups in background
+			nextActions := c.formatNextActions(enrichCtx, checkResult, capturedOwner, domain)
+			if nextActions != "" {
+				// Update message with user mentions
+				enrichedText := capturedInitialText + fmt.Sprintf(" → %s", nextActions)
+				if err := c.slack.UpdateMessage(enrichCtx, capturedChannel, capturedThreadTS, enrichedText); err != nil {
+					slog.Warn("failed to update thread with user mentions (async enrichment)",
+						logFieldPR, fmt.Sprintf(prFormatString, capturedOwner, capturedRepo, capturedNumber),
+						logFieldChannel, capturedChannel,
+						"thread_ts", capturedThreadTS,
+						"error", err)
+				} else {
+					slog.Info("thread enriched with user mentions (async)",
+						logFieldPR, fmt.Sprintf(prFormatString, capturedOwner, capturedRepo, capturedNumber),
+						logFieldChannel, capturedChannel,
+						"thread_ts", capturedThreadTS,
+						"next_actions", nextActions)
+				}
+			}
+		}()
+	}
+
+	return threadTS, initialText, nil
 }
