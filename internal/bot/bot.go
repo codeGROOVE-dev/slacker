@@ -96,6 +96,7 @@ type Coordinator struct {
 	processedEventMu  sync.RWMutex
 	processingEvents  map[string]bool // Track events currently being processed (prevents concurrent duplicates)
 	processingEventMu sync.Mutex
+	eventSemaphore    chan struct{} // Limits concurrent event processing (prevents overwhelming APIs)
 }
 
 // StateStore interface for persistent state - allows dependency injection for testing.
@@ -135,6 +136,7 @@ func New(
 		},
 		processedEvents:  make(map[string]time.Time),
 		processingEvents: make(map[string]bool),
+		eventSemaphore:   make(chan struct{}, 10), // Allow 10 concurrent events per org
 	}
 
 	// Set GitHub client in config manager for this org.
