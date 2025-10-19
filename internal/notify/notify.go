@@ -279,6 +279,22 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 		"action_required", action,
 		"message", message)
 
+	// Check if we recently sent a DM about this PR (prevents duplicates during rolling deployments)
+	hasRecent, err := slackClient.HasRecentDMAboutPR(ctx, userID, pr.HTMLURL)
+	if err != nil {
+		slog.Warn("failed to check for recent DM, will send anyway to avoid false negative",
+			"user", userID,
+			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+			"error", err)
+	} else if hasRecent {
+		slog.Info("skipping DM - already sent notification about this PR recently",
+			"user", userID,
+			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+			"check_window", "1 hour",
+			"reason", "duplicate prevention during rolling deployment")
+		return nil
+	}
+
 	// Send DM to user.
 	if err := slackClient.SendDirectMessage(ctx, userID, message); err != nil {
 		slog.Error("failed to send DM notification",

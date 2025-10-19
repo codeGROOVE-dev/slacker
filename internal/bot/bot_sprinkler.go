@@ -64,12 +64,22 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 	}
 	c.processedEvents[eventKey] = time.Now()
 
-	// Cleanup old processed events (older than 5 minutes)
-	cutoff := time.Now().Add(-5 * time.Minute)
+	// Cleanup old processed events (older than 24 hours)
+	// Extended from 5 minutes to handle Cloud Run rolling deployments and restarts
+	// This prevents duplicate events during instance transitions which can take several minutes
+	cutoff := time.Now().Add(-24 * time.Hour)
+	cleanedCount := 0
 	for key, processedTime := range c.processedEvents {
 		if processedTime.Before(cutoff) {
 			delete(c.processedEvents, key)
+			cleanedCount++
 		}
+	}
+	if cleanedCount > 0 {
+		slog.Debug("cleaned up old processed events",
+			"organization", organization,
+			"removed_count", cleanedCount,
+			"remaining_count", len(c.processedEvents))
 	}
 	c.processedEventMu.Unlock()
 
