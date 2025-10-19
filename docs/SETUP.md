@@ -53,7 +53,8 @@ Here's a minimal configuration to get started:
 
 ```yaml
 global:
-    slack: mycompany.slack.com
+    team_id: T09CJ7X7T7Y
+    email_domain: mycompany.com
 
 channels:
     engineering:
@@ -62,10 +63,14 @@ channels:
 ```
 
 **What this does:**
-- Validates that this config is for the `mycompany.slack.com` workspace
+- Validates that this config is for your Slack workspace (by team ID)
+- Maps GitHub users to Slack users using your email domain
 - Posts all PRs to the `#engineering` channel
 
-Replace `mycompany.slack.com` with your actual Slack workspace domain (found in your Slack URL).
+**Finding your Team ID:**
+1. In Slack, click your workspace name → Settings & administration → Workspace settings
+2. Look at the URL - it contains your team ID (e.g., `T09CJ7X7T7Y`)
+3. Or use the Slack API tester: https://api.slack.com/methods/auth.test/test
 
 ### Optional: Channel Auto-Discovery
 
@@ -81,7 +86,8 @@ You don't need to configure anything for this to work! The bot automatically dis
 
 ```yaml
 global:
-    slack: mycompany.slack.com
+    team_id: T09CJ7X7T7Y
+    email_domain: mycompany.com
 
 channels:
     # Send backend & api PRs to #platform instead of their own channels
@@ -167,7 +173,8 @@ You can customize how long the bot waits before sending DMs:
 
 ```yaml
 global:
-    slack: mycompany.slack.com
+    team_id: T09CJ7X7T7Y
+    email_domain: mycompany.com
     reminder_dm_delay: 30  # Wait 30 minutes instead of default 65
 ```
 
@@ -175,6 +182,8 @@ Set to `0` to disable delayed reminders entirely (DMs sent immediately):
 
 ```yaml
 global:
+    team_id: T09CJ7X7T7Y
+    email_domain: mycompany.com
     reminder_dm_delay: 0  # No delays, always DM immediately
 ```
 
@@ -184,7 +193,8 @@ Override the delay for specific channels:
 
 ```yaml
 global:
-    slack: mycompany.slack.com
+    team_id: T09CJ7X7T7Y
+    email_domain: mycompany.com
     reminder_dm_delay: 65  # Default for most channels
 
 channels:
@@ -200,7 +210,8 @@ Enable daily reminders sent between 8-9am in each user's local timezone:
 
 ```yaml
 global:
-    slack: mycompany.slack.com
+    team_id: T09CJ7X7T7Y
+    email_domain: mycompany.com
     daily_reminders: true  # Default: false
 ```
 
@@ -215,7 +226,8 @@ Add a custom emoji prefix to all PR messages:
 
 ```yaml
 global:
-    slack: mycompany.slack.com
+    team_id: T09CJ7X7T7Y
+    email_domain: mycompany.com
     prefix: ":postal_horn:"
 ```
 
@@ -285,8 +297,9 @@ channels:
 
 ```yaml
 global:
+    team_id: T09CJ7X7T7Y
+    email_domain: acme-corp.com
     prefix: ":bell:"
-    slack: acme-corp.slack.com
     reminder_dm_delay: 45
     daily_reminders: true
 
@@ -346,8 +359,9 @@ Visit [dash.ready-to-review.dev](https://dash.ready-to-review.dev/) for a compre
 **Check your configuration:**
 1. Do you have a `.codeGROOVE` repository in your GitHub organization?
 2. Is `slack.yaml` committed to the `.codeGROOVE` repo's main branch?
-3. Does the `slack:` field match your workspace domain exactly?
-4. Are you posting to a channel that exists?
+3. Does the `team_id` field match your Slack workspace's team ID exactly?
+4. Is the `email_domain` set correctly for mapping GitHub users to Slack users?
+5. Are you posting to a channel that exists?
 
 **Check channel permissions:**
 - The bot needs permission to post in the channel
@@ -397,7 +411,8 @@ Begin with a minimal config and add complexity as needed:
 
 ```yaml
 global:
-    slack: mycompany.slack.com
+    team_id: T09CJ7X7T7Y
+    email_domain: mycompany.com
 
 channels:
     engineering:

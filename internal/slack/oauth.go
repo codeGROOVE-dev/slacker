@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -35,41 +36,46 @@ func (h *OAuthHandler) HandleCallback(writer http.ResponseWriter, req *http.Requ
 	ctx := req.Context()
 
 	// SECURITY: Verify CSRF token via state parameter to prevent OAuth hijacking attacks
+	// Note: For Slack App Directory installations, users may arrive directly at /oauth/callback
+	// without going through our /install page first. In this case, state will be empty.
 	stateParam := req.URL.Query().Get("state")
-	if stateParam == "" {
-		slog.Error("OAuth callback missing state parameter - possible CSRF attack")
-		http.Error(writer, "Missing state parameter", http.StatusBadRequest)
-		return
-	}
 
-	// Retrieve state from cookie
-	cookie, err := req.Cookie("oauth_state")
-	if err != nil {
-		slog.Error("OAuth callback missing state cookie - possible CSRF attack",
-			"error", err)
-		http.Error(writer, "Invalid state parameter", http.StatusBadRequest)
-		return
-	}
+	// If state parameter exists (non-empty), verify it matches our cookie
+	if stateParam != "" {
+		// Retrieve state from cookie
+		cookie, err := req.Cookie("oauth_state")
+		if err != nil {
+			slog.Error("OAuth callback has state parameter but missing state cookie - possible CSRF attack",
+				"error", err)
+			http.Error(writer, "Invalid state parameter", http.StatusBadRequest)
+			return
+		}
 
-	// Verify state matches
-	if cookie.Value != stateParam {
-		slog.Warn("OAuth state mismatch - possible CSRF attack",
-			"cookie_state", cookie.Value[:min(len(cookie.Value), 10)]+"...",
-			"param_state", stateParam[:min(len(stateParam), 10)]+"...")
-		http.Error(writer, "Invalid state parameter", http.StatusBadRequest)
-		return
-	}
+		// Verify state matches
+		if cookie.Value != stateParam {
+			slog.Warn("OAuth state mismatch - possible CSRF attack",
+				"cookie_state", cookie.Value[:min(len(cookie.Value), 10)]+"...",
+				"param_state", stateParam[:min(len(stateParam), 10)]+"...")
+			http.Error(writer, "Invalid state parameter", http.StatusBadRequest)
+			return
+		}
 
-	// Clear the state cookie immediately after verification
-	http.SetCookie(writer, &http.Cookie{
-		Name:     "oauth_state",
-		Value:    "",
-		Path:     "/",
-		MaxAge:   -1,
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteLaxMode,
-	})
+		// Clear the state cookie immediately after verification
+		http.SetCookie(writer, &http.Cookie{
+			Name:     "oauth_state",
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1,
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteLaxMode,
+		})
+
+		slog.Info("OAuth callback with state verification passed")
+	} else {
+		// Empty state - likely direct installation from Slack App Directory
+		slog.Info("OAuth callback without state parameter - likely Slack App Directory installation")
+	}
 
 	// Extract authorization code
 	code := req.URL.Query().Get("code")
@@ -92,7 +98,7 @@ func (h *OAuthHandler) HandleCallback(writer http.ResponseWriter, req *http.Requ
 
 	// Exchange code for token with retry
 	var resp *slack.OAuthV2Response
-	err = retry.Do(
+	err := retry.Do(
 		func() error {
 			var err error
 			resp, err = slack.GetOAuthV2ResponseContext(
@@ -161,34 +167,173 @@ func (h *OAuthHandler) HandleCallback(writer http.ResponseWriter, req *http.Requ
 	}
 
 	// Return success page
-	writer.Header().Set("Content-Type", "text/html")
-	writer.WriteHeader(http.StatusOK)
-	if _, err := fmt.Fprintf(writer, `
-<!DOCTYPE html>
-<html>
-<head>
-	<title>Installation Complete</title>
-	<style>
-		body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-		       max-width: 600px; margin: 100px auto; text-align: center; }
-		h1 { color: #2eb67d; }
-		p { color: #1d1c1d; line-height: 1.6; }
-	</style>
-</head>
-<body>
-	<h1>✓ Installation Complete</h1>
-	<p>Ready to Review has been successfully installed to <strong>%s</strong>.</p>
-	<p>You can now close this window and return to Slack.</p>
-</body>
-</html>
-`, teamName); err != nil {
-		slog.Error("failed to write success page", "error", err)
-		return
-	}
+	h.writeSuccessPage(writer, teamName)
 
 	slog.Info("OAuth installation completed successfully",
 		"team_id", teamID,
 		"team_name", teamName)
+}
+
+// writeSuccessPage renders the OAuth success page.
+func (*OAuthHandler) writeSuccessPage(writer http.ResponseWriter, teamName string) {
+	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+	writer.WriteHeader(http.StatusOK)
+	if _, err := fmt.Fprintf(writer, `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Installation Complete - Ready to Review</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Passion+One:wght@700&display=swap" rel="stylesheet">
+	<style>
+		:root {
+			--yellow: #ffe838;
+			--cyan: #00d4dd;
+			--black: #000000;
+			--white: #ffffff;
+			--gray: #999999;
+		}
+		* {
+			margin: 0;
+			padding: 0;
+			box-sizing: border-box;
+		}
+		body {
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+			background: var(--black);
+			color: var(--white);
+			min-height: 100vh;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			padding: 20px;
+		}
+		.success-container {
+			max-width: 600px;
+			background: var(--black);
+			border: 8px solid var(--cyan);
+			border-radius: 20px;
+			padding: 60px 40px;
+			text-align: center;
+			box-shadow: 0 12px 40px rgba(0, 212, 221, 0.4);
+		}
+		@media (prefers-reduced-motion: no-preference) {
+			.success-container {
+				animation: slideIn 0.5s ease-out;
+			}
+			.checkmark {
+				animation: bounce 0.8s ease-out;
+			}
+			.rocket {
+				animation: float 2s ease-in-out infinite;
+			}
+		}
+		@keyframes slideIn {
+			from {
+				opacity: 0;
+				transform: translateY(-20px);
+			}
+			to {
+				opacity: 1;
+				transform: translateY(0);
+			}
+		}
+		@keyframes bounce {
+			0%%, 20%%, 50%%, 80%%, 100%% { transform: translateY(0); }
+			40%% { transform: translateY(-20px); }
+			60%% { transform: translateY(-10px); }
+		}
+		@keyframes float {
+			0%%, 100%% { transform: translateY(0); }
+			50%% { transform: translateY(-10px); }
+		}
+		.checkmark {
+			font-size: 80px;
+			color: var(--yellow);
+			margin-bottom: 20px;
+			display: block;
+		}
+		h1 {
+			font-family: "Passion One", cursive;
+			font-size: 48px;
+			font-weight: 700;
+			font-style: italic;
+			color: var(--white);
+			margin-bottom: 24px;
+			line-height: 1.2;
+		}
+		h2 {
+			color: var(--cyan);
+			font-family: "Passion One", cursive;
+			font-size: 56px;
+			font-weight: 700;
+			margin: 20px 0;
+			line-height: 1.1;
+		}
+		p {
+			font-size: 20px;
+			line-height: 1.6;
+			color: var(--white);
+			margin-bottom: 16px;
+		}
+		.cta {
+			font-size: 18px;
+			font-weight: 600;
+			color: var(--yellow);
+			margin-top: 32px;
+		}
+		.cta a {
+			color: var(--cyan);
+			text-decoration: underline;
+			text-decoration-thickness: 2px;
+			text-underline-offset: 4px;
+			font-weight: 700;
+		}
+		.cta a:hover,
+		.cta a:focus {
+			color: var(--yellow);
+			outline: 2px solid var(--cyan);
+			outline-offset: 4px;
+			border-radius: 4px;
+			padding: 2px 4px;
+			text-decoration: none;
+		}
+		.rocket {
+			font-size: 40px;
+			margin: 0 8px;
+		}
+		.footer {
+			font-size: 14px;
+			color: var(--gray);
+			margin-top: 24px;
+		}
+	</style>
+</head>
+<body>
+	<main>
+		<div class="success-container" role="status" aria-live="polite">
+			<span class="checkmark" role="img" aria-label="Success checkmark">✓</span>
+			<h1>Installation Complete!</h1>
+			<p>Ready to Review is now supercharging</p>
+			<h2>%s</h2>
+			<p><span class="rocket" role="img" aria-label="Rocket">🚀</span>
+			   Your dev team just got faster.
+			   <span class="rocket" role="img" aria-label="Rocket">🚀</span></p>
+			<p class="cta">Next:
+			   <a href="https://github.com/codeGROOVE-dev/slacker/blob/main/docs/SETUP.md#configuring-your-repositories"
+			      target="_blank"
+			      rel="noopener noreferrer">Configure your repositories</a></p>
+			<p class="footer">Then close this window and return to Slack.</p>
+		</div>
+	</main>
+</body>
+</html>
+`, teamName); err != nil {
+		slog.Error("failed to write success page", "error", err)
+	}
 }
 
 // HandleInstall serves the "Add to Slack" installation page.
@@ -230,47 +375,146 @@ func (h *OAuthHandler) HandleInstall(writer http.ResponseWriter, _ *http.Request
 	}
 
 	// Slack OAuth URL format with state parameter for CSRF protection
-	authURL := fmt.Sprintf(
-		"https://slack.com/oauth/v2/authorize?client_id=%s&scope=%s&state=%s",
-		h.clientID,
-		strings.Join(scopes, ","),
-		state,
-	)
+	// Use url.Values to ensure proper URL encoding of all parameters
+	params := url.Values{
+		"client_id": {h.clientID},
+		"scope":     {strings.Join(scopes, ",")},
+		"state":     {state},
+	}
+	authURL := "https://slack.com/oauth/v2/authorize?" + params.Encode()
 
 	slog.Info("serving OAuth installation page",
 		"client_id", h.clientID)
 
-	// Return installation page with "Add to Slack" button
-	writer.Header().Set("Content-Type", "text/html")
+	h.writeInstallPage(writer, authURL)
+}
+
+// writeInstallPage renders the OAuth installation page.
+func (*OAuthHandler) writeInstallPage(writer http.ResponseWriter, authURL string) {
+	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	writer.WriteHeader(http.StatusOK)
 	if _, err := fmt.Fprintf(writer, `
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>Install Ready to Review</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Passion+One:wght@700&display=swap" rel="stylesheet">
 	<style>
-		body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-		       max-width: 600px; margin: 100px auto; text-align: center; }
-		h1 { color: #1d1c1d; }
-		p { color: #616061; line-height: 1.6; margin: 20px 0; }
-		.button { display: inline-block; margin: 30px 0; }
+		:root {
+			--yellow: #ffe838;
+			--cyan: #5ce1e6;
+			--black: #000000;
+			--white: #ffffff;
+		}
+		* {
+			margin: 0;
+			padding: 0;
+			box-sizing: border-box;
+		}
+		body {
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+			background: var(--black);
+			color: var(--white);
+			min-height: 100vh;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			padding: 20px;
+		}
+		.install-container {
+			max-width: 600px;
+			background: var(--black);
+			border: 8px solid var(--yellow);
+			border-radius: 20px;
+			padding: 50px 40px;
+			text-align: center;
+			box-shadow: 0 12px 40px rgba(255, 232, 56, 0.3);
+		}
+		h1 {
+			font-family: "Passion One", cursive;
+			font-size: 48px;
+			font-weight: 700;
+			font-style: italic;
+			color: var(--white);
+			margin-bottom: 16px;
+			line-height: 1.2;
+		}
+		.tagline {
+			font-size: 22px;
+			font-weight: 700;
+			color: var(--cyan);
+			margin-bottom: 24px;
+		}
+		.features {
+			list-style: none;
+			margin: 24px 0;
+			padding: 0;
+		}
+		.features li {
+			font-size: 18px;
+			color: var(--white);
+			margin: 12px 0;
+			line-height: 1.4;
+		}
+		.features li::before {
+			content: "✓ ";
+			color: var(--cyan);
+			font-size: 20px;
+			font-weight: 700;
+		}
+		.button-container {
+			margin: 36px 0;
+		}
+		.add-to-slack {
+			display: inline-block;
+			transition: transform 0.2s, box-shadow 0.2s;
+		}
+		.add-to-slack:hover {
+			transform: translateY(-2px);
+		}
+		.footer {
+			font-size: 13px;
+			color: #999;
+			margin-top: 32px;
+			line-height: 1.6;
+		}
+		.footer a {
+			color: var(--cyan);
+			text-decoration: none;
+		}
+		.footer a:hover {
+			text-decoration: underline;
+		}
 	</style>
 </head>
 <body>
-	<h1>Ready to Review</h1>
-	<p>Streamline your PR review workflow with real-time notifications and dashboard views.</p>
-	<div class="button">
-		<a href="%s">
-			<img alt="Add to Slack" height="40" width="139"
-			     src="https://platform.slack-edge.com/img/add_to_slack.png"
-			     srcset="https://platform.slack-edge.com/img/add_to_slack.png 1x,
-			             https://platform.slack-edge.com/img/add_to_slack@2x.png 2x" />
-		</a>
+	<div class="install-container">
+		<h1>READY TO REVIEW</h1>
+		<p class="tagline">Supercharge your PR review workflow.</p>
+		<ul class="features">
+			<li>Real-time Slack notifications</li>
+			<li>Smart DM reminders</li>
+			<li>Multi-workspace support</li>
+			<li>Auto-discovery channels</li>
+		</ul>
+		<div class="button-container">
+			<a href="%s" class="add-to-slack">
+				<img alt="Add to Slack" height="40" width="139"
+				     src="https://platform.slack-edge.com/img/add_to_slack.png"
+				     srcset="https://platform.slack-edge.com/img/add_to_slack.png 1x,
+				             https://platform.slack-edge.com/img/add_to_slack@2x.png 2x" />
+			</a>
+		</div>
+		<div class="footer">
+			By installing, you agree to our
+			<a href="https://github.com/codeGROOVE-dev/policy/blob/main/TOS.md">terms of service</a> and
+			<a href="https://github.com/codeGROOVE-dev/policy/blob/main/PRIVACY.md">privacy policy</a>.
+		</div>
 	</div>
-	<p><small>By installing, you agree to our
-		<a href="https://github.com/codeGROOVE-dev/policy/blob/main/TOS.md">terms of service</a> and
-		<a href="https://github.com/codeGROOVE-dev/policy/blob/main/PRIVACY.md">privacy policy</a>.
-	</small></p>
 </body>
 </html>
 `, authURL); err != nil {
