@@ -472,9 +472,21 @@ func (c *Coordinator) processEvent(ctx context.Context, msg SprinklerMessage) er
 	case "pull_request_review":
 		c.handlePullRequestReviewFromSprinkler(ctx, owner, repo, msg.PRNumber, msg.URL, msg.Timestamp)
 	case "check_run", "check_suite":
-		// Parse to get PR number.
-		// This is simplified - in production, we'd need to map commits to PRs.
-		slog.Debug("received check event", "owner", owner, "repo", repo)
+		// Check events update PR test status - handle like pull_request events
+		if msg.PRNumber > 0 {
+			slog.Info("received check event for PR, refreshing state",
+				"owner", owner,
+				"repo", repo,
+				"pr", msg.PRNumber,
+				"event", msg.Event)
+			c.handlePullRequestFromSprinkler(ctx, owner, repo, msg.PRNumber, msg.URL, msg.Timestamp)
+		} else {
+			slog.Debug("received check event without PR number, skipping",
+				"owner", owner,
+				"repo", repo,
+				"event", msg.Event,
+				"url", msg.URL)
+		}
 	case "push":
 		// Check if this is a push to .codeGROOVE repo.
 		if repo == ".codeGROOVE" {
@@ -765,11 +777,17 @@ func (c *Coordinator) formatNextActions(ctx context.Context, checkResult *turn.C
 		return ""
 	}
 
-	// Group users by action kind
+	// Group users by action kind, filtering out _system users
 	actionGroups := make(map[string][]string)
 	for user, action := range checkResult.Analysis.NextAction {
 		actionKind := string(action.Kind)
-		actionGroups[actionKind] = append(actionGroups[actionKind], user)
+		// Skip _system users but still track the action exists
+		if user != "_system" {
+			actionGroups[actionKind] = append(actionGroups[actionKind], user)
+		} else if _, exists := actionGroups[actionKind]; !exists {
+			// Action only has _system - create empty slice to track it exists
+			actionGroups[actionKind] = []string{}
+		}
 	}
 
 	// Format each action group
@@ -778,10 +796,16 @@ func (c *Coordinator) formatNextActions(ctx context.Context, checkResult *turn.C
 		// Convert snake_case to space-separated words
 		actionName := strings.ReplaceAll(actionKind, "_", " ")
 
-		// Format user mentions
+		// Format user mentions (will be empty if only _system was assigned)
 		userMentions := c.userMapper.FormatUserMentions(ctx, users, owner, domain)
 
-		parts = append(parts, fmt.Sprintf("%s: %s", actionName, userMentions))
+		// If action has users, format as "action: users"
+		// If no users (was only _system), just show the action
+		if userMentions != "" {
+			parts = append(parts, fmt.Sprintf("%s: %s", actionName, userMentions))
+		} else {
+			parts = append(parts, actionName)
+		}
 	}
 
 	// Use semicolons to separate different actions (commas are used between users)

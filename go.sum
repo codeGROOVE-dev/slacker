@@ -20,6 +20,8 @@ github.com/codeGROOVE-dev/sprinkler v0.0.0-20251016145102-d41de481b9e6 h1:OZhhtD
 github.com/codeGROOVE-dev/sprinkler v0.0.0-20251016145102-d41de481b9e6/go.mod h1:/kd3ncsRNldD0MUpbtp5ojIzfCkyeXB7JdOrpuqG7Gg=
 github.com/codeGROOVE-dev/sprinkler v0.0.0-20251018202454-6c749ec76260 h1:Br9fc+ebZllSA9IY4s2mq4yZoSkV44577EakZbvmJYk=
 github.com/codeGROOVE-dev/sprinkler v0.0.0-20251018202454-6c749ec76260/go.mod h1:/kd3ncsRNldD0MUpbtp5ojIzfCkyeXB7JdOrpuqG7Gg=
+github.com/codeGROOVE-dev/sprinkler v0.0.0-20251019110134-896b678fd945 h1:uZhbGjrIEYfs6Bq2PQgbbtag5gAjMp/NQZGAQsL73m4=
+github.com/codeGROOVE-dev/sprinkler v0.0.0-20251019110134-896b678fd945/go.mod h1:/kd3ncsRNldD0MUpbtp5ojIzfCkyeXB7JdOrpuqG7Gg=
 github.com/codeGROOVE-dev/turnclient v0.0.0-20251016170035-1698daf57581 h1:p+N/lVhuyRBdllF0UPHUPLJcB79D7xV3hXiHwjmECCY=
 github.com/codeGROOVE-dev/turnclient v0.0.0-20251016170035-1698daf57581/go.mod h1:fYwtN9Ql6lY8t2WvCfENx+mP5FUwjlqwXCLx9CVLY20=
 github.com/codeGROOVE-dev/turnclient v0.0.0-20251018202306-7cdc0d51856e h1:3qoY6h8SgoeNsIYRM7P6PegTXAHPo8OSOapUunVP/Gs=
