@@ -396,7 +396,9 @@ func (s *DatastoreStore) MarkProcessed(eventKey string, ttl time.Duration) error
 	}
 
 	// Use transaction for compare-and-swap semantics
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	// Timeout: 10 seconds for transaction (Google recommends up to 60s idle timeout)
+	// This accounts for cold starts, network latency, and transaction overhead
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	dsKey := datastore.NameKey(kindEvent, eventKey, nil)

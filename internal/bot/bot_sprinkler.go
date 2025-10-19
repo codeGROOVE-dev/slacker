@@ -118,89 +118,105 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 	}
 	c.processedEventMu.Unlock()
 
-	slog.Info("processing sprinkler event",
+	slog.Info("accepted event for async processing",
 		"organization", organization,
 		"type", event.Type,
 		"url", event.URL,
 		"timestamp", event.Timestamp,
 		"event_key", eventKey)
 
-	// Log the sprinkler event data for debugging
-	var rawKeys []string
-	if event.Raw != nil {
-		rawKeys = make([]string, 0, len(event.Raw))
-		for k := range event.Raw {
-			rawKeys = append(rawKeys, k)
-		}
-	}
-	slog.Debug("sprinkler event metadata",
-		"organization", organization,
-		"type", event.Type,
-		"url", event.URL,
-		"timestamp", event.Timestamp,
-		"raw_keys", rawKeys)
+	// Process event asynchronously after deduplication checks pass
+	// This allows the event handler to return immediately and accept the next event
+	// Semaphore limits concurrent processing to prevent overwhelming APIs
+	go func() {
+		// Acquire semaphore slot (blocks if 10 events already processing)
+		c.eventSemaphore <- struct{}{}
+		defer func() { <-c.eventSemaphore }() // Release slot when done
 
-	// Sprinkler only provides metadata - extract PR number from URL
-	if event.URL == "" {
-		slog.Error("sprinkler event missing URL - cannot determine PR number",
+		slog.Info("processing sprinkler event",
 			"organization", organization,
-			"type", event.Type)
-		return
-	}
-
-	prNumber, err := parsePRNumberFromURL(event.URL)
-	if err != nil {
-		slog.Error("failed to parse PR number from URL",
-			"organization", organization,
-			"url", event.URL,
-			"error", err)
-		return
-	}
-
-	slog.Debug("extracted PR number from URL",
-		"organization", organization,
-		"pr_number", prNumber,
-		"url", event.URL)
-
-	// Extract owner/repo from URL
-	parts := strings.Split(event.URL, "/")
-	if len(parts) < 5 || parts[2] != "github.com" {
-		slog.Error("could not extract repo from URL",
-			"organization", organization,
-			"url", event.URL,
-			"error", "invalid URL format")
-		return
-	}
-	repo := parts[3] + "/" + parts[4]
-
-	msg := SprinklerMessage{
-		Type:      event.Type,
-		Event:     event.Type,
-		Repo:      repo,
-		PRNumber:  prNumber,
-		URL:       event.URL,
-		Timestamp: event.Timestamp,
-	}
-
-	if err := c.processEvent(ctx, msg); err != nil {
-		slog.Error("error processing event",
-			"organization", organization,
-			"error", err,
 			"type", event.Type,
 			"url", event.URL,
-			"repo", repo)
-		// Don't mark as processed if processing failed - allow retry
-		return
-	}
+			"timestamp", event.Timestamp,
+			"event_key", eventKey)
 
-	// Mark event as processed in persistent state (survives restarts)
-	if err := c.stateStore.MarkProcessed(eventKey, 24*time.Hour); err != nil {
-		slog.Warn("failed to mark event as processed",
+		// Log the sprinkler event data for debugging
+		var rawKeys []string
+		if event.Raw != nil {
+			rawKeys = make([]string, 0, len(event.Raw))
+			for k := range event.Raw {
+				rawKeys = append(rawKeys, k)
+			}
+		}
+		slog.Debug("sprinkler event metadata",
 			"organization", organization,
-			"event_key", eventKey,
-			"error", err)
-		// Continue anyway - in-memory dedup will prevent immediate duplicates
-	}
+			"type", event.Type,
+			"url", event.URL,
+			"timestamp", event.Timestamp,
+			"raw_keys", rawKeys)
+
+		// Sprinkler only provides metadata - extract PR number from URL
+		if event.URL == "" {
+			slog.Error("sprinkler event missing URL - cannot determine PR number",
+				"organization", organization,
+				"type", event.Type)
+			return
+		}
+
+		prNumber, err := parsePRNumberFromURL(event.URL)
+		if err != nil {
+			slog.Error("failed to parse PR number from URL",
+				"organization", organization,
+				"url", event.URL,
+				"error", err)
+			return
+		}
+
+		slog.Debug("extracted PR number from URL",
+			"organization", organization,
+			"pr_number", prNumber,
+			"url", event.URL)
+
+		// Extract owner/repo from URL
+		parts := strings.Split(event.URL, "/")
+		if len(parts) < 5 || parts[2] != "github.com" {
+			slog.Error("could not extract repo from URL",
+				"organization", organization,
+				"url", event.URL,
+				"error", "invalid URL format")
+			return
+		}
+		repo := parts[3] + "/" + parts[4]
+
+		msg := SprinklerMessage{
+			Type:      event.Type,
+			Event:     event.Type,
+			Repo:      repo,
+			PRNumber:  prNumber,
+			URL:       event.URL,
+			Timestamp: event.Timestamp,
+		}
+
+		if err := c.processEvent(ctx, msg); err != nil {
+			slog.Error("error processing event",
+				"organization", organization,
+				"error", err,
+				"type", event.Type,
+				"url", event.URL,
+				"repo", repo)
+			// Don't mark as processed if processing failed - allow retry
+			return
+		}
+
+		// Mark event as processed in persistent state (survives restarts)
+		if err := c.stateStore.MarkProcessed(eventKey, 24*time.Hour); err != nil {
+			slog.Warn("failed to mark event as processed",
+				"organization", organization,
+				"event_key", eventKey,
+				"error", err)
+			// Continue anyway - in-memory dedup will prevent immediate duplicates
+		}
+	}() // Close the goroutine
 }
 
 // handleAuthError handles authentication errors by refreshing the token and recreating the client.
