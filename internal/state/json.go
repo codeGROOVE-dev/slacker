@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -63,16 +64,42 @@ func NewJSONStore() (*JSONStore, error) {
 
 // Thread key format: "{owner}/{repo}#{number}:{channel_id}".
 func threadKey(owner, repo string, number int, channelID string) string {
+	// Defense-in-depth: validate inputs even though they come from trusted APIs
+	// Prevents key collision if special characters somehow slip through
+	if strings.ContainsAny(owner, ":#/") || strings.ContainsAny(repo, ":#/") || strings.ContainsAny(channelID, ":#/") {
+		slog.Warn("invalid characters in thread key components",
+			"owner", owner,
+			"repo", repo,
+			"channel", channelID)
+		// Return sanitized key with hex encoding for safety
+		return fmt.Sprintf("%x/%x#%d:%x",
+			[]byte(owner),
+			[]byte(repo),
+			number,
+			[]byte(channelID))
+	}
 	return fmt.Sprintf("%s/%s#%d:%s", owner, repo, number, channelID)
 }
 
 // DM key format: "dm:{user_id}:{pr_url}".
 func dmKey(userID, prURL string) string {
+	// Validate user ID doesn't contain colon (key separator)
+	if strings.Contains(userID, ":") {
+		slog.Warn("invalid characters in DM key user ID", "user_id", userID)
+		return fmt.Sprintf("dm:%x:%s", []byte(userID), prURL)
+	}
 	return fmt.Sprintf("dm:%s:%s", userID, prURL)
 }
 
 // Digest key format: "digest:{user_id}:{date}".
 func digestKey(userID, date string) string {
+	// Validate components don't contain colon (key separator)
+	if strings.Contains(userID, ":") || strings.Contains(date, ":") {
+		slog.Warn("invalid characters in digest key components",
+			"user_id", userID,
+			"date", date)
+		return fmt.Sprintf("digest:%x:%x", []byte(userID), []byte(date))
+	}
 	return fmt.Sprintf("digest:%s:%s", userID, date)
 }
 

@@ -27,6 +27,10 @@ const (
 	kindNotify = "SlackerNotification"
 )
 
+// ErrAlreadyProcessed indicates an event was already processed by another instance.
+// This is used for cross-instance deduplication during rolling deployments.
+var ErrAlreadyProcessed = errors.New("event already processed by another instance")
+
 // Thread entity for Datastore.
 type threadEntity struct {
 	ThreadTS      string    `datastore:"thread_ts"`
@@ -386,9 +390,9 @@ func (s *DatastoreStore) WasProcessed(eventKey string) bool {
 }
 
 // MarkProcessed marks an event as processed (distributed coordination).
-// Returns true if successfully marked, false if already marked by another instance.
+// Returns error if already processed by another instance (enables race detection).
 func (s *DatastoreStore) MarkProcessed(eventKey string, ttl time.Duration) error {
-	// Mark in JSON
+	// Mark in JSON first for fast local lookups
 	if err := s.json.MarkProcessed(eventKey, ttl); err != nil {
 		slog.Warn("failed to mark event in JSON", "error", err)
 	}
@@ -412,7 +416,7 @@ func (s *DatastoreStore) MarkProcessed(eventKey string, ttl time.Duration) error
 
 		// Already exists - another instance processed it
 		if err == nil {
-			return errors.New("event already processed")
+			return ErrAlreadyProcessed
 		}
 
 		// Not found - safe to insert
@@ -428,14 +432,19 @@ func (s *DatastoreStore) MarkProcessed(eventKey string, ttl time.Duration) error
 		// Other error
 		return err
 	})
-
-	if err != nil && err.Error() != "event already processed" {
+	// Return the error to caller so they can detect race condition
+	if err != nil {
+		if errors.Is(err, ErrAlreadyProcessed) {
+			// This is expected during rolling deployments - return error to caller
+			return err
+		}
+		// Unexpected error - log but don't fail processing
 		slog.Warn("failed to mark event in Datastore",
 			"event", eventKey,
 			"error", err)
 	}
 
-	return nil
+	return err
 }
 
 // GetLastNotification retrieves when a PR was last notified about.

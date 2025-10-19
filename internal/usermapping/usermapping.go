@@ -3,6 +3,7 @@ package usermapping
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -51,9 +52,9 @@ type Service struct {
 	slackClient  SlackAPI
 	githubLookup GitHubEmailLookup
 	cache        map[string]*UserMapping
-	lookupSem    chan struct{}          // Semaphore for limiting concurrent lookups
+	lookupSem    chan struct{} // Semaphore for limiting concurrent lookups
 	cacheMu      sync.RWMutex
-	flight       singleflight.Group     // Deduplicates concurrent identical lookups
+	flight       singleflight.Group // Deduplicates concurrent identical lookups
 }
 
 // New creates a new user mapping service.
@@ -118,7 +119,10 @@ func (s *Service) SlackHandle(ctx context.Context, githubUsername, organization,
 		return "", err
 	}
 
-	slackUserID := result.(string)
+	slackUserID, ok := result.(string)
+	if !ok {
+		return "", fmt.Errorf("unexpected result type from singleflight: %T", result)
+	}
 	if shared {
 		slog.Debug("reused concurrent lookup result via singleflight",
 			"github_user", githubUsername,
@@ -131,7 +135,6 @@ func (s *Service) SlackHandle(ctx context.Context, githubUsername, organization,
 // doLookup performs the actual email lookup and mapping logic.
 // Extracted from SlackHandle to work with singleflight pattern.
 func (s *Service) doLookup(ctx context.Context, githubUsername, organization, domain string) (string, error) {
-
 	// Get emails for GitHub user with organization context
 	result, err := s.githubLookup.Lookup(ctx, githubUsername, organization)
 	if err != nil {
