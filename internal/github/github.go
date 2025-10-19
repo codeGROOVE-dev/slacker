@@ -215,10 +215,16 @@ func (c *Client) authenticate(ctx context.Context) error {
 		slog.Debug("token validated successfully (repo list check)")
 	}
 
+	// Log minimal token info to reduce exposure in logs (security best practice)
+	tokenStr := token.GetToken()
+	tokenSuffix := "..."
+	if len(tokenStr) >= 4 {
+		tokenSuffix = "..." + tokenStr[len(tokenStr)-4:]
+	}
 	slog.Info("successfully authenticated GitHub App",
 		"app_id", c.appID,
-		"token_length", len(token.GetToken()),
-		"token_prefix", token.GetToken()[:min(10, len(token.GetToken()))]+"...",
+		"token_length", len(tokenStr),
+		"token_suffix", tokenSuffix,
 		"token_expires_at", token.GetExpiresAt())
 	return nil
 }

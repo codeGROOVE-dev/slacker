@@ -86,4 +86,4 @@ func (d *DailyDigestScheduler) CheckAndSend(ctx context.Context) {
 // - User mapping from GitHub to Slack
 // - PR analysis with turnclient
 // - Timezone-aware message delivery
-// - Deduplication with existing DM notifications
+// - Deduplication with existing DM notifications.

@@ -34,8 +34,8 @@ import (
 func detectGCPProjectID(ctx context.Context) string {
 	// Try metadata service (works on Cloud Run, GCE, GKE, Cloud Functions)
 	client := &http.Client{Timeout: 2 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, "GET",
-		"http://metadata.google.internal/computeMetadata/v1/project/project-id", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		"http://metadata.google.internal/computeMetadata/v1/project/project-id", http.NoBody)
 	if err != nil {
 		return ""
 	}
@@ -46,7 +46,11 @@ func detectGCPProjectID(ctx context.Context) string {
 		slog.Debug("metadata service not available (not running on GCP?)", "error", err)
 		return ""
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Debug("failed to close metadata response body", "error", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		slog.Debug("metadata service returned non-200", "status", resp.StatusCode)
@@ -75,8 +79,11 @@ const (
 )
 
 func main() {
-	// Configure logging with source locations and PID for better debugging
-	pid := os.Getpid()
+	// Configure logging with source locations and instance ID for better debugging
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "unknown"
+	}
 	logHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		AddSource: true,
 		Level:     slog.LevelInfo,
@@ -93,8 +100,10 @@ func main() {
 			return a
 		},
 	})
-	// Create logger with PID as a default attribute
-	logger := slog.New(logHandler).With("pid", pid)
+	// Create logger with hostname as a default attribute
+	// In Cloud Run, hostname uniquely identifies each instance (e.g., slacker-abc123-xyz789)
+	// This is critical for disambiguating instances during rolling deployments
+	logger := slog.New(logHandler).With("instance", hostname)
 	slog.SetDefault(logger)
 
 	// Load configuration from environment.
@@ -189,20 +198,23 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	if datastoreDB != "" && projectID != "" {
 		slog.Info("initializing Cloud Datastore for persistent state",
 			"project_id", projectID,
-			"database", datastoreDB,
-			"fallback", "JSON files")
+			"database", datastoreDB)
 		var err error
 		stateStore, err = state.NewDatastoreStore(ctx, projectID, datastoreDB)
 		if err != nil {
-			slog.Error("failed to initialize Datastore, using JSON only",
+			// FATAL: If DATASTORE is explicitly configured, fail startup on initialization errors.
+			// This prevents silent fallback to JSON-only mode which causes duplicate messages
+			// during rolling deployments (no cross-instance event deduplication).
+			slog.Error("FATAL: failed to initialize Cloud Datastore - DATASTORE variable is set but initialization failed",
+				"project_id", projectID,
+				"database", datastoreDB,
 				"error", err)
-			stateStore, err = state.NewJSONStore()
-			if err != nil {
-				slog.Error("failed to initialize JSON store", "error", err)
-				cancel()
-				return 1
-			}
+			cancel()
+			return 1
 		}
+		slog.Info("successfully initialized Cloud Datastore",
+			"project_id", projectID,
+			"database", datastoreDB)
 	} else {
 		var reason string
 		if datastoreDB == "" {

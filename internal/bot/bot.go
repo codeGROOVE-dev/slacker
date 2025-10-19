@@ -83,20 +83,16 @@ func (tc *ThreadCache) Cleanup(maxAge time.Duration) {
 
 // Coordinator coordinates between GitHub, Slack, and notifications for a single org.
 type Coordinator struct {
-	slack             *slackpkg.Client
-	github            *github.Client
-	configManager     *config.Manager
-	notifier          *notify.Manager
-	userMapper        *usermapping.Service
-	sprinklerURL      string
-	threadCache       *ThreadCache         // In-memory cache for fast lookups
-	stateStore        StateStore           // Persistent state across restarts
-	workspaceName     string               // Track workspace name for better logging
-	processedEvents   map[string]time.Time // In-memory event deduplication: "timestamp:url:type" -> processed time
-	processedEventMu  sync.RWMutex
-	processingEvents  map[string]bool // Track events currently being processed (prevents concurrent duplicates)
-	processingEventMu sync.Mutex
-	eventSemaphore    chan struct{} // Limits concurrent event processing (prevents overwhelming APIs)
+	slack          *slackpkg.Client
+	github         *github.Client
+	configManager  *config.Manager
+	notifier       *notify.Manager
+	userMapper     *usermapping.Service
+	sprinklerURL   string
+	threadCache    *ThreadCache  // In-memory cache for fast lookups
+	stateStore     StateStore    // Persistent state across restarts
+	workspaceName  string        // Track workspace name for better logging
+	eventSemaphore chan struct{} // Limits concurrent event processing (prevents overwhelming APIs)
 }
 
 // StateStore interface for persistent state - allows dependency injection for testing.
@@ -134,9 +130,7 @@ func New(
 			prThreads: make(map[string]ThreadInfo),
 			creating:  make(map[string]bool),
 		},
-		processedEvents:  make(map[string]time.Time),
-		processingEvents: make(map[string]bool),
-		eventSemaphore:   make(chan struct{}, 10), // Allow 10 concurrent events per org
+		eventSemaphore: make(chan struct{}, 10), // Allow 10 concurrent events per org
 	}
 
 	// Set GitHub client in config manager for this org.
@@ -621,10 +615,13 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 			"warning", "DMs are sent async - if instance crashes before completion, another instance may retry and send duplicates")
 
 		// Send DMs asynchronously to avoid blocking event processing
-		// Use a detached context with timeout to allow graceful completion even if parent context is cancelled
+		// SECURITY NOTE: Use detached context to allow graceful completion of DM notifications
+		// even if parent context is cancelled during shutdown. Operations are still bounded by
+		// explicit 15-second timeout, ensuring reasonably fast shutdown while handling slow API calls.
+		// This pattern prevents incomplete DM delivery while maintaining shutdown security.
 		// Note: No panic recovery - we want panics to propagate and restart the service (Cloud Run will handle it)
 		// A quiet failure is worse than a visible crash that triggers automatic recovery
-		dmCtx, dmCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		dmCtx, dmCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		go func() {
 			defer dmCancel()
 			c.sendDMNotifications(dmCtx, workspaceID, owner, repo, prNumber, uniqueUsers, event, prState)
@@ -1028,8 +1025,11 @@ func (c *Coordinator) processPRForChannel(
 	domain := c.configManager.Domain(owner)
 	if len(blockedUsers) > 0 {
 		// Run email lookups in background to avoid blocking message delivery
-		// Use detached context to allow completion even if parent context is cancelled
-		lookupCtx, lookupCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		// SECURITY NOTE: Use detached context to complete email lookups even during shutdown.
+		// Operations bounded by 15-second timeout. This ensures reasonably fast shutdown while
+		// completing active lookups for accurate DM delivery (most lookups hit cache instantly,
+		// but occasional cold lookups can take 10+ seconds).
+		lookupCtx, lookupCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		go func() {
 			defer lookupCancel()
 			for _, githubUser := range blockedUsers {
@@ -1310,8 +1310,11 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 	// This avoids blocking thread creation on slow email lookups (13-20 seconds each)
 	domain := c.configManager.Domain(owner)
 	if checkResult != nil && len(checkResult.Analysis.NextAction) > 0 {
-		// Use detached context to allow completion even if parent context is cancelled
-		enrichCtx, enrichCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		// SECURITY NOTE: Use detached context to complete message enrichment even during shutdown.
+		// Operations bounded by 15-second timeout. This ensures reasonably fast shutdown while
+		// completing active message updates (most lookups hit cache instantly, but occasional
+		// cold lookups can take 10+ seconds).
+		enrichCtx, enrichCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		// Capture variables to avoid data race
 		capturedThreadTS := threadTS
 		capturedOwner := owner

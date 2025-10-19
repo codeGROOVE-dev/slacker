@@ -36,87 +36,35 @@ func parsePRNumberFromURL(url string) (int, error) {
 	return num, nil
 }
 
+// eventKey generates a unique key for event deduplication.
+// Uses delivery_id if available (GitHub's unique webhook ID),
+// otherwise falls back to timestamp + URL + type.
+func eventKey(event client.Event) string {
+	if event.Raw != nil {
+		if id, ok := event.Raw["delivery_id"].(string); ok && id != "" {
+			return id
+		}
+	}
+	return fmt.Sprintf("%s:%s:%s", event.Timestamp.Format(time.RFC3339Nano), event.URL, event.Type)
+}
+
 // handleSprinklerEvent processes a single event from sprinkler.
 func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Event, organization string) {
-	// Deduplicate events using delivery_id if available, otherwise fall back to timestamp + URL + type
-	// delivery_id is unique per GitHub webhook and is the same across all instances receiving the event
-	var eventKey string
-	if event.Raw != nil {
-		if deliveryID, ok := event.Raw["delivery_id"].(string); ok && deliveryID != "" {
-			eventKey = deliveryID
-		}
-	}
-	if eventKey == "" {
-		// Fallback to timestamp-based key if delivery_id not available
-		eventKey = fmt.Sprintf("%s:%s:%s", event.Timestamp.Format(time.RFC3339Nano), event.URL, event.Type)
-	}
+	// Generate event key using delivery_id if available, otherwise timestamp + URL + type.
+	// delivery_id is unique per GitHub webhook and is the same across all instances.
+	eventKey := eventKey(event)
 
-	// Check persistent state first (survives restarts)
-	if c.stateStore.WasProcessed(eventKey) {
-		slog.Info("skipping duplicate event (persistent check)",
+	// Try to claim this event atomically using persistent store (Datastore transaction).
+	// This is the single source of truth for cross-instance deduplication.
+	if err := c.stateStore.MarkProcessed(eventKey, 24*time.Hour); err != nil {
+		slog.Info("skipping duplicate event",
 			"organization", organization,
 			"type", event.Type,
 			"url", event.URL,
-			"timestamp", event.Timestamp,
-			"event_key", eventKey)
+			"event_key", eventKey,
+			"reason", "already_processed")
 		return
 	}
-
-	// Check if this event is currently being processed (prevents concurrent duplicates)
-	// This is critical when sprinkler delivers the same event twice in quick succession
-	c.processingEventMu.Lock()
-	if c.processingEvents[eventKey] {
-		c.processingEventMu.Unlock()
-		slog.Info("skipping duplicate event (currently processing)",
-			"organization", organization,
-			"type", event.Type,
-			"url", event.URL,
-			"timestamp", event.Timestamp,
-			"event_key", eventKey)
-		return
-	}
-	// Mark as currently processing
-	c.processingEvents[eventKey] = true
-	c.processingEventMu.Unlock()
-
-	// Ensure we clean up the processing flag when done
-	defer func() {
-		c.processingEventMu.Lock()
-		delete(c.processingEvents, eventKey)
-		c.processingEventMu.Unlock()
-	}()
-
-	// Also check in-memory for fast deduplication during normal operation
-	c.processedEventMu.Lock()
-	if processedTime, exists := c.processedEvents[eventKey]; exists {
-		c.processedEventMu.Unlock()
-		slog.Info("skipping duplicate event (memory check)",
-			"organization", organization,
-			"type", event.Type,
-			"url", event.URL,
-			"timestamp", event.Timestamp,
-			"first_processed", processedTime,
-			"event_key", eventKey)
-		return
-	}
-	c.processedEvents[eventKey] = time.Now()
-
-	// Cleanup old in-memory events (older than 1 hour - persistent store handles long-term)
-	cutoff := time.Now().Add(-1 * time.Hour)
-	cleanedCount := 0
-	for key, processedTime := range c.processedEvents {
-		if processedTime.Before(cutoff) {
-			delete(c.processedEvents, key)
-			cleanedCount++
-		}
-	}
-	if cleanedCount > 0 {
-		slog.Debug("cleaned up old in-memory processed events",
-			"organization", organization,
-			"removed_count", cleanedCount,
-			"remaining_count", len(c.processedEvents))
-	}
-	c.processedEventMu.Unlock()
 
 	slog.Info("accepted event for async processing",
 		"organization", organization,
@@ -204,18 +152,17 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 				"type", event.Type,
 				"url", event.URL,
 				"repo", repo)
-			// Don't mark as processed if processing failed - allow retry
+			// Event already marked as processed before goroutine started.
+			// Failed processing won't be retried automatically.
+			// This is intentional - we don't want infinite retries of broken events.
 			return
 		}
 
-		// Mark event as processed in persistent state (survives restarts)
-		if err := c.stateStore.MarkProcessed(eventKey, 24*time.Hour); err != nil {
-			slog.Warn("failed to mark event as processed",
-				"organization", organization,
-				"event_key", eventKey,
-				"error", err)
-			// Continue anyway - in-memory dedup will prevent immediate duplicates
-		}
+		slog.Info("successfully processed sprinkler event",
+			"organization", organization,
+			"type", event.Type,
+			"url", event.URL,
+			"event_key", eventKey)
 	}() // Close the goroutine
 }
 
@@ -289,7 +236,10 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 					"organization", organization)
 			},
 			OnEvent: func(event client.Event) {
-				// Use background context for event processing to avoid losing events during shutdown.
+				// SECURITY NOTE: Use detached context for event processing to prevent webhook
+				// events from being lost during shutdown. Event processing has internal timeouts
+				// (30s for turnclient, semaphore limits) to prevent resource exhaustion.
+				// This ensures all GitHub events are processed reliably while maintaining security.
 				// Note: No panic recovery - we want panics to propagate and restart the service.
 				eventCtx := context.WithoutCancel(ctx)
 				c.handleSprinklerEvent(eventCtx, event, organization)
