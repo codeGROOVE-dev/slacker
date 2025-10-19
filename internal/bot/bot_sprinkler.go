@@ -62,6 +62,30 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 		return
 	}
 
+	// Check if this event is currently being processed (prevents concurrent duplicates)
+	// This is critical when sprinkler delivers the same event twice in quick succession
+	c.processingEventMu.Lock()
+	if c.processingEvents[eventKey] {
+		c.processingEventMu.Unlock()
+		slog.Info("skipping duplicate event (currently processing)",
+			"organization", organization,
+			"type", event.Type,
+			"url", event.URL,
+			"timestamp", event.Timestamp,
+			"event_key", eventKey)
+		return
+	}
+	// Mark as currently processing
+	c.processingEvents[eventKey] = true
+	c.processingEventMu.Unlock()
+
+	// Ensure we clean up the processing flag when done
+	defer func() {
+		c.processingEventMu.Lock()
+		delete(c.processingEvents, eventKey)
+		c.processingEventMu.Unlock()
+	}()
+
 	// Also check in-memory for fast deduplication during normal operation
 	c.processedEventMu.Lock()
 	if processedTime, exists := c.processedEvents[eventKey]; exists {

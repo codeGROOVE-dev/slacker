@@ -520,7 +520,7 @@ func (*Manager) autoDiscoverChannels(org, repo string) []string {
 	// Most repos will match their channel name directly
 	channelName := repo
 
-	slog.Info("attempting auto-discovery of channel for repo",
+	slog.Debug("attempting auto-discovery of channel for repo",
 		logFieldOrg, org,
 		"repo", repo,
 		"auto_channel", channelName,

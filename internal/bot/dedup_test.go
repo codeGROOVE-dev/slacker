@@ -1,6 +1,8 @@
 package bot
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -161,4 +163,159 @@ func TestDoubleCheckPreventsRace(t *testing.T) {
 	if threadCount != 1 {
 		t.Errorf("created %d threads, want 1", threadCount)
 	}
+}
+
+// TestConcurrentEventDeduplication verifies that the processing lock prevents
+// concurrent processing of the same event when sprinkler delivers duplicates.
+func TestConcurrentEventDeduplication(t *testing.T) {
+	// Simulate the exact scenario from the logs:
+	// Sprinkler delivers the same event twice in quick succession (9ms apart)
+	// Both should be detected and only one should process
+
+	eventKey := "test-delivery-id-123"
+	processedEvents := make(map[string]time.Time)
+	processingEvents := make(map[string]bool)
+	var processedMu sync.RWMutex
+	var processingMu sync.Mutex
+
+	var processedCount atomic.Int32
+	var skippedCount atomic.Int32
+
+	// Simulate two concurrent event deliveries
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Event handler that mimics handleSprinklerEvent logic
+	handleEvent := func(goroutineID int) {
+		defer wg.Done()
+
+		// Check if currently being processed (the new lock)
+		processingMu.Lock()
+		if processingEvents[eventKey] {
+			processingMu.Unlock()
+			t.Logf("Goroutine %d: Event already being processed, skipping", goroutineID)
+			skippedCount.Add(1)
+			return
+		}
+		// Mark as processing
+		processingEvents[eventKey] = true
+		processingMu.Unlock()
+
+		// Cleanup on exit
+		defer func() {
+			processingMu.Lock()
+			delete(processingEvents, eventKey)
+			processingMu.Unlock()
+		}()
+
+		// Check in-memory processed events
+		processedMu.Lock()
+		if _, exists := processedEvents[eventKey]; exists {
+			processedMu.Unlock()
+			t.Logf("Goroutine %d: Event already processed (memory), skipping", goroutineID)
+			skippedCount.Add(1)
+			return
+		}
+		processedEvents[eventKey] = time.Now()
+		processedMu.Unlock()
+
+		// Simulate processing work (this would be processEvent in real code)
+		t.Logf("Goroutine %d: Processing event", goroutineID)
+		time.Sleep(10 * time.Millisecond) // Simulate work
+		processedCount.Add(1)
+	}
+
+	// Start both goroutines nearly simultaneously (mimicking the 9ms gap in logs)
+	go handleEvent(1)
+	time.Sleep(1 * time.Millisecond) // Small delay to simulate the timing from logs
+	go handleEvent(2)
+
+	// Wait for both to complete
+	wg.Wait()
+
+	// Verify results
+	processed := processedCount.Load()
+	skipped := skippedCount.Load()
+
+	if processed != 1 {
+		t.Errorf("processed count = %d, want 1 (only one goroutine should process)", processed)
+	}
+
+	if skipped != 1 {
+		t.Errorf("skipped count = %d, want 1 (second goroutine should skip)", skipped)
+	}
+
+	t.Logf("Final state: processed=%d, skipped=%d", processed, skipped)
+}
+
+// TestConcurrentEventDeduplicationStress is a stress test with many concurrent duplicates.
+func TestConcurrentEventDeduplicationStress(t *testing.T) {
+	const numConcurrentEvents = 100
+
+	eventKey := "stress-test-event"
+	processedEvents := make(map[string]time.Time)
+	processingEvents := make(map[string]bool)
+	var processedMu sync.RWMutex
+	var processingMu sync.Mutex
+
+	var processedCount atomic.Int32
+	var skippedCount atomic.Int32
+
+	var wg sync.WaitGroup
+	wg.Add(numConcurrentEvents)
+
+	handleEvent := func(id int) {
+		defer wg.Done()
+
+		// Check if currently being processed
+		processingMu.Lock()
+		if processingEvents[eventKey] {
+			processingMu.Unlock()
+			skippedCount.Add(1)
+			return
+		}
+		processingEvents[eventKey] = true
+		processingMu.Unlock()
+
+		defer func() {
+			processingMu.Lock()
+			delete(processingEvents, eventKey)
+			processingMu.Unlock()
+		}()
+
+		// Check in-memory processed events
+		processedMu.Lock()
+		if _, exists := processedEvents[eventKey]; exists {
+			processedMu.Unlock()
+			skippedCount.Add(1)
+			return
+		}
+		processedEvents[eventKey] = time.Now()
+		processedMu.Unlock()
+
+		// Simulate processing
+		time.Sleep(1 * time.Millisecond)
+		processedCount.Add(1)
+	}
+
+	// Launch all goroutines simultaneously
+	for i := 0; i < numConcurrentEvents; i++ {
+		go handleEvent(i)
+	}
+
+	wg.Wait()
+
+	processed := processedCount.Load()
+	skipped := skippedCount.Load()
+
+	if processed != 1 {
+		t.Errorf("processed count = %d, want 1 (only one should process)", processed)
+	}
+
+	if skipped != numConcurrentEvents-1 {
+		t.Errorf("skipped count = %d, want %d", skipped, numConcurrentEvents-1)
+	}
+
+	t.Logf("Stress test: %d concurrent events, processed=%d, skipped=%d",
+		numConcurrentEvents, processed, skipped)
 }

@@ -83,17 +83,19 @@ func (tc *ThreadCache) Cleanup(maxAge time.Duration) {
 
 // Coordinator coordinates between GitHub, Slack, and notifications for a single org.
 type Coordinator struct {
-	slack            *slackpkg.Client
-	github           *github.Client
-	configManager    *config.Manager
-	notifier         *notify.Manager
-	userMapper       *usermapping.Service
-	sprinklerURL     string
-	threadCache      *ThreadCache         // In-memory cache for fast lookups
-	stateStore       StateStore           // Persistent state across restarts
-	workspaceName    string               // Track workspace name for better logging
-	processedEvents  map[string]time.Time // In-memory event deduplication: "timestamp:url:type" -> processed time
-	processedEventMu sync.RWMutex
+	slack             *slackpkg.Client
+	github            *github.Client
+	configManager     *config.Manager
+	notifier          *notify.Manager
+	userMapper        *usermapping.Service
+	sprinklerURL      string
+	threadCache       *ThreadCache         // In-memory cache for fast lookups
+	stateStore        StateStore           // Persistent state across restarts
+	workspaceName     string               // Track workspace name for better logging
+	processedEvents   map[string]time.Time // In-memory event deduplication: "timestamp:url:type" -> processed time
+	processedEventMu  sync.RWMutex
+	processingEvents  map[string]bool // Track events currently being processed (prevents concurrent duplicates)
+	processingEventMu sync.Mutex
 }
 
 // StateStore interface for persistent state - allows dependency injection for testing.
@@ -131,7 +133,8 @@ func New(
 			prThreads: make(map[string]ThreadInfo),
 			creating:  make(map[string]bool),
 		},
-		processedEvents: make(map[string]time.Time),
+		processedEvents:  make(map[string]time.Time),
+		processingEvents: make(map[string]bool),
 	}
 
 	// Set GitHub client in config manager for this org.
@@ -562,7 +565,7 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 	// Get channels for this PR
 	channels := c.configManager.ChannelsForRepo(owner, repo)
 
-	slog.Info("evaluating PR for channel notifications",
+	slog.Debug("evaluating PR for channel notifications",
 		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
 		"action", event.Action,
 		"title", event.PullRequest.Title,
@@ -582,7 +585,7 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 	prState := c.extractStateFromTurnclient(checkResult)
 	blockedOn := c.extractBlockedUsersFromTurnclient(checkResult)
 
-	slog.Info("retrieved PR state for notification processing",
+	slog.Debug("retrieved PR state for notification processing",
 		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
 		"state", prState,
 		"blocked_on_users", len(blockedOn),
@@ -724,7 +727,7 @@ func (*Coordinator) extractStateFromTurnclient(checkResult *turn.CheckResponse) 
 	pr := checkResult.PullRequest
 	analysis := checkResult.Analysis
 
-	slog.Info("extracting state from turnclient data",
+	slog.Debug("extracting state from turnclient data",
 		"pr_state", pr.State,
 		"merged", pr.Merged,
 		"merged_at", pr.MergedAt,
@@ -873,7 +876,7 @@ func (c *Coordinator) processChannelsInParallel(
 		return
 	}
 
-	slog.Info("processing PR for all configured channels",
+	slog.Debug("processing PR for all configured channels",
 		"workspace", c.workspaceName,
 		logFieldPR, fmt.Sprintf(prFormatString, prCtx.Owner, prCtx.Repo, prCtx.Number),
 		"action", event.Action,
@@ -903,7 +906,7 @@ func (c *Coordinator) processChannelsInParallel(
 		return
 	}
 
-	slog.Info("filtered channels for processing",
+	slog.Debug("filtered channels for processing",
 		logFieldPR, fmt.Sprintf(prFormatString, prCtx.Owner, prCtx.Repo, prCtx.Number),
 		"total_channels", len(channels),
 		"valid_channels", len(validChannels),
@@ -968,7 +971,7 @@ func (c *Coordinator) processPRForChannel(
 		channelDisplay = fmt.Sprintf("#%s (unresolved)", channelName)
 	}
 
-	slog.Info("processing PR for individual channel",
+	slog.Debug("processing PR for individual channel",
 		"workspace", c.workspaceName,
 		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
 		"channel", channelDisplay,
