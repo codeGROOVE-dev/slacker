@@ -17,7 +17,7 @@ Ready to Review is an elegant modern Slack bot written in Go that integrates wit
   - `:carpentry_saw:` - approved but needs work (blocked on author)
   - `:white_check_mark:` - reviewed & approved (blocked on author)
   - `:rocket:` - merged
-  - `:man_facepalming:` - closed but not merged
+  - `:x:` - closed but not merged
 - Format: `<prefix_emoji> Update README.md • goose#51 by @slackUser` (with link to PR, link previews disabled)
 - PR URLs include state suffix for debugging (e.g., `?st=tests_broken`, `?st=awaiting_review`)
 - Post follow-up comments when reviewers are assigned

@@ -130,7 +130,7 @@ The bot updates the emoji at the start of each PR message to reflect its current
 | :carpentry_saw: | **Needs Work** | Approved but requested changes | Author |
 | :white_check_mark: | **Approved** | Reviewed and approved, ready to merge | Author |
 | :rocket: | **Merged** | PR has been merged | None |
-| :man_facepalming: | **Closed** | PR was closed without merging | None |
+| :x: | **Closed** | PR was closed without merging | None |
 
 ### Example PR Thread
 

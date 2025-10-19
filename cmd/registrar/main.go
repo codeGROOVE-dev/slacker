@@ -26,12 +26,15 @@ const (
 )
 
 func main() {
-	// Configure logging
+	// Configure logging with PID for instance identification
+	pid := os.Getpid()
 	logHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		AddSource: true,
 		Level:     slog.LevelInfo,
 	})
-	slog.SetDefault(slog.New(logHandler))
+	// Create logger with PID as a default attribute
+	logger := slog.New(logHandler).With("pid", pid)
+	slog.SetDefault(logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
