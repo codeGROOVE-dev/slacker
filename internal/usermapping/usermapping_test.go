@@ -89,8 +89,8 @@ func TestService_GetSlackHandle_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != "testuser.slack" {
-		t.Errorf("expected 'testuser.slack', got %q", result)
+	if result != "U123456" {
+		t.Errorf("expected 'U123456', got %q", result)
 	}
 
 	cachedMapping := service.getCachedMapping(githubUser)
@@ -160,8 +160,8 @@ func TestService_FormatUserMention_WithMapping(t *testing.T) {
 	ctx := context.Background()
 	result := service.FormatUserMention(ctx, "testuser", "testorg", "example.com")
 
-	if result != "<@testuser.slack>" {
-		t.Errorf("expected '<@testuser.slack>', got %q", result)
+	if result != "<@U123456>" {
+		t.Errorf("expected '<@U123456>', got %q", result)
 	}
 }
 
@@ -209,11 +209,11 @@ func TestService_FormatUserMentions_Mixed(t *testing.T) {
 	users := []string{"user1", "user2", "user3"}
 	result := service.FormatUserMentions(ctx, users, "testorg", "example.com")
 
-	if !strings.Contains(result, "<@user1.slack>") {
-		t.Errorf("expected result to contain '<@user1.slack>', got %q", result)
+	if !strings.Contains(result, "<@U111111>") {
+		t.Errorf("expected result to contain '<@U111111>', got %q", result)
 	}
-	if !strings.Contains(result, "<@user2.slack>") {
-		t.Errorf("expected result to contain '<@user2.slack>', got %q", result)
+	if !strings.Contains(result, "<@U222222>") {
+		t.Errorf("expected result to contain '<@U222222>', got %q", result)
 	}
 	if !strings.Contains(result, "@user3") {
 		t.Errorf("expected result to contain '@user3', got %q", result)
@@ -306,8 +306,8 @@ func TestService_MultipleEmailMatches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != "user1" {
-		t.Errorf("expected 'user1', got %q", result)
+	if result != "U111111" {
+		t.Errorf("expected 'U111111', got %q", result)
 	}
 
 	cachedMapping := service.getCachedMapping(githubUser)
