@@ -3,8 +3,8 @@ module github.com/codeGROOVE-dev/slacker
 go 1.25.1
 
 require (
-	github.com/codeGROOVE-dev/gh-mailto v0.0.0-20250910154406-84dc83d8f666
-	github.com/codeGROOVE-dev/gsm v0.0.0-20251019063547-ea60dad45e13
+	github.com/codeGROOVE-dev/gh-mailto v0.0.0-20251019094150-30a4517da27c
+	github.com/codeGROOVE-dev/gsm v0.0.0-20251019065141-833fe2363d22
 	github.com/codeGROOVE-dev/retry v1.2.0
 	github.com/codeGROOVE-dev/sprinkler v0.0.0-20251018202454-6c749ec76260
 	github.com/codeGROOVE-dev/turnclient v0.0.0-20251018202306-7cdc0d51856e

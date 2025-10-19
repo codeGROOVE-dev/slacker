@@ -41,8 +41,10 @@ type prContext struct {
 
 // ThreadCache manages PR thread IDs for a workspace.
 type ThreadCache struct {
-	prThreads map[string]ThreadInfo // "owner/repo#123" -> thread info
-	mu        sync.RWMutex
+	prThreads    map[string]ThreadInfo // "owner/repo#123" -> thread info
+	mu           sync.RWMutex
+	creationLock sync.Mutex      // Prevents concurrent creation of the same PR thread
+	creating     map[string]bool // Track PRs currently being created
 }
 
 // ThreadInfo stores thread information for a PR.
@@ -85,14 +87,16 @@ func (tc *ThreadCache) Cleanup(maxAge time.Duration) {
 
 // Coordinator coordinates between GitHub, Slack, and notifications for a single org.
 type Coordinator struct {
-	slack         *slackpkg.Client
-	github        *github.Client
-	configManager *config.Manager
-	notifier      *notify.Manager
-	userMapper    *usermapping.Service
-	sprinklerURL  string
-	threadCache   *ThreadCache
-	workspaceName string // Track workspace name for better logging
+	slack            *slackpkg.Client
+	github           *github.Client
+	configManager    *config.Manager
+	notifier         *notify.Manager
+	userMapper       *usermapping.Service
+	sprinklerURL     string
+	threadCache      *ThreadCache
+	workspaceName    string               // Track workspace name for better logging
+	processedEvents  map[string]time.Time // event deduplication cache: "timestamp:url:type" -> processed time
+	processedEventMu sync.RWMutex
 }
 
 // New creates a new bot coordinator for a single GitHub organization.
@@ -113,7 +117,9 @@ func New(
 		sprinklerURL:  sprinklerURL,
 		threadCache: &ThreadCache{
 			prThreads: make(map[string]ThreadInfo),
+			creating:  make(map[string]bool),
 		},
+		processedEvents: make(map[string]time.Time),
 	}
 
 	// Set GitHub client in config manager for this org.
@@ -149,22 +155,75 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 	Number  int    `json:"number"`
 }, checkResult *turn.CheckResponse,
 ) (threadTS string, wasNewlyCreated bool, err error) {
-	prKey := fmt.Sprintf("%s/%s#%d", owner, repo, prNumber)
+	// Use cache key that includes channel ID to support multiple channels per PR
+	cacheKey := fmt.Sprintf("%s/%s#%d:%s", owner, repo, prNumber, channelID)
 
 	slog.Debug("finding or creating PR thread",
-		"pr", prKey,
+		"pr", cacheKey,
 		logFieldChannel, channelID,
 		"pr_state", prState)
 
-	// Check cache first
-	if threadInfo, exists := c.threadCache.Get(prKey); exists && threadInfo.ChannelID == channelID {
+	// Check cache first (quick read lock)
+	if threadInfo, exists := c.threadCache.Get(cacheKey); exists {
 		slog.Debug("found PR thread in cache",
-			"pr", prKey,
+			"pr", cacheKey,
 			"thread_ts", threadInfo.ThreadTS,
 			logFieldChannel, channelID,
 			"cached_state", threadInfo.LastState)
 		return threadInfo.ThreadTS, false, nil
 	}
+
+	// Prevent concurrent creation of the same PR thread in same channel
+	// Lock on cacheKey (with channel) to allow parallel creation in different channels
+	c.threadCache.creationLock.Lock()
+	// Check if another goroutine is already creating this thread in this channel
+	if c.threadCache.creating[cacheKey] {
+		c.threadCache.creationLock.Unlock()
+		// Wait for the other goroutine to finish (up to 30 seconds)
+		slog.Info("another goroutine is creating this PR thread, waiting for completion",
+			"pr", cacheKey)
+		deadline := time.Now().Add(30 * time.Second)
+		for time.Now().Before(deadline) {
+			time.Sleep(500 * time.Millisecond)
+			if threadInfo, exists := c.threadCache.Get(cacheKey); exists {
+				slog.Info("found PR thread after waiting for concurrent creation",
+					"pr", cacheKey,
+					"thread_ts", threadInfo.ThreadTS,
+					"waited", time.Since(time.Now().Add(-30*time.Second)))
+				return threadInfo.ThreadTS, false, nil
+			}
+			// Check if the other goroutine finished (even if it failed)
+			c.threadCache.creationLock.Lock()
+			stillCreating := c.threadCache.creating[cacheKey]
+			c.threadCache.creationLock.Unlock()
+			if !stillCreating {
+				// Other goroutine finished but didn't cache (likely failed)
+				// Proceed to try creating ourselves
+				break
+			}
+		}
+		slog.Warn("timed out waiting for concurrent thread creation, will try creating ourselves",
+			"pr", cacheKey)
+		c.threadCache.creationLock.Lock()
+	}
+	// Double-check cache while holding lock (another goroutine might have just finished)
+	if threadInfo, exists := c.threadCache.Get(cacheKey); exists {
+		c.threadCache.creationLock.Unlock()
+		slog.Debug("found PR thread in cache during lock acquisition",
+			"pr", cacheKey,
+			"thread_ts", threadInfo.ThreadTS)
+		return threadInfo.ThreadTS, false, nil
+	}
+	// Mark as creating
+	c.threadCache.creating[cacheKey] = true
+	c.threadCache.creationLock.Unlock()
+
+	// Ensure we clean up the creating flag
+	defer func() {
+		c.threadCache.creationLock.Lock()
+		delete(c.threadCache.creating, cacheKey)
+		c.threadCache.creationLock.Unlock()
+	}()
 
 	// Search Slack for existing thread by this bot
 	prURL := fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, prNumber)
@@ -174,12 +233,12 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 	threadTS = c.searchForPRThread(ctx, channelID, prURL, searchFrom)
 	if threadTS != "" {
 		slog.Info("found existing PR thread via search",
-			"pr", prKey,
+			"pr", cacheKey,
 			"thread_ts", threadTS,
 			logFieldChannel, channelID)
 
 		// Cache the found thread
-		c.threadCache.Set(prKey, ThreadInfo{
+		c.threadCache.Set(cacheKey, ThreadInfo{
 			ThreadTS:  threadTS,
 			ChannelID: channelID,
 			LastState: prState,
@@ -189,7 +248,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 
 	// Create new thread
 	slog.Info("creating new PR thread",
-		"pr", prKey,
+		"pr", cacheKey,
 		logFieldChannel, channelID,
 		"pr_state", prState)
 
@@ -199,14 +258,14 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 	}
 
 	// Cache the new thread
-	c.threadCache.Set(prKey, ThreadInfo{
+	c.threadCache.Set(cacheKey, ThreadInfo{
 		ThreadTS:  newThreadTS,
 		ChannelID: channelID,
 		LastState: prState,
 	})
 
 	slog.Info("created and cached new PR thread",
-		"pr", prKey,
+		"pr", cacheKey,
 		"thread_ts", newThreadTS,
 		logFieldChannel, channelID,
 		"initial_state", prState)
@@ -219,7 +278,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 // Note: This is more expensive than search API but works reliably with basic bot permissions.
 // Results are cached by the calling code to minimize API calls.
 func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL string, prCreatedAt time.Time) string {
-	slog.Debug("searching for existing PR thread using channel history",
+	slog.Info("searching for existing PR thread using channel history",
 		logFieldChannel, channelID,
 		"pr_url", prURL)
 
