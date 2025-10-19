@@ -9,25 +9,25 @@ import (
 )
 
 // BuildBlocks creates Slack Block Kit UI for the home dashboard.
-// Design: Craigslist meets Apple - minimal, clean, functional.
+// Design matches dashboard at https://ready-to-review.dev - modern minimal with indigo accents.
 func BuildBlocks(dashboard *Dashboard, primaryOrg string) []slack.Block {
 	var blocks []slack.Block
 
-	// Header
+	// Header - matches dashboard's gradient header
 	blocks = append(blocks,
 		slack.NewHeaderBlock(
-			slack.NewTextBlockObject("plain_text", "Ready to Review", false, false),
+			slack.NewTextBlockObject("plain_text", "🚀 Ready to Review", false, false),
 		),
 	)
 
 	counts := dashboard.Counts()
 
-	// Incoming section
+	// Incoming section - matches dashboard's card-based sections
 	blocks = append(blocks,
 		slack.NewDividerBlock(),
 		slack.NewSectionBlock(
 			slack.NewTextBlockObject("mrkdwn",
-				fmt.Sprintf("*INCOMING* (%d blocked, %d total)",
+				fmt.Sprintf("*🪿 Incoming PRs* • %d blocked • %d total",
 					counts.IncomingBlocked,
 					counts.IncomingTotal),
 				false,
@@ -52,12 +52,12 @@ func BuildBlocks(dashboard *Dashboard, primaryOrg string) []slack.Block {
 		}
 	}
 
-	// Outgoing section
+	// Outgoing section - matches dashboard's card-based sections
 	blocks = append(blocks,
 		slack.NewDividerBlock(),
 		slack.NewSectionBlock(
 			slack.NewTextBlockObject("mrkdwn",
-				fmt.Sprintf("*OUTGOING* (%d blocked, %d total)",
+				fmt.Sprintf("*:popper: Outgoing PRs* • %d blocked • %d total",
 					counts.OutgoingBlocked,
 					counts.OutgoingTotal),
 				false,
@@ -82,13 +82,13 @@ func BuildBlocks(dashboard *Dashboard, primaryOrg string) []slack.Block {
 		}
 	}
 
-	// Footer with link to comprehensive web dashboard
+	// Footer with link to comprehensive web dashboard - matches dashboard styling
 	blocks = append(blocks,
 		slack.NewDividerBlock(),
 		slack.NewContextBlock(
 			"",
 			slack.NewTextBlockObject("mrkdwn",
-				fmt.Sprintf("For a more comprehensive view, visit <%s|%s.ready-to-review.dev>",
+				fmt.Sprintf("✨ Visit <%s|%s.ready-to-review.dev> for the full dashboard experience",
 					fmt.Sprintf("https://%s.ready-to-review.dev", primaryOrg),
 					primaryOrg,
 				),
@@ -102,14 +102,16 @@ func BuildBlocks(dashboard *Dashboard, primaryOrg string) []slack.Block {
 }
 
 // formatPRBlock formats a single PR as a Slack block.
+// Matches dashboard's card design with clean hierarchy.
 func formatPRBlock(pr *PR) slack.Block {
-	// Determine emoji prefix based on blocking status
-	emoji := "•"
+	// Status emoji - matches dashboard's visual indicators
+	// Using indigo/purple themed emojis to match dashboard color scheme
+	emoji := "🔵" // normal state (matches dashboard's indigo)
 	if pr.IsBlocked || pr.NeedsReview {
-		emoji = "■"
+		emoji = "🟣" // blocked/needs attention (matches dashboard's purple accent)
 	}
 
-	// Build PR line: ■ repo#number — action • age
+	// Build PR line: 🟣 repo#number — action • age
 	// Extract repo name from "owner/repo"
 	repoParts := strings.SplitN(pr.Repository, "/", 2)
 	repo := pr.Repository
@@ -118,25 +120,25 @@ func formatPRBlock(pr *PR) slack.Block {
 	}
 	prRef := fmt.Sprintf("%s#%d", repo, pr.Number)
 
-	line := fmt.Sprintf("%s <%s|%s>", emoji, pr.URL, prRef)
+	line := fmt.Sprintf("%s <%s|*%s*>", emoji, pr.URL, prRef)
 
-	// Add action kind if present
+	// Add action kind if present - matches dashboard's secondary text style
 	if pr.ActionKind != "" {
 		actionDisplay := strings.ReplaceAll(pr.ActionKind, "_", " ")
-		line = fmt.Sprintf("%s — %s", line, actionDisplay)
+		line = fmt.Sprintf("%s → %s", line, actionDisplay)
 	}
 
-	// Add age
+	// Add age - matches dashboard's tertiary text style
 	age := formatAge(pr.UpdatedAt)
-	line = fmt.Sprintf("%s • %s", line, age)
+	line = fmt.Sprintf("%s • `%s`", line, age)
 
-	// Title as secondary line (truncated if too long)
+	// Title as secondary line (truncated if too long) - matches dashboard's card content
 	title := pr.Title
 	if len(title) > 100 {
 		title = title[:97] + "..."
 	}
 
-	text := fmt.Sprintf("%s\n_%s_", line, title)
+	text := fmt.Sprintf("%s\n%s", line, title)
 
 	return slack.NewSectionBlock(
 		slack.NewTextBlockObject("mrkdwn", text, false, false),
