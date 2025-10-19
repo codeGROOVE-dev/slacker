@@ -51,10 +51,22 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 		eventKey = fmt.Sprintf("%s:%s:%s", event.Timestamp.Format(time.RFC3339Nano), event.URL, event.Type)
 	}
 
+	// Check persistent state first (survives restarts)
+	if c.stateStore.WasProcessed(eventKey) {
+		slog.Info("skipping duplicate event (persistent check)",
+			"organization", organization,
+			"type", event.Type,
+			"url", event.URL,
+			"timestamp", event.Timestamp,
+			"event_key", eventKey)
+		return
+	}
+
+	// Also check in-memory for fast deduplication during normal operation
 	c.processedEventMu.Lock()
 	if processedTime, exists := c.processedEvents[eventKey]; exists {
 		c.processedEventMu.Unlock()
-		slog.Warn("skipping duplicate event from sprinkler",
+		slog.Info("skipping duplicate event (memory check)",
 			"organization", organization,
 			"type", event.Type,
 			"url", event.URL,
@@ -65,10 +77,8 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 	}
 	c.processedEvents[eventKey] = time.Now()
 
-	// Cleanup old processed events (older than 24 hours)
-	// Extended from 5 minutes to handle Cloud Run rolling deployments and restarts
-	// This prevents duplicate events during instance transitions which can take several minutes
-	cutoff := time.Now().Add(-24 * time.Hour)
+	// Cleanup old in-memory events (older than 1 hour - persistent store handles long-term)
+	cutoff := time.Now().Add(-1 * time.Hour)
 	cleanedCount := 0
 	for key, processedTime := range c.processedEvents {
 		if processedTime.Before(cutoff) {
@@ -77,7 +87,7 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 		}
 	}
 	if cleanedCount > 0 {
-		slog.Debug("cleaned up old processed events",
+		slog.Debug("cleaned up old in-memory processed events",
 			"organization", organization,
 			"removed_count", cleanedCount,
 			"remaining_count", len(c.processedEvents))
@@ -155,6 +165,17 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 			"type", event.Type,
 			"url", event.URL,
 			"repo", repo)
+		// Don't mark as processed if processing failed - allow retry
+		return
+	}
+
+	// Mark event as processed in persistent state (survives restarts)
+	if err := c.stateStore.MarkProcessed(eventKey, 24*time.Hour); err != nil {
+		slog.Warn("failed to mark event as processed",
+			"organization", organization,
+			"event_key", eventKey,
+			"error", err)
+		// Continue anyway - in-memory dedup will prevent immediate duplicates
 	}
 }
 
@@ -265,17 +286,17 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 
 	retryDelay := 5 * time.Second
 	maxRetryDelay := 60 * time.Second
-	consecutiveErrors := 0
-	connectionAttempts := 0
+	errCount := 0
+	attempts := 0
 	var lastError error
 	var lastErrorTime time.Time
 
 	for {
-		connectionAttempts++
+		attempts++
 		slog.Info("attempting sprinkler connection",
 			"organization", organization,
-			"attempt", connectionAttempts,
-			"consecutive_errors", consecutiveErrors,
+			"attempt", attempts,
+			"consecutive_errors", errCount,
 			"retry_delay_seconds", retryDelay.Seconds())
 
 		startErr := sprinklerClient.Start(ctx)
@@ -290,7 +311,7 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 		if errors.Is(startErr, context.Canceled) {
 			slog.Info("sprinkler client context cancelled, stopping gracefully",
 				"organization", organization,
-				"total_attempts", connectionAttempts)
+				"total_attempts", attempts)
 			return nil
 		}
 
@@ -305,13 +326,13 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 
 		// Handle different error types
 		if startErr != nil {
-			consecutiveErrors++
+			errCount++
 
 			// Check if it's an authentication error
 			if strings.Contains(startErr.Error(), "403") || strings.Contains(startErr.Error(), "401") {
 				slog.Warn("authentication failed, refreshing token",
 					"organization", organization,
-					"consecutive_errors", consecutiveErrors,
+					"consecutive_errors", errCount,
 					"error", startErr)
 
 				sprinklerClient.Stop() // Stop old client before creating new one
@@ -332,7 +353,7 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 
 				sprinklerClient = newClient
 				retryDelay = 5 * time.Second
-				consecutiveErrors = 0
+				errCount = 0
 				continue
 			}
 
@@ -342,8 +363,8 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 				"error", startErr,
 				"error_type", fmt.Sprintf("%T", startErr),
 				"delay_seconds", retryDelay.Seconds(),
-				"consecutive_errors", consecutiveErrors,
-				"total_attempts", connectionAttempts)
+				"consecutive_errors", errCount,
+				"total_attempts", attempts)
 
 			select {
 			case <-ctx.Done():
@@ -358,7 +379,7 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 				slog.Info("restarting sprinkler client after backoff",
 					"organization", organization,
 					"next_delay_seconds", retryDelay.Seconds(),
-					"next_attempt", connectionAttempts+1)
+					"next_attempt", attempts+1)
 				continue
 			}
 		}
@@ -374,10 +395,10 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 		// Unexpected clean return - log details and restart with minimal delay
 		slog.Warn("sprinkler client Start() returned nil without error (unexpected clean disconnect)",
 			"organization", organization,
-			"total_attempts", connectionAttempts,
+			"total_attempts", attempts,
 			"last_error", lastError,
 			"time_since_last_error", time.Since(lastErrorTime),
-			"consecutive_errors", consecutiveErrors,
+			"consecutive_errors", errCount,
 			"will_restart_after_short_delay", true)
 
 		// Use shorter delay for unexpected clean disconnects (not auth errors)

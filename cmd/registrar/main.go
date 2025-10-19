@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -31,6 +32,18 @@ func main() {
 	logHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		AddSource: true,
 		Level:     slog.LevelInfo,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			// Shorten source paths to relative paths for cleaner logs
+			if a.Key == slog.SourceKey {
+				if source, ok := a.Value.Any().(*slog.Source); ok {
+					// Find project root by looking for /slacker/ in path
+					if idx := strings.LastIndex(source.File, "/slacker/"); idx >= 0 {
+						source.File = source.File[idx+9:] // Skip "/slacker/"
+					}
+				}
+			}
+			return a
+		},
 	})
 	// Create logger with PID as a default attribute
 	logger := slog.New(logHandler).With("pid", pid)

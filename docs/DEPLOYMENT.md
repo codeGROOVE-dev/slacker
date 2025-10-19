@@ -121,6 +121,11 @@ SPRINKLER_URL=wss://sprinkler.example.com/ws
 # OAuth credentials (for single-workspace OAuth)
 SLACK_CLIENT_ID=9426269265270.9443955134789
 SLACK_CLIENT_SECRET=abc123...
+
+# Optional: Cloud Datastore for cross-instance state coordination
+# If unset, uses JSON files only (sufficient for single-instance deployments)
+DATASTORE=slacker              # Database ID to use (e.g., "slacker", "(default)")
+# GCP_PROJECT=my-project       # Optional: Auto-detected on Cloud Run
 ```
 
 ### Multi-Workspace Setup
@@ -139,6 +144,10 @@ SLACK_SIGNING_SECRET=abc123...
 
 # Sprinkler WebSocket endpoint (for GitHub events)
 SPRINKLER_URL=wss://sprinkler.example.com/ws
+
+# Datastore for cross-instance coordination (RECOMMENDED for multi-instance)
+DATASTORE=slacker              # Database ID to use
+# GCP_PROJECT=my-project       # Optional: Auto-detected on Cloud Run
 
 # NO OAUTH CREDENTIALS - registrar handles OAuth for multi-workspace
 ```
@@ -193,6 +202,82 @@ gcloud secrets add-iam-policy-binding SLACK_CLIENT_ID \
 gcloud secrets add-iam-policy-binding SLACK_CLIENT_SECRET \
   --member="serviceAccount:slacker-registrar@${PROJECT}.iam.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
+```
+
+---
+
+## Cloud Datastore Configuration (Optional)
+
+Slacker uses a **hybrid storage approach**:
+- **JSON files** (default): Persistent state stored in local filesystem, survives restarts
+- **Cloud Datastore** (optional): Adds cross-instance coordination for rolling deployments
+
+### When to Use Datastore
+
+**Use JSON-only (default):**
+- Single-instance deployments
+- Low traffic workspaces
+- Development/testing
+
+**Add Datastore:**
+- Multi-instance Cloud Run deployments (autoscaling > 1)
+- Rolling deployments with zero downtime
+- High availability requirements
+
+### Setup Steps
+
+1. **Create a Datastore database:**
+   ```bash
+   # Create database in Datastore mode (not Firestore Native mode)
+   gcloud firestore databases create \
+     --database=slacker \
+     --location=us-central \
+     --type=datastore-mode
+   ```
+
+2. **Grant IAM permissions to service account:**
+   ```bash
+   PROJECT=your-gcp-project
+
+   # Grant Datastore User role (read/write access)
+   gcloud projects add-iam-policy-binding ${PROJECT} \
+     --member="serviceAccount:slacker@${PROJECT}.iam.gserviceaccount.com" \
+     --role="roles/datastore.user"
+   ```
+
+3. **Set environment variable:**
+   ```bash
+   # In Cloud Run deployment or .env file
+   DATASTORE=slacker          # Use the database ID you created
+   # GCP_PROJECT is auto-detected on Cloud Run
+   ```
+
+### How It Works
+
+The hybrid system works automatically:
+- **Writes**: Saved to both JSON and Datastore
+- **Reads**: Try Datastore first, fall back to JSON if unavailable
+- **Startup**: If Datastore fails to connect, gracefully degrades to JSON-only mode
+- **No data loss**: JSON fallback ensures reliability even if Datastore is down
+
+### Verification
+
+After deployment, check logs to confirm Datastore is active:
+
+```bash
+gcloud logging read \
+  "resource.type=cloud_run_revision AND resource.labels.service_name=slacker" \
+  --limit 10 | grep -i datastore
+```
+
+You should see:
+```
+initializing Cloud Datastore for persistent state, project_id=..., database=slacker
+```
+
+If Datastore fails, you'll see:
+```
+using JSON files for state storage, reason=DATASTORE not set
 ```
 
 ---
