@@ -10,6 +10,7 @@ import (
 
 	ghmailto "github.com/codeGROOVE-dev/gh-mailto/pkg/gh-mailto"
 	"github.com/slack-go/slack"
+	"golang.org/x/sync/singleflight"
 )
 
 // Constants for caching and matching.
@@ -50,17 +51,20 @@ type Service struct {
 	slackClient  SlackAPI
 	githubLookup GitHubEmailLookup
 	cache        map[string]*UserMapping
-	lookupSem    chan struct{} // Semaphore for limiting concurrent lookups
+	lookupSem    chan struct{}          // Semaphore for limiting concurrent lookups
 	cacheMu      sync.RWMutex
+	flight       singleflight.Group     // Deduplicates concurrent identical lookups
 }
 
 // New creates a new user mapping service.
 func New(slackClient *slack.Client, githubToken string) *Service {
 	return &Service{
-		slackClient:  slackClient,
-		githubLookup: ghmailto.New(githubToken),
-		cache:        make(map[string]*UserMapping),
-		lookupSem:    make(chan struct{}, maxConcurrentLookups),
+		slackClient: slackClient,
+		githubLookup: ghmailto.New(githubToken,
+			ghmailto.WithCommitsLimit(25), // Limit commit search for performance
+		),
+		cache:     make(map[string]*UserMapping),
+		lookupSem: make(chan struct{}, maxConcurrentLookups),
 	}
 }
 
@@ -78,18 +82,55 @@ func (s *Service) SlackHandle(ctx context.Context, githubUsername, organization,
 		return mapping.SlackUserID, nil
 	}
 
-	// Acquire semaphore to limit concurrent lookups
-	select {
-	case s.lookupSem <- struct{}{}:
-		defer func() { <-s.lookupSem }()
-	case <-ctx.Done():
-		return "", ctx.Err()
+	// Use singleflight to deduplicate concurrent identical lookups
+	// Key includes username to ensure we deduplicate the same user
+	// Multiple goroutines requesting the same user will share one lookup
+	key := githubUsername
+	result, err, shared := s.flight.Do(key, func() (any, error) {
+		// Only one goroutine per key will execute this function
+		// Others will wait and receive the same result
+
+		// Double-check cache (another goroutine might have completed while we waited)
+		if mapping := s.getCachedMapping(githubUsername); mapping != nil {
+			slog.Debug("using cached mapping after singleflight wait",
+				"github_user", githubUsername,
+				"slack_user_id", mapping.SlackUserID)
+			return mapping.SlackUserID, nil
+		}
+
+		// Acquire semaphore to limit concurrent lookups
+		select {
+		case s.lookupSem <- struct{}{}:
+			defer func() { <-s.lookupSem }()
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+
+		slog.Debug("performing GitHub-to-Slack user lookup",
+			"github_user", githubUsername,
+			"organization", organization,
+			"domain", domain)
+
+		return s.doLookup(ctx, githubUsername, organization, domain)
+	})
+
+	if err != nil {
+		return "", err
 	}
 
-	slog.Debug("performing GitHub-to-Slack user lookup",
-		"github_user", githubUsername,
-		"organization", organization,
-		"domain", domain)
+	slackUserID := result.(string)
+	if shared {
+		slog.Debug("reused concurrent lookup result via singleflight",
+			"github_user", githubUsername,
+			"slack_user_id", slackUserID)
+	}
+
+	return slackUserID, nil
+}
+
+// doLookup performs the actual email lookup and mapping logic.
+// Extracted from SlackHandle to work with singleflight pattern.
+func (s *Service) doLookup(ctx context.Context, githubUsername, organization, domain string) (string, error) {
 
 	// Get emails for GitHub user with organization context
 	result, err := s.githubLookup.Lookup(ctx, githubUsername, organization)
