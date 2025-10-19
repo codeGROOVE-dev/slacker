@@ -49,10 +49,11 @@ type ThreadCache struct {
 
 // ThreadInfo stores thread information for a PR.
 type ThreadInfo struct {
-	UpdatedAt time.Time `json:"updated_at"`
-	ThreadTS  string    `json:"thread_ts"`
-	ChannelID string    `json:"channel_id"`
-	LastState string    `json:"last_state"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	ThreadTS    string    `json:"thread_ts"`
+	ChannelID   string    `json:"channel_id"`
+	LastState   string    `json:"last_state"`
+	MessageText string    `json:"message_text"` // Current Slack message text for comparison
 }
 
 // Get retrieves thread info for a PR.
@@ -155,7 +156,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 	Number    int       `json:"number"`
 	CreatedAt time.Time `json:"created_at"`
 }, checkResult *turn.CheckResponse,
-) (threadTS string, wasNewlyCreated bool, err error) {
+) (threadTS string, wasNewlyCreated bool, currentMessageText string, err error) {
 	// Use cache key that includes channel ID to support multiple channels per PR
 	cacheKey := fmt.Sprintf("%s/%s#%d:%s", owner, repo, prNumber, channelID)
 
@@ -170,8 +171,9 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 			"pr", cacheKey,
 			"thread_ts", threadInfo.ThreadTS,
 			logFieldChannel, channelID,
-			"cached_state", threadInfo.LastState)
-		return threadInfo.ThreadTS, false, nil
+			"cached_state", threadInfo.LastState,
+			"has_cached_message_text", threadInfo.MessageText != "")
+		return threadInfo.ThreadTS, false, threadInfo.MessageText, nil
 	}
 
 	// Prevent concurrent creation of the same PR thread in same channel
@@ -191,7 +193,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 					"pr", cacheKey,
 					"thread_ts", threadInfo.ThreadTS,
 					"waited", time.Since(time.Now().Add(-30*time.Second)))
-				return threadInfo.ThreadTS, false, nil
+				return threadInfo.ThreadTS, false, "", nil
 			}
 			// Check if the other goroutine finished (even if it failed)
 			c.threadCache.creationLock.Lock()
@@ -213,7 +215,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 		slog.Debug("found PR thread in cache during lock acquisition",
 			"pr", cacheKey,
 			"thread_ts", threadInfo.ThreadTS)
-		return threadInfo.ThreadTS, false, nil
+		return threadInfo.ThreadTS, false, "", nil
 	}
 	// Mark as creating
 	c.threadCache.creating[cacheKey] = true
@@ -242,20 +244,22 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 			"pr_created_at", searchFrom.Format(time.RFC3339),
 			"search_window_days", int(time.Since(searchFrom).Hours()/24))
 	}
-	threadTS = c.searchForPRThread(ctx, channelID, prURL, searchFrom)
+	threadTS, currentText := c.searchForPRThread(ctx, channelID, prURL, searchFrom)
 	if threadTS != "" {
 		slog.Info("found existing PR thread via search",
 			"pr", cacheKey,
 			"thread_ts", threadTS,
-			logFieldChannel, channelID)
+			logFieldChannel, channelID,
+			"current_message_preview", currentText[:min(100, len(currentText))])
 
-		// Cache the found thread
+		// Cache the found thread with its current message text
 		c.threadCache.Set(cacheKey, ThreadInfo{
-			ThreadTS:  threadTS,
-			ChannelID: channelID,
-			LastState: prState,
+			ThreadTS:    threadTS,
+			ChannelID:   channelID,
+			LastState:   prState,
+			MessageText: currentText,
 		})
-		return threadTS, false, nil
+		return threadTS, false, currentText, nil
 	}
 
 	// Double-check right before creating to prevent duplicates during rolling deployments
@@ -264,20 +268,22 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 	slog.Debug("performing final check before creating thread to prevent duplicates",
 		"pr", cacheKey,
 		logFieldChannel, channelID)
-	finalCheckTS := c.searchForPRThread(ctx, channelID, prURL, searchFrom)
+	finalCheckTS, finalCheckText := c.searchForPRThread(ctx, channelID, prURL, searchFrom)
 	if finalCheckTS != "" {
 		slog.Info("found existing PR thread during final pre-creation check (avoiding duplicate)",
 			"pr", cacheKey,
 			"thread_ts", finalCheckTS,
-			logFieldChannel, channelID)
+			logFieldChannel, channelID,
+			"current_message_preview", finalCheckText[:min(100, len(finalCheckText))])
 
-		// Cache the found thread
+		// Cache the found thread with its current message text
 		c.threadCache.Set(cacheKey, ThreadInfo{
-			ThreadTS:  finalCheckTS,
-			ChannelID: channelID,
-			LastState: prState,
+			ThreadTS:    finalCheckTS,
+			ChannelID:   channelID,
+			LastState:   prState,
+			MessageText: finalCheckText,
 		})
-		return finalCheckTS, false, nil
+		return finalCheckTS, false, finalCheckText, nil
 	}
 
 	// Create new thread
@@ -288,16 +294,17 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 		"pr_created_at", pullRequest.CreatedAt.Format(time.RFC3339),
 		"search_window_used", searchFrom.Format(time.RFC3339))
 
-	newThreadTS, err := c.createPRThread(ctx, channelID, owner, repo, prNumber, prState, pullRequest, checkResult)
+	newThreadTS, newMessageText, err := c.createPRThread(ctx, channelID, owner, repo, prNumber, prState, pullRequest, checkResult)
 	if err != nil {
-		return "", false, fmt.Errorf("failed to create PR thread: %w", err)
+		return "", false, "", fmt.Errorf("failed to create PR thread: %w", err)
 	}
 
-	// Cache the new thread
+	// Cache the new thread with its message text
 	c.threadCache.Set(cacheKey, ThreadInfo{
-		ThreadTS:  newThreadTS,
-		ChannelID: channelID,
-		LastState: prState,
+		ThreadTS:    newThreadTS,
+		ChannelID:   channelID,
+		LastState:   prState,
+		MessageText: newMessageText,
 	})
 
 	slog.Info("created and cached new PR thread",
@@ -305,17 +312,19 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 		"thread_ts", newThreadTS,
 		logFieldChannel, channelID,
 		"initial_state", prState,
+		"message_preview", newMessageText[:min(100, len(newMessageText))],
 		"creation_successful", true,
 		"note", "if you see duplicate threads, check if another instance created one during the same time window")
 
-	return newThreadTS, true, nil
+	return newThreadTS, true, newMessageText, nil
 }
 
 // searchForPRThread searches for an existing PR thread in a channel using channel history.
 // This approach uses channels:history permission instead of search:read which isn't available to bots.
 // Note: This is more expensive than search API but works reliably with basic bot permissions.
 // Results are cached by the calling code to minimize API calls.
-func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL string, prCreatedAt time.Time) string {
+// Returns (threadTS, currentMessageText) - both empty if not found.
+func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL string, prCreatedAt time.Time) (string, string) {
 	slog.Info("searching for existing PR thread using channel history",
 		logFieldChannel, channelID,
 		"pr_url", prURL)
@@ -326,8 +335,8 @@ func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL st
 		slog.Warn("failed to get bot info, cannot search for existing threads",
 			logFieldChannel, channelID,
 			"error", err)
-		// Return empty string to indicate no thread found
-		return ""
+		// Return empty strings to indicate no thread found
+		return "", ""
 	}
 
 	// Search from PR creation date (more efficient than arbitrary 10 days)
@@ -348,9 +357,9 @@ func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL st
 		slog.Warn("failed to get channel history",
 			logFieldChannel, channelID,
 			"error", err)
-		// Return empty string to indicate no thread found
+		// Return empty strings to indicate no thread found
 		// This allows graceful fallback to creating new threads
-		return ""
+		return "", ""
 	}
 
 	slog.Info("retrieved messages from channel history for PR thread search",
@@ -396,7 +405,7 @@ func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL st
 				"pr_url", prURL,
 				"message_age_hours", messageAgeHours,
 				"message_preview", msg.Text[:min(100, len(msg.Text))])
-			return msg.Timestamp
+			return msg.Timestamp, msg.Text
 		}
 	}
 
@@ -407,7 +416,7 @@ func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL st
 		"bot_messages_checked", botMessagesChecked,
 		"bot_user_id", botInfo.UserID)
 
-	return ""
+	return "", ""
 }
 
 // SprinklerMessage represents a message from sprinkler.
@@ -980,7 +989,7 @@ func (c *Coordinator) processPRForChannel(
 		Number:    event.PullRequest.Number,
 		CreatedAt: event.PullRequest.CreatedAt,
 	}
-	threadTS, wasNewlyCreated, err := c.findOrCreatePRThread(ctx, channelID, owner, repo, prNumber, prState, pullRequestStruct, checkResult)
+	threadTS, wasNewlyCreated, currentText, err := c.findOrCreatePRThread(ctx, channelID, owner, repo, prNumber, prState, pullRequestStruct, checkResult)
 	if err != nil {
 		slog.Error("failed to find or create PR thread",
 			"workspace", c.workspaceName,
@@ -1015,24 +1024,15 @@ func (c *Coordinator) processPRForChannel(
 		}
 	}
 
-	// Update message prefix if state changed
-	if !wasNewlyCreated && oldState != "" && oldState != prState {
-		slog.Debug("updating message prefix for state change",
-			"workspace", c.workspaceName,
-			logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-			"channel", channelDisplay,
-			"channel_id", channelID,
-			"thread_ts", threadTS,
-			"old_state", oldState,
-			"new_state", prState)
-
-		// Rebuild the message text with new prefix
-		newPrefix := notify.PrefixForState(prState)
+	// Build what the message SHOULD be based on current PR state
+	// Then compare to what it IS - update if different
+	if !wasNewlyCreated {
+		expectedPrefix := notify.PrefixForState(prState)
 		domain := c.configManager.Domain(owner)
 		urlWithState := event.PullRequest.HTMLURL + c.getStateQueryParam(prState)
 
-		newText := fmt.Sprintf("%s %s <%s|%s#%d> · %s",
-			newPrefix,
+		expectedText := fmt.Sprintf("%s %s <%s|%s#%d> · %s",
+			expectedPrefix,
 			event.PullRequest.Title,
 			urlWithState,
 			repo,
@@ -1042,36 +1042,55 @@ func (c *Coordinator) processPRForChannel(
 
 		nextActions := c.formatNextActions(ctx, checkResult, owner, domain)
 		if nextActions != "" {
-			newText += fmt.Sprintf(" → %s", nextActions)
+			expectedText += fmt.Sprintf(" → %s", nextActions)
 		}
 
-		if err := c.slack.UpdateMessage(ctx, channelID, threadTS, newText); err != nil {
-			slog.Error("failed to update message prefix for PR state",
+		// Compare expected vs actual - update if different
+		if currentText != expectedText {
+			slog.Info("updating message - content changed",
 				"workspace", c.workspaceName,
 				logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
 				"channel", channelDisplay,
 				"channel_id", channelID,
 				"thread_ts", threadTS,
+				"pr_state", prState,
 				"old_state", oldState,
-				"new_state", prState,
-				"error", err)
+				"current_message_preview", currentText[:min(100, len(currentText))],
+				"expected_message_preview", expectedText[:min(100, len(expectedText))])
+
+			if err := c.slack.UpdateMessage(ctx, channelID, threadTS, expectedText); err != nil {
+				slog.Error("failed to update PR message",
+					"workspace", c.workspaceName,
+					logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+					"channel", channelDisplay,
+					"channel_id", channelID,
+					"thread_ts", threadTS,
+					"error", err)
+			} else {
+				// Update cache with new message text
+				cacheKey := fmt.Sprintf("%s/%s#%d:%s", owner, repo, prNumber, channelID)
+				c.threadCache.Set(cacheKey, ThreadInfo{
+					ThreadTS:    threadTS,
+					ChannelID:   channelID,
+					LastState:   prState,
+					MessageText: expectedText,
+				})
+				slog.Info("successfully updated PR message",
+					"workspace", c.workspaceName,
+					logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+					"channel", channelDisplay,
+					"channel_id", channelID,
+					"thread_ts", threadTS,
+					"pr_state", prState)
+			}
 		} else {
-			slog.Debug("updated PR message prefix successfully",
+			slog.Debug("message already matches expected content, no update needed",
 				"workspace", c.workspaceName,
 				logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
 				"channel", channelDisplay,
-				"channel_id", channelID,
 				"thread_ts", threadTS,
-				"old_state", oldState,
-				"new_state", prState)
+				"pr_state", prState)
 		}
-	} else if !wasNewlyCreated {
-		slog.Debug("PR state unchanged, skipping message update",
-			"workspace", c.workspaceName,
-			logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-			"channel", channelDisplay,
-			"thread_ts", threadTS,
-			"current_state", prState)
 	}
 
 	slog.Info("successfully processed PR in channel",
@@ -1220,7 +1239,7 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 	Number    int       `json:"number"`
 	CreatedAt time.Time `json:"created_at"`
 }, checkResult *turn.CheckResponse,
-) (string, error) {
+) (threadTS string, messageText string, err error) {
 	// Get state-based prefix and domain for user mapping
 	prefix := notify.PrefixForState(prState)
 	domain := c.configManager.Domain(owner)
@@ -1253,9 +1272,9 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 	}
 
 	// Create thread with resolved channel ID.
-	threadTS, err := c.slack.PostThread(ctx, resolvedChannel, text, nil)
+	threadTS, err = c.slack.PostThread(ctx, resolvedChannel, text, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to post thread: %w", err)
+		return "", "", fmt.Errorf("failed to post thread: %w", err)
 	}
 
 	// Add initial reaction based on state from turnclient if available
@@ -1264,7 +1283,8 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 	slog.Debug("thread created, reaction will be set by main processing flow",
 		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, number),
 		logFieldChannel, resolvedChannel,
-		"thread_ts", threadTS)
+		"thread_ts", threadTS,
+		"message_text", text)
 
-	return threadTS, nil
+	return threadTS, text, nil
 }
