@@ -788,28 +788,6 @@ func (c *Coordinator) formatNextActions(ctx context.Context, checkResult *turn.C
 	return strings.Join(parts, "; ")
 }
 
-// getPrefixForState returns the emoji prefix for a given PR state.
-func (*Coordinator) getPrefixForState(prState string) string {
-	switch prState {
-	case "tests_running":
-		return ":test_tube:" // Tests running/pending
-	case "tests_broken":
-		return ":cockroach:" // Tests broken - needs fixing
-	case "awaiting_review":
-		return ":hourglass:" // Waiting on review
-	case "changes_requested":
-		return ":carpentry_saw:" // Approved but needs work
-	case "approved":
-		return ":white_check_mark:" // Reviewed & approved
-	case "merged":
-		return ":rocket:" // Merged
-	case "closed":
-		return ":man_facepalming:" // Closed but not merged
-	default:
-		return ":postal_horn:" // Default fallback
-	}
-}
-
 // getStateQueryParam returns the URL query parameter suffix for a given PR state.
 func (*Coordinator) getStateQueryParam(prState string) string {
 	switch prState {
@@ -1025,7 +1003,7 @@ func (c *Coordinator) processPRForChannel(
 			"new_state", prState)
 
 		// Rebuild the message text with new prefix
-		newPrefix := c.getPrefixForState(prState)
+		newPrefix := notify.PrefixForState(prState)
 		domain := c.configManager.Domain(owner)
 		urlWithState := event.PullRequest.HTMLURL + c.getStateQueryParam(prState)
 
@@ -1220,7 +1198,7 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 }, checkResult *turn.CheckResponse,
 ) (string, error) {
 	// Get state-based prefix and domain for user mapping
-	prefix := c.getPrefixForState(prState)
+	prefix := notify.PrefixForState(prState)
 	domain := c.configManager.Domain(owner)
 
 	// Add state query param to URL for debugging

@@ -86,8 +86,9 @@ type PRInfo struct {
 	Number  int
 }
 
-// getPrefixForState returns the emoji prefix for a given PR state.
-func getPrefixForState(prState string) string {
+// PrefixForState returns the emoji prefix for a given PR state.
+// Exported for use by bot package to ensure consistent PR state display.
+func PrefixForState(prState string) string {
 	switch prState {
 	case "tests_running":
 		return ":test_tube:"
@@ -243,7 +244,7 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 
 	// Format notification message using same style as channel messages
 	// Use state-based emoji prefix like channel messages do
-	prefix := getPrefixForState(pr.State)
+	prefix := PrefixForState(pr.State)
 
 	// Format: :emoji: Title <url|repo#123> · author → action
 	var action string

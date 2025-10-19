@@ -36,15 +36,6 @@ func parsePRNumberFromURL(url string) (int, error) {
 	return num, nil
 }
 
-// extractRepoFromURL extracts the owner/repo from a GitHub URL.
-func extractRepoFromURL(url string) (string, error) {
-	parts := strings.Split(url, "/")
-	if len(parts) >= 5 && parts[2] == "github.com" {
-		return parts[3] + "/" + parts[4], nil
-	}
-	return "", fmt.Errorf("could not extract repo from URL: %s", url)
-}
-
 // handleSprinklerEvent processes a single event from sprinkler.
 func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Event, organization string) {
 	// Deduplicate events using timestamp + URL + type
@@ -127,14 +118,16 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 		"pr_number", prNumber,
 		"url", event.URL)
 
-	repo, err := extractRepoFromURL(event.URL)
-	if err != nil {
+	// Extract owner/repo from URL
+	parts := strings.Split(event.URL, "/")
+	if len(parts) < 5 || parts[2] != "github.com" {
 		slog.Error("could not extract repo from URL",
 			"organization", organization,
 			"url", event.URL,
-			"error", err)
+			"error", "invalid URL format")
 		return
 	}
+	repo := parts[3] + "/" + parts[4]
 
 	msg := SprinklerMessage{
 		Type:      event.Type,
