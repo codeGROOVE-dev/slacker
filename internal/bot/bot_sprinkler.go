@@ -47,11 +47,38 @@ func extractRepoFromURL(url string) (string, error) {
 
 // handleSprinklerEvent processes a single event from sprinkler.
 func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Event, organization string) {
+	// Deduplicate events using timestamp + URL + type
+	eventKey := fmt.Sprintf("%s:%s:%s", event.Timestamp.Format(time.RFC3339Nano), event.URL, event.Type)
+
+	c.processedEventMu.Lock()
+	if processedTime, exists := c.processedEvents[eventKey]; exists {
+		c.processedEventMu.Unlock()
+		slog.Warn("skipping duplicate event from sprinkler",
+			"organization", organization,
+			"type", event.Type,
+			"url", event.URL,
+			"timestamp", event.Timestamp,
+			"first_processed", processedTime,
+			"event_key", eventKey)
+		return
+	}
+	c.processedEvents[eventKey] = time.Now()
+
+	// Cleanup old processed events (older than 5 minutes)
+	cutoff := time.Now().Add(-5 * time.Minute)
+	for key, processedTime := range c.processedEvents {
+		if processedTime.Before(cutoff) {
+			delete(c.processedEvents, key)
+		}
+	}
+	c.processedEventMu.Unlock()
+
 	slog.Info("processing sprinkler event",
 		"organization", organization,
 		"type", event.Type,
 		"url", event.URL,
-		"timestamp", event.Timestamp)
+		"timestamp", event.Timestamp,
+		"event_key", eventKey)
 
 	// Log the sprinkler event data for debugging
 	var rawKeys []string
