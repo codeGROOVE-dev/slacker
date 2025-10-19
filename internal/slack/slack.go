@@ -1423,13 +1423,13 @@ func (c *Client) IsBotInChannel(ctx context.Context, channelID string) bool {
 		}
 		// Check if it's a not_in_channel error
 		if strings.Contains(err.Error(), "not_in_channel") {
-			slog.Info("bot is not a member of channel",
+			slog.Debug("bot is not a member of channel",
 				"channel_id", channelID,
 				"bot_user_id", authTest.UserID,
 				"action_required", "invite bot to channel")
 			// Cache negative result for SHORT time (user likely to fix quickly)
 			c.cache.set(cacheKey, false, 15*time.Second)
-			slog.Info("caching bot not in channel briefly to allow quick retry after invite",
+			slog.Debug("caching bot not in channel briefly to allow quick retry after invite",
 				logFieldChannelID, channelID, "cache_ttl", "15s")
 			return false
 		}
@@ -1451,14 +1451,14 @@ func (c *Client) IsBotInChannel(ctx context.Context, channelID string) bool {
 		}
 	}
 
-	slog.Info("bot is not a member of channel",
+	slog.Debug("bot is not a member of channel",
 		"channel_id", channelID,
 		"bot_user_id", authTest.UserID,
 		"total_members", len(members),
 		"action_required", "invite bot to channel")
 	// Cache negative result for SHORT time (user likely to fix this quickly)
 	c.cache.set(cacheKey, false, 20*time.Second)
-	slog.Info("caching bot membership failure briefly to allow quick retry after user fixes issue",
+	slog.Debug("caching bot membership failure briefly to allow quick retry after user fixes issue",
 		logFieldChannelID, channelID, "cache_ttl", "20s")
 	return false
 }
