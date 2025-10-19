@@ -235,6 +235,10 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	// Initialize event router for multi-workspace event handling.
 	eventRouter := slack.NewEventRouter(slackManager)
 
+	// Initialize home view handler
+	homeHandler := slack.NewHomeHandler(slackManager, githubManager, configManager, stateStore)
+	slackManager.SetHomeViewHandler(homeHandler.HandleAppHomeOpened)
+
 	// Initialize OAuth handler for Slack app installation.
 	// These credentials are needed for the OAuth flow.
 	slackClientID := os.Getenv("SLACK_CLIENT_ID")

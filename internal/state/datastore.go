@@ -29,10 +29,11 @@ const (
 
 // Thread entity for Datastore.
 type threadEntity struct {
-	ThreadTS    string    `datastore:"thread_ts"`
-	ChannelID   string    `datastore:"channel_id"`
-	MessageText string    `datastore:"message_text,noindex"`
-	UpdatedAt   time.Time `datastore:"updated_at"`
+	ThreadTS      string    `datastore:"thread_ts"`
+	ChannelID     string    `datastore:"channel_id"`
+	MessageText   string    `datastore:"message_text,noindex"`
+	UpdatedAt     time.Time `datastore:"updated_at"`
+	LastEventTime time.Time `datastore:"last_event_time"`
 }
 
 // DM tracking entity.
@@ -155,10 +156,11 @@ func (s *DatastoreStore) GetThread(owner, repo string, number int, channelID str
 
 	// Found in Datastore - update JSON cache and return
 	result := ThreadInfo{
-		ThreadTS:    entity.ThreadTS,
-		ChannelID:   entity.ChannelID,
-		MessageText: entity.MessageText,
-		UpdatedAt:   entity.UpdatedAt,
+		ThreadTS:      entity.ThreadTS,
+		ChannelID:     entity.ChannelID,
+		MessageText:   entity.MessageText,
+		UpdatedAt:     entity.UpdatedAt,
+		LastEventTime: entity.LastEventTime,
 	}
 
 	// Async update JSON cache (don't wait)
@@ -192,10 +194,11 @@ func (s *DatastoreStore) SaveThread(owner, repo string, number int, channelID st
 
 		dsKey := datastore.NameKey(kindThread, key, nil)
 		entity := &threadEntity{
-			ThreadTS:    info.ThreadTS,
-			ChannelID:   info.ChannelID,
-			MessageText: info.MessageText,
-			UpdatedAt:   time.Now(),
+			ThreadTS:      info.ThreadTS,
+			ChannelID:     info.ChannelID,
+			MessageText:   info.MessageText,
+			UpdatedAt:     time.Now(),
+			LastEventTime: info.LastEventTime,
 		}
 
 		if _, err := s.ds.Put(ctx, dsKey, entity); err != nil {

@@ -7,11 +7,12 @@ import (
 
 // ThreadInfo stores information about a Slack thread for a PR.
 type ThreadInfo struct {
-	UpdatedAt   time.Time `json:"updated_at"`
-	ThreadTS    string    `json:"thread_ts"`
-	ChannelID   string    `json:"channel_id"`
-	LastState   string    `json:"last_state"`
-	MessageText string    `json:"message_text"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	LastEventTime time.Time `json:"last_event_time"` // Last sprinkler event timestamp for turnclient cache optimization
+	ThreadTS      string    `json:"thread_ts"`
+	ChannelID     string    `json:"channel_id"`
+	LastState     string    `json:"last_state"`
+	MessageText   string    `json:"message_text"`
 }
 
 // Store provides persistent storage for bot state.
