@@ -86,8 +86,9 @@ type PRInfo struct {
 	Number  int
 }
 
-// getPrefixForState returns the emoji prefix for a given PR state.
-func getPrefixForState(prState string) string {
+// PrefixForState returns the emoji prefix for a given PR state.
+// Exported for use by bot package to ensure consistent PR state display.
+func PrefixForState(prState string) string {
 	switch prState {
 	case "tests_running":
 		return ":test_tube:"
@@ -243,7 +244,7 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 
 	// Format notification message using same style as channel messages
 	// Use state-based emoji prefix like channel messages do
-	prefix := getPrefixForState(pr.State)
+	prefix := PrefixForState(pr.State)
 
 	// Format: :emoji: Title <url|repo#123> · author → action
 	var action string
@@ -278,6 +279,22 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 		"pr_state", pr.State,
 		"action_required", action,
 		"message", message)
+
+	// Check if we recently sent a DM about this PR (prevents duplicates during rolling deployments)
+	hasRecent, err := slackClient.HasRecentDMAboutPR(ctx, userID, pr.HTMLURL)
+	if err != nil {
+		slog.Warn("failed to check for recent DM, will send anyway to avoid false negative",
+			"user", userID,
+			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+			"error", err)
+	} else if hasRecent {
+		slog.Info("skipping DM - already sent notification about this PR recently",
+			"user", userID,
+			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+			"check_window", "1 hour",
+			"reason", "duplicate prevention during rolling deployment")
+		return nil
+	}
 
 	// Send DM to user.
 	if err := slackClient.SendDirectMessage(ctx, userID, message); err != nil {

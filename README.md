@@ -77,7 +77,9 @@ Enable these events:
 
 ## Environment Configuration
 
-Set environment variables:
+We HIGHLY recommend the use of a secret manager instead of environment variables for credentials.
+
+For local development, set environment variables:
 
 ```bash
 SLACK_BOT_TOKEN=xoxb-...

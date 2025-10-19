@@ -36,15 +36,6 @@ func parsePRNumberFromURL(url string) (int, error) {
 	return num, nil
 }
 
-// extractRepoFromURL extracts the owner/repo from a GitHub URL.
-func extractRepoFromURL(url string) (string, error) {
-	parts := strings.Split(url, "/")
-	if len(parts) >= 5 && parts[2] == "github.com" {
-		return parts[3] + "/" + parts[4], nil
-	}
-	return "", fmt.Errorf("could not extract repo from URL: %s", url)
-}
-
 // handleSprinklerEvent processes a single event from sprinkler.
 func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Event, organization string) {
 	// Deduplicate events using timestamp + URL + type
@@ -64,12 +55,22 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 	}
 	c.processedEvents[eventKey] = time.Now()
 
-	// Cleanup old processed events (older than 5 minutes)
-	cutoff := time.Now().Add(-5 * time.Minute)
+	// Cleanup old processed events (older than 24 hours)
+	// Extended from 5 minutes to handle Cloud Run rolling deployments and restarts
+	// This prevents duplicate events during instance transitions which can take several minutes
+	cutoff := time.Now().Add(-24 * time.Hour)
+	cleanedCount := 0
 	for key, processedTime := range c.processedEvents {
 		if processedTime.Before(cutoff) {
 			delete(c.processedEvents, key)
+			cleanedCount++
 		}
+	}
+	if cleanedCount > 0 {
+		slog.Debug("cleaned up old processed events",
+			"organization", organization,
+			"removed_count", cleanedCount,
+			"remaining_count", len(c.processedEvents))
 	}
 	c.processedEventMu.Unlock()
 
@@ -117,14 +118,16 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 		"pr_number", prNumber,
 		"url", event.URL)
 
-	repo, err := extractRepoFromURL(event.URL)
-	if err != nil {
+	// Extract owner/repo from URL
+	parts := strings.Split(event.URL, "/")
+	if len(parts) < 5 || parts[2] != "github.com" {
 		slog.Error("could not extract repo from URL",
 			"organization", organization,
 			"url", event.URL,
-			"error", err)
+			"error", "invalid URL format")
 		return
 	}
+	repo := parts[3] + "/" + parts[4]
 
 	msg := SprinklerMessage{
 		Type:      event.Type,

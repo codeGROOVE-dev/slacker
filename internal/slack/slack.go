@@ -499,6 +499,53 @@ func (c *Client) UpdateReactionsWithPrevious(ctx context.Context, channelID, tim
 	return nil
 }
 
+// HasRecentDMAboutPR checks if we recently sent a DM to this user about this PR (within last hour).
+// This prevents duplicate DMs during rolling deployments.
+func (c *Client) HasRecentDMAboutPR(ctx context.Context, userID, prURL string) (bool, error) {
+	// Open conversation to get DM channel ID
+	channel, _, _, err := c.api.OpenConversationContext(ctx, &slack.OpenConversationParameters{
+		Users: []string{userID},
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to open conversation: %w", err)
+	}
+
+	// Get bot info to identify our messages
+	botInfo, err := c.BotInfo(ctx)
+	if err != nil {
+		return false, fmt.Errorf("failed to get bot info: %w", err)
+	}
+
+	// Search last hour of DM history
+	oneHourAgo := time.Now().Add(-1 * time.Hour).Unix()
+	history, err := c.api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{
+		ChannelID: channel.ID,
+		Oldest:    strconv.FormatInt(oneHourAgo, 10),
+		Limit:     100, // Should be plenty for 1 hour of DMs
+	})
+	if err != nil {
+		// If we can't check history, err on the side of sending (false negative better than false positive)
+		slog.Warn("failed to get DM history for dedup check, will send DM anyway",
+			"user", userID,
+			"error", err)
+		return false, nil
+	}
+
+	// Check if any recent messages from us contain this PR URL
+	for i := range history.Messages {
+		msg := &history.Messages[i]
+		if msg.User == botInfo.UserID && strings.Contains(msg.Text, prURL) {
+			slog.Info("found recent DM about this PR, skipping duplicate",
+				"user", userID,
+				"pr_url", prURL,
+				"message_ts", msg.Timestamp)
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 // SendDirectMessage sends a direct message to a user with retry logic.
 func (c *Client) SendDirectMessage(ctx context.Context, userID, text string) error {
 	slog.Info("sending DM to user", "user", userID)
