@@ -45,9 +45,12 @@ type apiCache struct {
 
 // Client wraps the Slack API client with caching.
 type Client struct {
-	api           *slack.Client
-	cache         *apiCache
-	signingSecret string
+	api               *slack.Client
+	cache             *apiCache
+	signingSecret     string
+	teamID            string                                                 // Workspace team ID
+	homeViewHandler   func(ctx context.Context, teamID, userID string) error // Callback for app_home_opened events
+	homeViewHandlerMu sync.RWMutex
 }
 
 // set stores a value in the cache with TTL.
@@ -113,6 +116,18 @@ func New(token, signingSecret string) *Client {
 			entries: make(map[string]cacheEntry),
 		},
 	}
+}
+
+// SetHomeViewHandler registers a callback for app_home_opened events.
+func (c *Client) SetHomeViewHandler(handler func(ctx context.Context, teamID, userID string) error) {
+	c.homeViewHandlerMu.Lock()
+	defer c.homeViewHandlerMu.Unlock()
+	c.homeViewHandler = handler
+}
+
+// SetTeamID sets the team ID for this client.
+func (c *Client) SetTeamID(teamID string) {
+	c.teamID = teamID
 }
 
 // WorkspaceInfo returns information about the current workspace (cached for 1 hour).
@@ -775,10 +790,29 @@ func (c *Client) EventsHandler(writer http.ResponseWriter, r *http.Request) {
 			// Handle app mentions if needed.
 			slog.Debug("received app mention", "event", evt)
 		case *slackevents.AppHomeOpenedEvent:
-			// Update app home when user opens it.
-			// In a full implementation, this would update the home tab.
-			// For now, just log.
-			slog.Debug("would update app home for user", "user", evt.User)
+			// Update app home when user opens it
+			slog.Debug("app home opened", "user", evt.User)
+
+			// Call registered home view handler if present
+			c.homeViewHandlerMu.RLock()
+			handler := c.homeViewHandler
+			c.homeViewHandlerMu.RUnlock()
+
+			if handler != nil {
+				go func(teamID, userID string) {
+					homeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+
+					if err := handler(homeCtx, teamID, userID); err != nil {
+						slog.Error("home view handler failed",
+							"team_id", teamID,
+							"user", userID,
+							"error", err)
+					}
+				}(c.teamID, evt.User)
+			} else {
+				slog.Debug("no home view handler registered", "user", evt.User)
+			}
 		case *slackevents.MemberJoinedChannelEvent:
 			// Bot was added to a channel - invalidate cache
 			slog.Info("bot joined channel - invalidating cache",

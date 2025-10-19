@@ -20,10 +20,11 @@ type WorkspaceMetadata struct {
 
 // Manager manages Slack clients for multiple workspaces.
 type Manager struct {
-	clients       map[string]*Client // team_id -> client
-	metadata      map[string]*WorkspaceMetadata
-	signingSecret string
-	mu            sync.RWMutex
+	clients         map[string]*Client // team_id -> client
+	metadata        map[string]*WorkspaceMetadata
+	signingSecret   string
+	homeViewHandler func(ctx context.Context, teamID, userID string) error // Global home view handler
+	mu              sync.RWMutex
 }
 
 // NewManager creates a new Slack client manager.
@@ -81,6 +82,12 @@ func (m *Manager) Client(ctx context.Context, teamID string) (*Client, error) {
 
 	// Create client
 	client = New(token, m.signingSecret)
+	client.SetTeamID(teamID)
+
+	// Set home view handler if configured
+	if m.homeViewHandler != nil {
+		client.SetHomeViewHandler(m.homeViewHandler)
+	}
 
 	// Cache it
 	m.mu.Lock()
@@ -94,6 +101,20 @@ func (m *Manager) Client(ctx context.Context, teamID string) (*Client, error) {
 		"bot_user_id", metadata.BotUserID)
 
 	return client, nil
+}
+
+// SetHomeViewHandler sets the home view handler on all current and future clients.
+func (m *Manager) SetHomeViewHandler(handler func(ctx context.Context, teamID, userID string) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Store for future clients
+	m.homeViewHandler = handler
+
+	// Set on all existing clients
+	for _, client := range m.clients {
+		client.SetHomeViewHandler(handler)
+	}
 }
 
 // StoreWorkspace stores a workspace's token and metadata in GSM.
