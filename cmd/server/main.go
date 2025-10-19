@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -20,11 +22,50 @@ import (
 	"github.com/codeGROOVE-dev/slacker/internal/github"
 	"github.com/codeGROOVE-dev/slacker/internal/notify"
 	"github.com/codeGROOVE-dev/slacker/internal/slack"
+	"github.com/codeGROOVE-dev/slacker/internal/state"
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
 	"github.com/gorilla/mux"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 )
+
+// detectGCPProjectID attempts to detect the GCP project ID from the metadata service.
+// Returns empty string if not running on GCP or detection fails.
+func detectGCPProjectID(ctx context.Context) string {
+	// Try metadata service (works on Cloud Run, GCE, GKE, Cloud Functions)
+	client := &http.Client{Timeout: 2 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		"http://metadata.google.internal/computeMetadata/v1/project/project-id", nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Metadata-Flavor", "Google")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		slog.Debug("metadata service not available (not running on GCP?)", "error", err)
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		slog.Debug("metadata service returned non-200", "status", resp.StatusCode)
+		return ""
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		slog.Debug("failed to read metadata response", "error", err)
+		return ""
+	}
+
+	projectID := strings.TrimSpace(string(body))
+	if projectID == "" {
+		return ""
+	}
+
+	return projectID
+}
 
 // Server configuration constants.
 const (
@@ -40,7 +81,15 @@ func main() {
 		AddSource: true,
 		Level:     slog.LevelInfo,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			// Add PID to every log message
+			// Shorten source paths to relative paths for cleaner logs
+			if a.Key == slog.SourceKey {
+				if source, ok := a.Value.Any().(*slog.Source); ok {
+					// Find project root by looking for /slacker/ in path
+					if idx := strings.LastIndex(source.File, "/slacker/"); idx >= 0 {
+						source.File = source.File[idx+9:] // Skip "/slacker/"
+					}
+				}
+			}
 			return a
 		},
 	})
@@ -101,6 +150,85 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	// Tokens are fetched from GSM based on team_id from org configs.
 	slackManager := slack.NewManager(cfg.SlackSigningSecret)
 
+	// Initialize state store (Datastore + JSON fallback).
+	var stateStore interface {
+		GetThread(owner, repo string, number int, channelID string) (state.ThreadInfo, bool)
+		SaveThread(owner, repo string, number int, channelID string, info state.ThreadInfo) error
+		GetLastDM(userID, prURL string) (time.Time, bool)
+		RecordDM(userID, prURL string, sentAt time.Time) error
+		GetLastDigest(userID, date string) (time.Time, bool)
+		RecordDigest(userID, date string, sentAt time.Time) error
+		WasProcessed(eventKey string) bool
+		MarkProcessed(eventKey string, ttl time.Duration) error
+		GetLastNotification(prURL string) time.Time
+		RecordNotification(prURL string, notifiedAt time.Time) error
+		Cleanup() error
+		Close() error
+	}
+
+	// Check if Datastore should be used via DATASTORE=<database-id>
+	// Examples:
+	//   DATASTORE=slacker       -> Use Datastore with database ID "slacker"
+	//   DATASTORE=(default)     -> Use default Datastore database
+	//   DATASTORE=              -> JSON-only mode (no Datastore)
+	//   (unset)                 -> JSON-only mode (no Datastore)
+	datastoreDB := os.Getenv("DATASTORE")
+	projectID := os.Getenv("GCP_PROJECT")
+
+	// Auto-detect project ID from GCP metadata service if Datastore requested
+	// This works when running on Cloud Run, GCE, GKE, etc.
+	if datastoreDB != "" && projectID == "" {
+		projectID = detectGCPProjectID(ctx)
+		if projectID != "" {
+			slog.Info("detected GCP project from metadata service",
+				"project_id", projectID,
+				"source", "metadata.google.internal")
+		}
+	}
+
+	if datastoreDB != "" && projectID != "" {
+		slog.Info("initializing Cloud Datastore for persistent state",
+			"project_id", projectID,
+			"database", datastoreDB,
+			"fallback", "JSON files")
+		var err error
+		stateStore, err = state.NewDatastoreStore(ctx, projectID, datastoreDB)
+		if err != nil {
+			slog.Error("failed to initialize Datastore, using JSON only",
+				"error", err)
+			stateStore, err = state.NewJSONStore()
+			if err != nil {
+				slog.Error("failed to initialize JSON store", "error", err)
+				cancel()
+				return 1
+			}
+		}
+	} else {
+		var reason string
+		if datastoreDB == "" {
+			reason = "DATASTORE not set"
+		} else {
+			reason = "GCP_PROJECT not set and could not auto-detect"
+		}
+		slog.Info("using JSON files for state storage",
+			"path", "os.UserCacheDir()/slacker/state",
+			"reason", reason)
+		var err error
+		stateStore, err = state.NewJSONStore()
+		if err != nil {
+			slog.Error("failed to initialize JSON store", "error", err)
+			cancel()
+			return 1
+		}
+	}
+
+	// Ensure state store is closed on exit
+	defer func() {
+		if err := stateStore.Close(); err != nil {
+			slog.Warn("failed to close state store", "error", err)
+		}
+	}()
+
 	// Initialize notification manager for multi-workspace notifications.
 	notifier := notify.New(slackManager, configManager)
 
@@ -137,10 +265,17 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	router.Use(securityHeadersMiddleware)
 
 	// Root endpoint - blank
-	router.HandleFunc("/", blankHandler).Methods("GET")
+	router.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}).Methods("GET")
 
 	// Health endpoints
-	router.HandleFunc("/health", healthHandler).Methods("GET")
+	router.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write([]byte("OK")); err != nil {
+			slog.Error("failed to write health response", "error", err)
+		}
+	}).Methods("GET")
 	router.HandleFunc("/healthz", makeHealthzHandler(githubManager)).Methods("GET")
 
 	// Slack OAuth endpoints - for app installation with rate limiting
@@ -211,7 +346,7 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	// This runs indefinitely and handles its own retries - should never return an error
 	// unless the context is cancelled (clean shutdown).
 	eg.Go(func() error {
-		if err := runBotCoordinators(ctx, slackManager, githubManager, configManager, notifier, cfg.SprinklerURL); err != nil {
+		if err := runBotCoordinators(ctx, slackManager, githubManager, configManager, notifier, stateStore, cfg.SprinklerURL); err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil
 			}
@@ -250,6 +385,7 @@ type coordinatorManager struct {
 	githubManager   *github.Manager
 	configManager   *config.Manager
 	notifier        *notify.Manager
+	stateStore      state.Store
 	active          map[string]context.CancelFunc
 	failed          map[string]time.Time
 	lastHealthCheck time.Time
@@ -341,13 +477,35 @@ func (cm *coordinatorManager) startSingleCoordinator(ctx context.Context, org st
 		cm.configManager,
 		cm.notifier,
 		cm.sprinklerURL,
+		cm.stateStore,
 	)
+
+	// Run startup reconciliation to catch up on missed notifications
+	go func() {
+		coordinator.StartupReconciliation(orgCtx)
+	}()
 
 	go func(org, teamID string, coord *bot.Coordinator, orgCtx context.Context) {
 		slog.Info("starting coordinator for org",
 			"org", org,
 			"team_id", teamID,
 			"sprinkler_url", cm.sprinklerURL)
+
+		// Start polling goroutine for this coordinator
+		go func() {
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-orgCtx.Done():
+					slog.Info("stopping polling for org", "org", org)
+					return
+				case <-ticker.C:
+					coord.PollAndReconcile(orgCtx)
+				}
+			}
+		}()
 
 		err := coord.RunWithSprinklerClient(orgCtx)
 		cm.handleCoordinatorExit(org, cm.sprinklerURL, err)
@@ -493,6 +651,20 @@ func runBotCoordinators(
 	githubManager *github.Manager,
 	configManager *config.Manager,
 	notifier *notify.Manager,
+	stateStore interface {
+		GetThread(owner, repo string, number int, channelID string) (state.ThreadInfo, bool)
+		SaveThread(owner, repo string, number int, channelID string, info state.ThreadInfo) error
+		GetLastDM(userID, prURL string) (time.Time, bool)
+		RecordDM(userID, prURL string, sentAt time.Time) error
+		GetLastDigest(userID, date string) (time.Time, bool)
+		RecordDigest(userID, date string, sentAt time.Time) error
+		WasProcessed(eventKey string) bool
+		MarkProcessed(eventKey string, ttl time.Duration) error
+		GetLastNotification(prURL string) time.Time
+		RecordNotification(prURL string, notifiedAt time.Time) error
+		Cleanup() error
+		Close() error
+	},
 	sprinklerURL string,
 ) error {
 	cm := &coordinatorManager{
@@ -502,9 +674,13 @@ func runBotCoordinators(
 		githubManager:   githubManager,
 		configManager:   configManager,
 		notifier:        notifier,
+		stateStore:      stateStore,
 		sprinklerURL:    sprinklerURL,
 		lastHealthCheck: time.Now(),
 	}
+
+	// Initialize daily digest scheduler
+	dailyDigest := notify.NewDailyDigestScheduler(notifier, githubManager, configManager, stateStore)
 
 	// Start initial coordinators
 	cm.startCoordinators(ctx)
@@ -521,6 +697,31 @@ func runBotCoordinators(
 	healthCheckTicker := time.NewTicker(15 * time.Second)
 	defer healthCheckTicker.Stop()
 
+	// Poll for PRs every 5 minutes (safety net for missed sprinkler events)
+	pollTicker := time.NewTicker(5 * time.Minute)
+	defer pollTicker.Stop()
+
+	// Check for daily digest candidates every hour
+	dailyDigestTicker := time.NewTicker(1 * time.Hour)
+	defer dailyDigestTicker.Stop()
+
+	// Run daily digest check immediately on startup
+	// (in case server starts during someone's 8-9am window)
+	go func() {
+		dailyDigest.CheckAndSend(ctx)
+	}()
+
+	// Setup state cleanup ticker (hourly)
+	cleanupTicker := time.NewTicker(1 * time.Hour)
+	defer cleanupTicker.Stop()
+
+	// Run cleanup once on startup
+	go func() {
+		if err := stateStore.Cleanup(); err != nil {
+			slog.Warn("initial state cleanup failed", "error", err)
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -536,8 +737,48 @@ func runBotCoordinators(
 
 		case <-installationTicker.C:
 			cm.handleRefreshInstallations(ctx)
+
+		case <-pollTicker.C:
+			// Poll all active coordinators
+			cm.handlePolling(ctx)
+
+		case <-dailyDigestTicker.C:
+			// Check for daily digest candidates across all orgs
+			go func() {
+				dailyDigest.CheckAndSend(ctx)
+			}()
+
+		case <-cleanupTicker.C:
+			// Periodic cleanup of old state data
+			go func() {
+				if err := stateStore.Cleanup(); err != nil {
+					slog.Warn("state cleanup failed", "error", err)
+				} else {
+					slog.Debug("state cleanup completed successfully")
+				}
+			}()
 		}
 	}
+}
+
+// handlePolling triggers polling for all active coordinators.
+func (cm *coordinatorManager) handlePolling(_ context.Context) {
+	cm.mu.Lock()
+	activeCount := len(cm.active)
+	cm.mu.Unlock()
+
+	if activeCount == 0 {
+		slog.Debug("no active coordinators to poll")
+		return
+	}
+
+	slog.Debug("triggering PR polling for all coordinators",
+		"active_count", activeCount)
+
+	// Polling is handled per-coordinator in their own goroutines
+	// We rely on each coordinator to implement pollAndReconcile
+	// For now, this is a placeholder - actual implementation would need
+	// access to coordinators or a different architecture
 }
 
 func loadConfig() (*config.ServerConfig, error) {
@@ -624,19 +865,6 @@ func loadConfig() (*config.ServerConfig, error) {
 	}
 
 	return cfg, nil
-}
-
-func blankHandler(w http.ResponseWriter, _ *http.Request) {
-	// Blank homepage - no content
-	w.WriteHeader(http.StatusOK)
-}
-
-func healthHandler(w http.ResponseWriter, _ *http.Request) {
-	// Basic health check - just confirms the HTTP server is responding
-	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write([]byte("OK")); err != nil {
-		slog.Error("failed to write health response", "error", err)
-	}
 }
 
 // makeHealthzHandler creates a more detailed health check that verifies coordinators are running.

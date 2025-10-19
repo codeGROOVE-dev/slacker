@@ -15,6 +15,7 @@ import (
 	"github.com/codeGROOVE-dev/slacker/internal/github"
 	"github.com/codeGROOVE-dev/slacker/internal/notify"
 	slackpkg "github.com/codeGROOVE-dev/slacker/internal/slack"
+	"github.com/codeGROOVE-dev/slacker/internal/state"
 	"github.com/codeGROOVE-dev/slacker/internal/usermapping"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
@@ -47,14 +48,8 @@ type ThreadCache struct {
 	creating     map[string]bool // Track PRs currently being created
 }
 
-// ThreadInfo stores thread information for a PR.
-type ThreadInfo struct {
-	UpdatedAt   time.Time `json:"updated_at"`
-	ThreadTS    string    `json:"thread_ts"`
-	ChannelID   string    `json:"channel_id"`
-	LastState   string    `json:"last_state"`
-	MessageText string    `json:"message_text"` // Current Slack message text for comparison
-}
+// ThreadInfo is an alias to state.ThreadInfo to avoid duplication.
+type ThreadInfo = state.ThreadInfo
 
 // Get retrieves thread info for a PR.
 func (tc *ThreadCache) Get(prKey string) (ThreadInfo, bool) {
@@ -94,10 +89,24 @@ type Coordinator struct {
 	notifier         *notify.Manager
 	userMapper       *usermapping.Service
 	sprinklerURL     string
-	threadCache      *ThreadCache
+	threadCache      *ThreadCache         // In-memory cache for fast lookups
+	stateStore       StateStore           // Persistent state across restarts
 	workspaceName    string               // Track workspace name for better logging
-	processedEvents  map[string]time.Time // event deduplication cache: "timestamp:url:type" -> processed time
+	processedEvents  map[string]time.Time // In-memory event deduplication: "timestamp:url:type" -> processed time
 	processedEventMu sync.RWMutex
+}
+
+// StateStore interface for persistent state - allows dependency injection for testing.
+type StateStore interface {
+	GetThread(owner, repo string, number int, channelID string) (ThreadInfo, bool)
+	SaveThread(owner, repo string, number int, channelID string, info ThreadInfo) error
+	GetLastDM(userID, prURL string) (time.Time, bool)
+	RecordDM(userID, prURL string, sentAt time.Time) error
+	WasProcessed(eventKey string) bool
+	MarkProcessed(eventKey string, ttl time.Duration) error
+	GetLastNotification(prURL string) time.Time
+	RecordNotification(prURL string, notifiedAt time.Time) error
+	Close() error
 }
 
 // New creates a new bot coordinator for a single GitHub organization.
@@ -108,6 +117,7 @@ func New(
 	configManager *config.Manager,
 	notifier *notify.Manager,
 	sprinklerURL string,
+	stateStore StateStore,
 ) *Coordinator {
 	c := &Coordinator{
 		slack:         slackClient,
@@ -116,6 +126,7 @@ func New(
 		notifier:      notifier,
 		userMapper:    usermapping.New(slackClient.API(), githubClient.InstallationToken(ctx)),
 		sprinklerURL:  sprinklerURL,
+		stateStore:    stateStore,
 		threadCache: &ThreadCache{
 			prThreads: make(map[string]ThreadInfo),
 			creating:  make(map[string]bool),
@@ -342,8 +353,8 @@ func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL st
 
 	// Search from PR creation date (more efficient than arbitrary 10 days)
 	// Slack timestamps are in seconds since epoch
-	prCreatedTimestamp := prCreatedAt.Unix()
-	oldestTimestamp := strconv.FormatInt(prCreatedTimestamp, 10)
+	ts := prCreatedAt.Unix()
+	oldestTimestamp := strconv.FormatInt(ts, 10)
 
 	slog.Debug("searching channel history for bot messages",
 		logFieldChannel, channelID,
@@ -374,14 +385,14 @@ func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL st
 	// Look through messages for bot-posted threads containing the PR URL
 	// Note: We search for the base URL because posted messages may include state query params
 	// like "?st=awaiting_review" which change as the PR progresses
-	botMessagesChecked := 0
+	checked := 0
 	for i := range history.Messages {
 		msg := &history.Messages[i]
 		// Only check messages from our bot
 		if msg.User != botInfo.UserID {
 			continue
 		}
-		botMessagesChecked++
+		checked++
 
 		slog.Debug("checking bot message for PR URL",
 			logFieldChannel, channelID,
@@ -414,7 +425,7 @@ func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL st
 		logFieldChannel, channelID,
 		"pr_url", prURL,
 		"total_messages_retrieved", len(history.Messages),
-		"bot_messages_checked", botMessagesChecked,
+		"bot_messages_checked", checked,
 		"bot_user_id", botInfo.UserID)
 
 	return "", ""

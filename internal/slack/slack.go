@@ -687,6 +687,42 @@ func (c *Client) IsUserActive(ctx context.Context, userID string) bool {
 	return presence == "active"
 }
 
+// UserTimezone returns the IANA timezone string for a user (e.g., "America/New_York").
+// Uses caching to minimize API calls.
+func (c *Client) UserTimezone(ctx context.Context, userID string) (string, error) {
+	// Check cache first
+	cacheKey := fmt.Sprintf("user_tz_%s", userID)
+	if cached, exists := c.cache.get(cacheKey); exists {
+		if tz, ok := cached.(string); ok {
+			return tz, nil
+		}
+	}
+
+	// Fetch from Slack API
+	user, err := c.api.GetUserInfoContext(ctx, userID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get user info: %w", err)
+	}
+
+	// Extract timezone
+	tz := user.TZ
+	if tz == "" {
+		// Fallback to UTC if no timezone set
+		slog.Debug("user has no timezone set, defaulting to UTC", "user", userID)
+		tz = "UTC"
+	}
+
+	// Cache for 24 hours (timezones don't change often)
+	c.cache.set(cacheKey, tz, 24*time.Hour)
+
+	slog.Debug("retrieved user timezone",
+		"user", userID,
+		"timezone", tz,
+		"cached", true)
+
+	return tz, nil
+}
+
 // EventsHandler handles Slack events.
 func (c *Client) EventsHandler(writer http.ResponseWriter, r *http.Request) {
 	// Read body for verification.

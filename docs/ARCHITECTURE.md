@@ -57,14 +57,31 @@ bot.Coordinator.processEvent()
 
 ## State Management
 
-State is kept **minimal** and **in-memory**:
+State uses a **hybrid approach** - in-memory cache with persistent storage:
 
+**In-Memory (Fast Path):**
 - **PR threads** - Cached in `bot.ThreadCache` (map of PR → Slack thread)
 - **Notifications** - Tracked in `notify.NotificationTracker` (when we last DM'd)
 - **User mappings** - Cached in `usermapping.Service` (GitHub → Slack, 24h TTL)
 - **Config** - Cached in `config.Manager` (per-org YAML, reloaded on push)
+- **Event deduplication** - Recent events in memory (1 hour window)
 
-No database. State resets on restart, which is acceptable.
+**Persistent (Survives Restarts):**
+- **JSON files** - Local storage in `os.UserCacheDir()` (simple, reliable, easy to debug)
+- **Event deduplication** - Prevents duplicate messages across restarts (24 hour retention)
+- **Thread mapping** - PR → Slack thread timestamps (30 day retention)
+- **DM tracking** - When each user was last notified (90 day retention)
+- **Optional Datastore** - Google Cloud Datastore for multi-instance coordination
+
+The JSON store provides reliable single-instance operation. Datastore adds cross-instance deduplication for rolling deployments.
+
+### Reliability Features
+
+- **Persistent event deduplication** - Uses both persistent state and in-memory cache to prevent duplicate messages across restarts
+- **Cross-instance coordination** - 100ms delay + Slack history search prevents duplicate thread creation during rolling deployments
+- **Startup reconciliation** - On startup, checks all open PRs from last 24 hours and sends any missed notifications
+- **Periodic polling** - Every 5 minutes as a safety net to catch anything webhooks missed
+- **Automatic cleanup** - Hourly cleanup removes old state (events >24h, threads >30d, DMs >90d)
 
 ## Concurrency
 
@@ -74,6 +91,7 @@ No database. State resets on restart, which is acceptable.
 - Channel processing uses `sync.WaitGroup` for parallel execution
 - DM sending runs in separate goroutines with timeouts
 - Contexts propagate cancellation through the stack
+- Double-check locking prevents duplicate thread creation races
 
 ### Key Goroutines
 

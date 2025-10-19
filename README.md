@@ -26,6 +26,7 @@ Ready to get started? Install the Slack app and configure your repositories:
 - Configurable notification settings via YAML in your repos
 - Multi-org and multi-workspace support
 - Daily reminder system with timezone detection
+- Reliable delivery: Persistent state and cross-instance deduplication
 
 ## Self-Hosting
 
@@ -87,6 +88,9 @@ SLACK_SIGNING_SECRET=...
 GITHUB_APP_ID=...
 GITHUB_PRIVATE_KEY=...
 GITHUB_INSTALLATION_ID=...
+
+# Optional: Enable Cloud Datastore for multi-instance coordination
+# DATASTORE=slacker    # Database ID to use (omit for JSON-only mode)
 ```
 
 Configure repos by adding `.codeGROOVE/slack.yaml`:
@@ -95,8 +99,8 @@ Configure repos by adding `.codeGROOVE/slack.yaml`:
 global:
     prefix: ":postal_horn:"
     slack: myorg-workspace.slack.com
-    channel_notify_delay_mins: 60  # Default: 60 minutes
-    daily_reminders: true          # Default: true
+    reminder_dm_delay: 65  # Minutes to wait before DMing users tagged in channel (default: 65, 0 = disabled)
+    daily_reminders: true  # Daily reminders between 8-9am local time (default: true)
 
 channels:
     all-repos:
@@ -140,10 +144,11 @@ The dashboard is also available in the app's Home tab or at https://dash.ready-t
 
 ## Smart Notification Logic
 
-- **Channel notifications**: If a user is tagged in a public channel they're in, DMs are delayed by `channel_notify_delay_mins` (default: 60 minutes)
+- **Channel notifications**: If a user is tagged in a channel they're in, DMs are delayed by `reminder_dm_delay` (default: 65 minutes)
 - **Immediate DMs**: If a user isn't in the notification channel, they get immediate DMs
 - **Daily reminders**: Sent between 8-9am local time if enabled and >8 hours since last notification
-- **Anti-spam**: Multiple DMs to the same user are rate limited
+- **Anti-spam**: Rate limited to 1 DM per minute per user
+- **Deduplication**: Cross-instance coordination prevents duplicate messages during deployments
 
 ## Development
 
