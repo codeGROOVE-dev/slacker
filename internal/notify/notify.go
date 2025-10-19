@@ -103,7 +103,7 @@ func PrefixForState(prState string) string {
 	case "merged":
 		return ":rocket:"
 	case "closed":
-		return ":man_facepalming:"
+		return ":x:"
 	default:
 		return ":postal_horn:"
 	}

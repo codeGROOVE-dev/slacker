@@ -34,12 +34,19 @@ const (
 )
 
 func main() {
-	// Configure logging with source locations for better debugging
+	// Configure logging with source locations and PID for better debugging
+	pid := os.Getpid()
 	logHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		AddSource: true,
 		Level:     slog.LevelInfo,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			// Add PID to every log message
+			return a
+		},
 	})
-	slog.SetDefault(slog.New(logHandler))
+	// Create logger with PID as a default attribute
+	logger := slog.New(logHandler).With("pid", pid)
+	slog.SetDefault(logger)
 
 	// Load configuration from environment.
 	cfg, err := loadConfig()
@@ -252,6 +259,10 @@ type coordinatorManager struct {
 
 // handleCoordinatorExit cleans up after a coordinator exits.
 func (cm *coordinatorManager) handleCoordinatorExit(org, sprinklerURL string, err error) {
+	// Acquire lock once for all state modifications to prevent race conditions
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			slog.Info("coordinator stopped due to context cancellation", "org", org)
@@ -260,22 +271,16 @@ func (cm *coordinatorManager) handleCoordinatorExit(org, sprinklerURL string, er
 				"org", org,
 				"error", err,
 				"error_type", fmt.Sprintf("%T", err))
-			cm.mu.Lock()
 			cm.failed[org] = time.Now()
-			cm.mu.Unlock()
 		}
 	} else {
 		slog.Error("coordinator exited with nil error - THIS SHOULD NOT HAPPEN",
 			"org", org,
 			"sprinkler_url", sprinklerURL)
-		cm.mu.Lock()
 		cm.failed[org] = time.Now()
-		cm.mu.Unlock()
 	}
 
-	cm.mu.Lock()
 	delete(cm.active, org)
-	cm.mu.Unlock()
 }
 
 // startSingleCoordinator starts a coordinator for one org.

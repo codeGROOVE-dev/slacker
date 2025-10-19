@@ -176,6 +176,40 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 		return threadInfo.ThreadTS, false, threadInfo.MessageText, nil
 	}
 
+	// Not in cache - search Slack for existing thread before trying to create
+	prURL := fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, prNumber)
+	searchFrom := pullRequest.CreatedAt
+	if searchFrom.IsZero() || time.Since(searchFrom) > 30*24*time.Hour {
+		searchFrom = time.Now().AddDate(0, 0, -30) // 30 days fallback
+		slog.Debug("using 30-day fallback for thread search",
+			"pr", cacheKey,
+			"pr_created_at_available", !pullRequest.CreatedAt.IsZero(),
+			"pr_age_days", int(time.Since(pullRequest.CreatedAt).Hours()/24))
+	} else {
+		slog.Debug("using PR creation date for thread search",
+			"pr", cacheKey,
+			"pr_created_at", searchFrom.Format(time.RFC3339),
+			"search_window_days", int(time.Since(searchFrom).Hours()/24))
+	}
+
+	initialSearchTS, initialSearchText := c.searchForPRThread(ctx, channelID, prURL, searchFrom)
+	if initialSearchTS != "" {
+		slog.Info("found existing PR thread via initial search",
+			"pr", cacheKey,
+			"thread_ts", initialSearchTS,
+			logFieldChannel, channelID,
+			"current_message_preview", initialSearchText[:min(100, len(initialSearchText))])
+
+		// Cache the found thread with its current message text
+		c.threadCache.Set(cacheKey, ThreadInfo{
+			ThreadTS:    initialSearchTS,
+			ChannelID:   channelID,
+			LastState:   prState,
+			MessageText: initialSearchText,
+		})
+		return initialSearchTS, false, initialSearchText, nil
+	}
+
 	// Prevent concurrent creation of the same PR thread in same channel
 	// Lock on cacheKey (with channel) to allow parallel creation in different channels
 	c.threadCache.creationLock.Lock()
@@ -228,62 +262,29 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 		c.threadCache.creationLock.Unlock()
 	}()
 
-	// Search Slack for existing thread by this bot
-	prURL := fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, prNumber)
-	// Use PR creation date for search window, or 30 days if PR is older or date is missing
-	searchFrom := pullRequest.CreatedAt
-	if searchFrom.IsZero() || time.Since(searchFrom) > 30*24*time.Hour {
-		searchFrom = time.Now().AddDate(0, 0, -30) // 30 days fallback
-		slog.Debug("using 30-day fallback for thread search",
+	// CRITICAL: Perform one final cross-instance check RIGHT before the expensive operations
+	// This handles the case where another instance (during rolling deployment) just created
+	// a thread while we were acquiring the lock. The creating flag only prevents races within
+	// this instance - we need to check Slack itself to catch threads from other instances.
+	// Add a small delay to let any concurrent creates from other instances complete their Slack API call.
+	time.Sleep(100 * time.Millisecond)
+	crossInstanceCheckTS, crossInstanceText := c.searchForPRThread(ctx, channelID, prURL, pullRequest.CreatedAt)
+	if crossInstanceCheckTS != "" {
+		slog.Info("found thread created by another instance (cross-instance race avoided)",
 			"pr", cacheKey,
-			"pr_created_at_available", !pullRequest.CreatedAt.IsZero(),
-			"pr_age_days", int(time.Since(pullRequest.CreatedAt).Hours()/24))
-	} else {
-		slog.Debug("using PR creation date for thread search",
-			"pr", cacheKey,
-			"pr_created_at", searchFrom.Format(time.RFC3339),
-			"search_window_days", int(time.Since(searchFrom).Hours()/24))
-	}
-	threadTS, currentText := c.searchForPRThread(ctx, channelID, prURL, searchFrom)
-	if threadTS != "" {
-		slog.Info("found existing PR thread via search",
-			"pr", cacheKey,
-			"thread_ts", threadTS,
+			"thread_ts", crossInstanceCheckTS,
 			logFieldChannel, channelID,
-			"current_message_preview", currentText[:min(100, len(currentText))])
+			"current_message_preview", crossInstanceText[:min(100, len(crossInstanceText))],
+			"note", "this prevented duplicate thread creation during rolling deployment")
 
-		// Cache the found thread with its current message text
+		// Cache it and return
 		c.threadCache.Set(cacheKey, ThreadInfo{
-			ThreadTS:    threadTS,
+			ThreadTS:    crossInstanceCheckTS,
 			ChannelID:   channelID,
 			LastState:   prState,
-			MessageText: currentText,
+			MessageText: crossInstanceText,
 		})
-		return threadTS, false, currentText, nil
-	}
-
-	// Double-check right before creating to prevent duplicates during rolling deployments
-	// This handles the race where two instances search simultaneously, both find nothing, then both try to create
-	// The small delay between first search and creation gives the other instance time to create its thread
-	slog.Debug("performing final check before creating thread to prevent duplicates",
-		"pr", cacheKey,
-		logFieldChannel, channelID)
-	finalCheckTS, finalCheckText := c.searchForPRThread(ctx, channelID, prURL, searchFrom)
-	if finalCheckTS != "" {
-		slog.Info("found existing PR thread during final pre-creation check (avoiding duplicate)",
-			"pr", cacheKey,
-			"thread_ts", finalCheckTS,
-			logFieldChannel, channelID,
-			"current_message_preview", finalCheckText[:min(100, len(finalCheckText))])
-
-		// Cache the found thread with its current message text
-		c.threadCache.Set(cacheKey, ThreadInfo{
-			ThreadTS:    finalCheckTS,
-			ChannelID:   channelID,
-			LastState:   prState,
-			MessageText: finalCheckText,
-		})
-		return finalCheckTS, false, finalCheckText, nil
+		return crossInstanceCheckTS, false, crossInstanceText, nil
 	}
 
 	// Create new thread

@@ -38,8 +38,18 @@ func parsePRNumberFromURL(url string) (int, error) {
 
 // handleSprinklerEvent processes a single event from sprinkler.
 func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Event, organization string) {
-	// Deduplicate events using timestamp + URL + type
-	eventKey := fmt.Sprintf("%s:%s:%s", event.Timestamp.Format(time.RFC3339Nano), event.URL, event.Type)
+	// Deduplicate events using delivery_id if available, otherwise fall back to timestamp + URL + type
+	// delivery_id is unique per GitHub webhook and is the same across all instances receiving the event
+	var eventKey string
+	if event.Raw != nil {
+		if deliveryID, ok := event.Raw["delivery_id"].(string); ok && deliveryID != "" {
+			eventKey = deliveryID
+		}
+	}
+	if eventKey == "" {
+		// Fallback to timestamp-based key if delivery_id not available
+		eventKey = fmt.Sprintf("%s:%s:%s", event.Timestamp.Format(time.RFC3339Nano), event.URL, event.Type)
+	}
 
 	c.processedEventMu.Lock()
 	if processedTime, exists := c.processedEvents[eventKey]; exists {
