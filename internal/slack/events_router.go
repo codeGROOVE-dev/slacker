@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 
 	"github.com/slack-go/slack/slackevents"
 )
@@ -87,7 +88,11 @@ func (er *EventRouter) HandleEvents(w http.ResponseWriter, req *http.Request) {
 			"team_id", teamID,
 			"event_type", eventWrapper.Type,
 			"remote_addr", req.RemoteAddr,
-			"user_agent", req.Header.Get("User-Agent"))
+			"user_agent", req.Header.Get("User-Agent"),
+			"signature_present", signature != "",
+			"timestamp", timestamp,
+			"body_size", len(body),
+			"response_status", http.StatusUnauthorized)
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
@@ -112,12 +117,31 @@ func (er *EventRouter) HandleInteractions(w http.ResponseWriter, req *http.Reque
 		return
 	}
 
+	// Log raw body for debugging (truncate if too large)
+	bodyPreview := string(body)
+	if len(bodyPreview) > 500 {
+		bodyPreview = bodyPreview[:500] + "... (truncated)"
+	}
+	slog.Debug("received interaction request",
+		"body_size", len(body),
+		"raw_body", bodyPreview,
+		"remote_addr", req.RemoteAddr)
+
 	// Parse payload to extract team_id FIRST (before signature verification)
 	// Interactions come as form-encoded with a "payload" field
-	payload := req.FormValue("payload")
+	// We must parse from body bytes since body was already read
+	values, err := url.ParseQuery(string(body))
+	if err != nil {
+		slog.Error("failed to parse form data", "error", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	payload := values.Get("payload")
 	if payload == "" {
-		// Try reading from body
-		payload = string(body)
+		slog.Error("interaction missing payload field")
+		w.WriteHeader(http.StatusBadRequest)
+		return
 	}
 
 	var interaction struct {
@@ -155,12 +179,18 @@ func (er *EventRouter) HandleInteractions(w http.ResponseWriter, req *http.Reque
 		slog.Warn("interaction signature verification failed - possible attack",
 			"team_id", teamID,
 			"remote_addr", req.RemoteAddr,
-			"user_agent", req.Header.Get("User-Agent"))
+			"user_agent", req.Header.Get("User-Agent"),
+			"signature_present", signature != "",
+			"timestamp", timestamp,
+			"body_size", len(body),
+			"response_status", http.StatusUnauthorized)
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
-	slog.Debug("routing interaction to workspace", "team_id", teamID)
+	slog.Debug("routing interaction to workspace",
+		"team_id", teamID,
+		"body_size", len(body))
 
 	// Forward to the workspace-specific client's interaction handler
 	req.Body = io.NopCloser(&readerWrapper{data: body})

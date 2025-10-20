@@ -325,7 +325,7 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 
 	// Slack endpoints - routed to workspace-specific clients
 	router.HandleFunc("/slack/events", eventRouter.HandleEvents).Methods("POST")
-	router.HandleFunc("/slack/interactions", eventRouter.HandleInteractions).Methods("POST")
+	router.HandleFunc("/slack/interactive-endpoint", eventRouter.HandleInteractions).Methods("POST")
 	router.HandleFunc("/slack/slash", eventRouter.HandleSlashCommand).Methods("POST")
 
 	// Determine port.

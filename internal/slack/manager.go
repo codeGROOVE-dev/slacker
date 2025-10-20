@@ -103,6 +103,7 @@ func (m *Manager) Client(ctx context.Context, teamID string) (*Client, error) {
 	// Create client
 	client = New(token, m.signingSecret)
 	client.SetTeamID(teamID)
+	client.SetManager(m) // Set manager reference for cache invalidation
 
 	// Set home view handler if configured
 	if m.homeViewHandler != nil {
