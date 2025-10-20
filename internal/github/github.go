@@ -635,14 +635,15 @@ func (c *Client) InstallationToken(ctx context.Context) string {
 
 // Manager manages multiple GitHub App installations.
 type Manager struct {
-	privateKey *rsa.PrivateKey
-	clients    map[string]*Client // org -> client
-	appID      string
-	mu         sync.RWMutex
+	privateKey            *rsa.PrivateKey
+	clients               map[string]*Client // org -> client
+	appID                 string
+	allowPersonalAccounts bool // Allow processing personal accounts (default: false for DoS protection)
+	mu                    sync.RWMutex
 }
 
 // NewManager creates a new installation manager.
-func NewManager(ctx context.Context, appID, privateKeyPEM string) (*Manager, error) {
+func NewManager(ctx context.Context, appID, privateKeyPEM string, allowPersonalAccounts bool) (*Manager, error) {
 	// Parse the private key.
 	block, _ := pem.Decode([]byte(privateKeyPEM))
 	if block == nil {
@@ -669,9 +670,10 @@ func NewManager(ctx context.Context, appID, privateKeyPEM string) (*Manager, err
 	}
 
 	m := &Manager{
-		clients:    make(map[string]*Client),
-		appID:      appID,
-		privateKey: key,
+		clients:               make(map[string]*Client),
+		appID:                 appID,
+		privateKey:            key,
+		allowPersonalAccounts: allowPersonalAccounts,
 	}
 
 	// Discover installations at startup.
@@ -751,6 +753,14 @@ func (m *Manager) RefreshInstallations(ctx context.Context) error {
 		if inst.Account == nil || inst.Account.Login == nil {
 			slog.Warn("installation missing account information",
 				"installation_id", inst.GetID())
+			continue
+		}
+
+		// Skip personal accounts if not explicitly allowed (DoS protection)
+		if !m.allowPersonalAccounts && inst.Account.GetType() == "User" {
+			slog.Debug("skipping personal account",
+				"account", inst.Account.GetLogin(),
+				"type", "User")
 			continue
 		}
 

@@ -148,7 +148,7 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	configManager := config.New(ctx)
 
 	// Initialize GitHub installation manager.
-	githubManager, err := github.NewManager(ctx, cfg.GitHubAppID, cfg.GitHubPrivateKey)
+	githubManager, err := github.NewManager(ctx, cfg.GitHubAppID, cfg.GitHubPrivateKey, cfg.AllowPersonalAccounts)
 	if err != nil {
 		slog.Error("failed to initialize GitHub installation manager", "error", err)
 		cancel() // Ensure cleanup happens before exit
@@ -856,18 +856,23 @@ func loadConfig() (*config.ServerConfig, error) {
 
 	slog.Info("loading configuration values")
 
+	// Parse personal accounts flag (default: false for DoS protection)
+	allowPersonalAccounts := os.Getenv("ALLOW_PERSONAL_ACCOUNTS") == "true"
+
 	cfg := &config.ServerConfig{
-		DataDir:            dataDir,
-		SlackSigningSecret: getSecretValue("SLACK_SIGNING_SECRET"),
-		GitHubAppID:        os.Getenv("GITHUB_APP_ID"), // Not a secret, just config
-		GitHubPrivateKey:   githubPrivateKey,
-		SprinklerURL:       sprinklerURL,
+		DataDir:               dataDir,
+		SlackSigningSecret:    getSecretValue("SLACK_SIGNING_SECRET"),
+		GitHubAppID:           os.Getenv("GITHUB_APP_ID"), // Not a secret, just config
+		GitHubPrivateKey:      githubPrivateKey,
+		SprinklerURL:          sprinklerURL,
+		AllowPersonalAccounts: allowPersonalAccounts,
 	}
 
 	slog.Info("configuration loaded",
 		"has_slack_signing_secret", cfg.SlackSigningSecret != "",
 		"has_github_app_id", cfg.GitHubAppID != "",
-		"has_github_private_key", cfg.GitHubPrivateKey != "")
+		"has_github_private_key", cfg.GitHubPrivateKey != "",
+		"allow_personal_accounts", cfg.AllowPersonalAccounts)
 
 	// Validate required fields
 	if cfg.SlackSigningSecret == "" {

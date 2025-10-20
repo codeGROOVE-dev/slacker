@@ -20,6 +20,35 @@ func BuildBlocks(dashboard *Dashboard, primaryOrg string) []slack.Block {
 		),
 	)
 
+	// Organization monitoring section - show which orgs this workspace tracks
+	if len(dashboard.WorkspaceOrgs) > 0 {
+		var orgLinks []string
+		for _, org := range dashboard.WorkspaceOrgs {
+			configURL := fmt.Sprintf("https://github.com/%s/.codeGROOVE/blob/main/slack.yaml", org)
+			orgLinks = append(orgLinks, fmt.Sprintf("<%s|%s>", configURL, org))
+		}
+		orgsText := fmt.Sprintf("*Monitoring:* %s", strings.Join(orgLinks, " • "))
+
+		blocks = append(blocks,
+			slack.NewContextBlock(
+				"",
+				slack.NewTextBlockObject("mrkdwn", orgsText, false, false),
+			),
+		)
+	}
+
+	// Refresh button
+	blocks = append(blocks,
+		slack.NewActionBlock(
+			"refresh_actions",
+			slack.NewButtonBlockElement(
+				"refresh_dashboard",
+				"refresh",
+				slack.NewTextBlockObject("plain_text", "🔄 Refresh", false, false),
+			),
+		),
+	)
+
 	counts := dashboard.Counts()
 
 	// Incoming section - matches dashboard's card-based sections
