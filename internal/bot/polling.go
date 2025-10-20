@@ -267,10 +267,17 @@ func (c *Coordinator) updateClosedPRThread(ctx context.Context, pr *github.PRSna
 	n := 0
 	for _, ch := range channels {
 		id := c.slack.ResolveChannelID(ctx, ch)
-		if id == "" {
-			slog.Debug("could not resolve channel ID for closed PR thread update",
-				"channel_name", ch,
-				"pr", prKey)
+
+		// Check if channel resolution failed (returns original name if not found)
+		if id == ch || (ch != "" && ch[0] == '#' && id == ch[1:]) {
+			slog.Warn("could not resolve channel for closed PR thread update",
+				"workspace", c.workspaceName,
+				"pr", prKey,
+				"owner", pr.Owner,
+				"repo", pr.Repo,
+				"number", pr.Number,
+				"channel", ch,
+				"action_required", "verify channel exists and bot has access")
 			continue
 		}
 

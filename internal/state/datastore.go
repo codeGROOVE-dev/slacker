@@ -3,28 +3,28 @@ package state
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"time"
 
 	"cloud.google.com/go/datastore"
 )
 
-// DatastoreStore implements Store using Google Cloud Datastore with JSON fallback.
-// Uses hybrid approach: write to both, read from Datastore with JSON fallback.
+// DatastoreStore implements Store using Google Cloud Datastore with in-memory cache.
+// Uses hybrid approach: in-memory cache for speed, Datastore for persistence.
 type DatastoreStore struct {
 	ds       *datastore.Client
-	json     *JSONStore
-	disabled bool // If Datastore failed to initialize, use JSON only
+	memory   *MemoryStore
+	disabled bool // If Datastore failed to initialize, memory-only mode
 }
 
 // Entity types for Datastore.
 const (
-	kindThread = "SlackerThread"
-	kindDM     = "SlackerDM"
-	kindDigest = "SlackerDigest"
-	kindEvent  = "SlackerEvent"
-	kindNotify = "SlackerNotification"
+	kindThread    = "SlackerThread"
+	kindDM        = "SlackerDM"
+	kindDMMessage = "SlackerDMMessage"
+	kindDigest    = "SlackerDigest"
+	kindEvent     = "SlackerEvent"
+	kindNotify    = "SlackerNotification"
 )
 
 // ErrAlreadyProcessed indicates an event was already processed by another instance.
@@ -47,6 +47,15 @@ type dmEntity struct {
 	SentAt time.Time `datastore:"sent_at"`
 }
 
+// DM message entity for updating messages.
+type dmMessageEntity struct {
+	ChannelID   string    `datastore:"channel_id"`
+	MessageTS   string    `datastore:"message_ts"`
+	MessageText string    `datastore:"message_text,noindex"`
+	UpdatedAt   time.Time `datastore:"updated_at"`
+	SentAt      time.Time `datastore:"sent_at"`
+}
+
 // Digest tracking entity.
 type digestEntity struct {
 	UserID string    `datastore:"user_id"`
@@ -66,26 +75,22 @@ type notifyEntity struct {
 	NotifiedAt time.Time `datastore:"notified_at"`
 }
 
-// NewDatastoreStore creates a new Datastore-backed store with JSON fallback.
+// NewDatastoreStore creates a new Datastore-backed store with in-memory cache.
 // The databaseID parameter specifies which Datastore database to use (e.g., "slacker", "(default)").
 func NewDatastoreStore(ctx context.Context, projectID, databaseID string) (*DatastoreStore, error) {
-	// Always create JSON store as fallback
-	jsonStore, err := NewJSONStore()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create JSON fallback store: %w", err)
-	}
+	// Always create in-memory cache
+	memStore := NewMemoryStore()
 
 	// Create Datastore client with specified database
-	// Use NewClientWithDatabase to specify which database to use
 	ds, err := datastore.NewClientWithDatabase(ctx, projectID, databaseID)
 	if err != nil {
-		slog.Warn("failed to create Datastore client, using JSON-only mode",
+		slog.Warn("failed to create Datastore client, using memory-only mode",
 			"error", err,
 			"project_id", projectID,
 			"database_id", databaseID,
-			"fallback", "JSON files only")
+			"fallback", "in-memory only (no persistence)")
 		return &DatastoreStore{
-			json:     jsonStore,
+			memory:   memStore,
 			disabled: true,
 		}, nil
 	}
@@ -98,14 +103,14 @@ func NewDatastoreStore(ctx context.Context, projectID, databaseID string) (*Data
 	}
 	_, err = ds.Put(ctx, testKey, testEntity)
 	if err != nil {
-		slog.Warn("Datastore connectivity test failed, using JSON-only mode",
+		slog.Warn("Datastore connectivity test failed, using memory-only mode",
 			"error", err,
-			"fallback", "JSON files only")
+			"fallback", "in-memory only (no persistence)")
 		if closeErr := ds.Close(); closeErr != nil {
 			slog.Debug("failed to close Datastore during test", "error", closeErr)
 		}
 		return &DatastoreStore{
-			json:     jsonStore,
+			memory:   memStore,
 			disabled: true,
 		}, nil
 	}
@@ -115,23 +120,24 @@ func NewDatastoreStore(ctx context.Context, projectID, databaseID string) (*Data
 		slog.Debug("failed to delete test entity", "error", err)
 	}
 
-	slog.Info("initialized Datastore with JSON fallback",
+	slog.Info("initialized Datastore with in-memory cache",
 		"project_id", projectID,
+		"database_id", databaseID,
 		"mode", "hybrid")
 
 	return &DatastoreStore{
 		ds:       ds,
-		json:     jsonStore,
+		memory:   memStore,
 		disabled: false,
 	}, nil
 }
 
-// Thread retrieves thread info with Datastore-first, JSON fallback.
+// Thread retrieves thread info with memory-first, then Datastore fallback.
 func (s *DatastoreStore) Thread(owner, repo string, number int, channelID string) (ThreadInfo, bool) {
 	key := threadKey(owner, repo, number, channelID)
 
-	// Fast path: Check JSON cache first
-	info, exists := s.json.Thread(owner, repo, number, channelID)
+	// Fast path: Check memory cache first
+	info, exists := s.memory.Thread(owner, repo, number, channelID)
 	if exists {
 		return info, true
 	}
@@ -158,7 +164,7 @@ func (s *DatastoreStore) Thread(owner, repo string, number int, channelID string
 		return ThreadInfo{}, false
 	}
 
-	// Found in Datastore - update JSON cache and return
+	// Found in Datastore - update memory cache and return
 	result := ThreadInfo{
 		ThreadTS:      entity.ThreadTS,
 		ChannelID:     entity.ChannelID,
@@ -167,23 +173,21 @@ func (s *DatastoreStore) Thread(owner, repo string, number int, channelID string
 		LastEventTime: entity.LastEventTime,
 	}
 
-	// Async update JSON cache (don't wait)
-	go func() {
-		if err := s.json.SaveThread(owner, repo, number, channelID, result); err != nil {
-			slog.Debug("failed to update JSON cache for thread", "error", err)
-		}
-	}()
+	// Update memory cache (sync - fast)
+	if err := s.memory.SaveThread(owner, repo, number, channelID, result); err != nil {
+		slog.Debug("failed to update memory cache for thread", "error", err)
+	}
 
 	return result, true
 }
 
-// SaveThread saves thread info to both Datastore and JSON.
+// SaveThread saves thread info to memory and Datastore.
 func (s *DatastoreStore) SaveThread(owner, repo string, number int, channelID string, info ThreadInfo) error {
 	key := threadKey(owner, repo, number, channelID)
 
-	// Always save to JSON (fast, local)
-	if err := s.json.SaveThread(owner, repo, number, channelID, info); err != nil {
-		slog.Warn("failed to save thread to JSON", "error", err)
+	// Always save to memory (fast, local)
+	if err := s.memory.SaveThread(owner, repo, number, channelID, info); err != nil {
+		slog.Warn("failed to save thread to memory", "error", err)
 	}
 
 	// Skip Datastore if disabled
@@ -215,10 +219,10 @@ func (s *DatastoreStore) SaveThread(owner, repo string, number int, channelID st
 	return nil
 }
 
-// LastDM retrieves last DM time with Datastore-first, JSON fallback.
+// LastDM retrieves last DM time with Datastore-first, memory fallback.
 func (s *DatastoreStore) LastDM(userID, prURL string) (time.Time, bool) {
-	// Check JSON first (fast)
-	t, exists := s.json.LastDM(userID, prURL)
+	// Check memory first (fast)
+	t, exists := s.memory.LastDM(userID, prURL)
 	if exists {
 		return t, true
 	}
@@ -241,10 +245,10 @@ func (s *DatastoreStore) LastDM(userID, prURL string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 
-	// Update JSON cache async
+	// Update memory cache async
 	go func() {
-		if err := s.json.RecordDM(userID, prURL, entity.SentAt); err != nil {
-			slog.Debug("failed to update JSON cache for DM", "error", err)
+		if err := s.memory.RecordDM(userID, prURL, entity.SentAt); err != nil {
+			slog.Debug("failed to update memory cache for DM", "error", err)
 		}
 	}()
 
@@ -253,9 +257,9 @@ func (s *DatastoreStore) LastDM(userID, prURL string) (time.Time, bool) {
 
 // RecordDM saves DM timestamp to both stores.
 func (s *DatastoreStore) RecordDM(userID, prURL string, sentAt time.Time) error {
-	// Save to JSON
-	if err := s.json.RecordDM(userID, prURL, sentAt); err != nil {
-		slog.Warn("failed to record DM in JSON", "error", err)
+	// Save to memory
+	if err := s.memory.RecordDM(userID, prURL, sentAt); err != nil {
+		slog.Warn("failed to record DM in memory", "error", err)
 	}
 
 	// Skip Datastore if disabled
@@ -286,10 +290,92 @@ func (s *DatastoreStore) RecordDM(userID, prURL string, sentAt time.Time) error 
 	return nil
 }
 
+// DMMessage retrieves DM message info with Datastore-first, memory fallback.
+func (s *DatastoreStore) DMMessage(userID, prURL string) (DMInfo, bool) {
+	// Check memory first (fast)
+	info, exists := s.memory.DMMessage(userID, prURL)
+	if exists {
+		return info, true
+	}
+
+	// Datastore disabled
+	if s.disabled || s.ds == nil {
+		return DMInfo{}, false
+	}
+
+	// Try Datastore
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	key := dmKey(userID, prURL)
+	dsKey := datastore.NameKey(kindDMMessage, key, nil)
+	var entity dmMessageEntity
+
+	err := s.ds.Get(ctx, dsKey, &entity)
+	if err != nil {
+		return DMInfo{}, false
+	}
+
+	// Found in Datastore - update memory cache and return
+	result := DMInfo{
+		ChannelID:   entity.ChannelID,
+		MessageTS:   entity.MessageTS,
+		MessageText: entity.MessageText,
+		UpdatedAt:   entity.UpdatedAt,
+		SentAt:      entity.SentAt,
+	}
+
+	// Update memory cache async
+	go func() {
+		if err := s.memory.SaveDMMessage(userID, prURL, result); err != nil {
+			slog.Debug("failed to update memory cache for DM message", "error", err)
+		}
+	}()
+
+	return result, true
+}
+
+// SaveDMMessage saves DM message info to both stores.
+func (s *DatastoreStore) SaveDMMessage(userID, prURL string, info DMInfo) error {
+	// Always save to memory first (fast, local)
+	if err := s.memory.SaveDMMessage(userID, prURL, info); err != nil {
+		slog.Warn("failed to save DM message to memory", "error", err)
+	}
+
+	// Skip Datastore if disabled
+	if s.disabled || s.ds == nil {
+		return nil
+	}
+
+	// Save to Datastore async
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		key := dmKey(userID, prURL)
+		dsKey := datastore.NameKey(kindDMMessage, key, nil)
+		entity := &dmMessageEntity{
+			ChannelID:   info.ChannelID,
+			MessageTS:   info.MessageTS,
+			MessageText: info.MessageText,
+			UpdatedAt:   time.Now(),
+			SentAt:      info.SentAt,
+		}
+
+		if _, err := s.ds.Put(ctx, dsKey, entity); err != nil {
+			slog.Warn("failed to save DM message to Datastore",
+				"user", userID,
+				"error", err)
+		}
+	}()
+
+	return nil
+}
+
 // LastDigest retrieves last digest time.
 func (s *DatastoreStore) LastDigest(userID, date string) (time.Time, bool) {
-	// Check JSON first
-	t, exists := s.json.LastDigest(userID, date)
+	// Check memory first
+	t, exists := s.memory.LastDigest(userID, date)
 	if exists {
 		return t, true
 	}
@@ -314,8 +400,8 @@ func (s *DatastoreStore) LastDigest(userID, date string) (time.Time, bool) {
 
 	// Update cache
 	go func() {
-		if err := s.json.RecordDigest(userID, date, entity.SentAt); err != nil {
-			slog.Debug("failed to update JSON cache for digest", "error", err)
+		if err := s.memory.RecordDigest(userID, date, entity.SentAt); err != nil {
+			slog.Debug("failed to update memory cache for digest", "error", err)
 		}
 	}()
 
@@ -324,9 +410,9 @@ func (s *DatastoreStore) LastDigest(userID, date string) (time.Time, bool) {
 
 // RecordDigest saves digest timestamp.
 func (s *DatastoreStore) RecordDigest(userID, date string, sentAt time.Time) error {
-	// Save to JSON
-	if err := s.json.RecordDigest(userID, date, sentAt); err != nil {
-		slog.Warn("failed to record digest in JSON", "error", err)
+	// Save to memory
+	if err := s.memory.RecordDigest(userID, date, sentAt); err != nil {
+		slog.Warn("failed to record digest in memory", "error", err)
 	}
 
 	// Skip Datastore if disabled
@@ -357,8 +443,8 @@ func (s *DatastoreStore) RecordDigest(userID, date string, sentAt time.Time) err
 
 // WasProcessed checks if an event was already processed (distributed check).
 func (s *DatastoreStore) WasProcessed(eventKey string) bool {
-	// Check JSON first (fast)
-	if s.json.WasProcessed(eventKey) {
+	// Check memory first (fast)
+	if s.memory.WasProcessed(eventKey) {
 		return true
 	}
 
@@ -380,8 +466,8 @@ func (s *DatastoreStore) WasProcessed(eventKey string) bool {
 	if exists {
 		// Update local cache
 		go func() {
-			if err := s.json.MarkProcessed(eventKey, 24*time.Hour); err != nil {
-				slog.Debug("failed to update JSON cache for event", "error", err)
+			if err := s.memory.MarkProcessed(eventKey, 24*time.Hour); err != nil {
+				slog.Debug("failed to update memory cache for event", "error", err)
 			}
 		}()
 	}
@@ -392,9 +478,9 @@ func (s *DatastoreStore) WasProcessed(eventKey string) bool {
 // MarkProcessed marks an event as processed (distributed coordination).
 // Returns error if already processed by another instance (enables race detection).
 func (s *DatastoreStore) MarkProcessed(eventKey string, ttl time.Duration) error {
-	// Mark in JSON first for fast local lookups
-	if err := s.json.MarkProcessed(eventKey, ttl); err != nil {
-		slog.Warn("failed to mark event in JSON", "error", err)
+	// Mark in memory first for fast local lookups
+	if err := s.memory.MarkProcessed(eventKey, ttl); err != nil {
+		slog.Warn("failed to mark event in memory", "error", err)
 	}
 
 	// Skip Datastore if disabled
@@ -496,9 +582,9 @@ func (s *DatastoreStore) RecordNotification(prURL string, notifiedAt time.Time) 
 
 // Cleanup removes old data from both stores.
 func (s *DatastoreStore) Cleanup() error {
-	// Always cleanup JSON
-	if err := s.json.Cleanup(); err != nil {
-		slog.Warn("JSON cleanup failed", "error", err)
+	// Always cleanup memory
+	if err := s.memory.Cleanup(); err != nil {
+		slog.Warn("memory cleanup failed", "error", err)
 	}
 
 	// Skip Datastore if disabled
@@ -507,15 +593,15 @@ func (s *DatastoreStore) Cleanup() error {
 	}
 
 	// Datastore cleanup is done async via TTL or manual queries
-	// For now, rely on JSON cleanup and Datastore's natural expiration
+	// For now, rely on memory cleanup and Datastore's natural expiration
 	return nil
 }
 
 // Close releases resources.
 func (s *DatastoreStore) Close() error {
-	if s.json != nil {
-		if err := s.json.Close(); err != nil {
-			slog.Warn("failed to close JSON store", "error", err)
+	if s.memory != nil {
+		if err := s.memory.Close(); err != nil {
+			slog.Warn("failed to close memory store", "error", err)
 		}
 	}
 

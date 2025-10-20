@@ -159,12 +159,14 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	// Tokens are fetched from GSM based on team_id from org configs.
 	slackManager := slack.NewManager(cfg.SlackSigningSecret)
 
-	// Initialize state store (Datastore + JSON fallback).
+	// Initialize state store (in-memory + Datastore or JSON for persistence).
 	var stateStore interface {
 		Thread(owner, repo string, number int, channelID string) (state.ThreadInfo, bool)
 		SaveThread(owner, repo string, number int, channelID string, info state.ThreadInfo) error
 		LastDM(userID, prURL string) (time.Time, bool)
 		RecordDM(userID, prURL string, sentAt time.Time) error
+		DMMessage(userID, prURL string) (state.DMInfo, bool)
+		SaveDMMessage(userID, prURL string, info state.DMInfo) error
 		LastDigest(userID, date string) (time.Time, bool)
 		RecordDigest(userID, date string, sentAt time.Time) error
 		WasProcessed(eventKey string) bool
@@ -196,25 +198,28 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	}
 
 	if datastoreDB != "" && projectID != "" {
-		slog.Info("initializing Cloud Datastore for persistent state",
+		slog.Info("initializing Cloud Datastore for persistent state (with in-memory cache)",
 			"project_id", projectID,
-			"database", datastoreDB)
+			"database", datastoreDB,
+			"cache", "in-memory")
 		var err error
 		stateStore, err = state.NewDatastoreStore(ctx, projectID, datastoreDB)
 		if err != nil {
 			// FATAL: If DATASTORE is explicitly configured, fail startup on initialization errors.
-			// This prevents silent fallback to JSON-only mode which causes duplicate messages
+			// This prevents silent fallback to memory-only mode which causes duplicate messages
 			// during rolling deployments (no cross-instance event deduplication).
 			slog.Error("FATAL: failed to initialize Cloud Datastore - DATASTORE variable is set but initialization failed",
 				"project_id", projectID,
 				"database", datastoreDB,
-				"error", err)
+				"error", err,
+				"note", "Set DATASTORE='' to use JSON files instead")
 			cancel()
 			return 1
 		}
-		slog.Info("successfully initialized Cloud Datastore",
+		slog.Info("successfully initialized Cloud Datastore with in-memory cache",
 			"project_id", projectID,
-			"database", datastoreDB)
+			"database", datastoreDB,
+			"mode", "hybrid: in-memory + Datastore")
 	} else {
 		var reason string
 		if datastoreDB == "" {
@@ -222,9 +227,10 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 		} else {
 			reason = "GCP_PROJECT not set and could not auto-detect"
 		}
-		slog.Info("using JSON files for state storage",
+		slog.Info("using JSON files for persistent state (with in-memory cache)",
 			"path", "os.UserCacheDir()/slacker/state",
-			"reason", reason)
+			"reason", reason,
+			"mode", "hybrid: in-memory + JSON files")
 		var err error
 		stateStore, err = state.NewJSONStore()
 		if err != nil {
@@ -240,6 +246,10 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 			slog.Warn("failed to close state store", "error", err)
 		}
 	}()
+
+	// Set state store on Slack manager for DM message tracking
+	slackManager.SetStateStore(stateStore)
+	slog.Info("configured Slack manager with state store for DM tracking")
 
 	// Initialize notification manager for multi-workspace notifications.
 	notifier := notify.New(slackManager, configManager)
@@ -672,6 +682,8 @@ func runBotCoordinators(
 		SaveThread(owner, repo string, number int, channelID string, info state.ThreadInfo) error
 		LastDM(userID, prURL string) (time.Time, bool)
 		RecordDM(userID, prURL string, sentAt time.Time) error
+		DMMessage(userID, prURL string) (state.DMInfo, bool)
+		SaveDMMessage(userID, prURL string, info state.DMInfo) error
 		LastDigest(userID, date string) (time.Time, bool)
 		RecordDigest(userID, date string, sentAt time.Time) error
 		WasProcessed(eventKey string) bool

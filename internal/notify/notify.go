@@ -297,7 +297,8 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 	}
 
 	// Send DM to user.
-	if err := slackClient.SendDirectMessage(ctx, userID, message); err != nil {
+	dmChannelID, messageTS, err := slackClient.SendDirectMessage(ctx, userID, message)
+	if err != nil {
 		slog.Error("failed to send DM notification",
 			"user", userID,
 			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
@@ -309,12 +310,23 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 	// Update last DM notification time.
 	m.Tracker.UpdateDMNotification(workspaceID, userID)
 
+	// Save DM message info for future updates
+	if err := slackClient.SaveDMMessageInfo(ctx, userID, pr.HTMLURL, dmChannelID, messageTS, message); err != nil {
+		slog.Warn("failed to save DM message info",
+			"user", userID,
+			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+			"error", err,
+			"impact", "DM won't be updated on state changes")
+	}
+
 	slog.Info("successfully sent DM notification",
 		"user", userID,
 		"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
 		"pr_author", pr.Author,
 		"pr_state", pr.State,
 		"action_required", action,
-		"notification_updated", true)
+		"notification_updated", true,
+		"dm_channel_id", dmChannelID,
+		"message_ts", messageTS)
 	return nil
 }
