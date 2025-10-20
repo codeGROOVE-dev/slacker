@@ -126,12 +126,12 @@ func NewDatastoreStore(ctx context.Context, projectID, databaseID string) (*Data
 	}, nil
 }
 
-// GetThread retrieves thread info with Datastore-first, JSON fallback.
-func (s *DatastoreStore) GetThread(owner, repo string, number int, channelID string) (ThreadInfo, bool) {
+// Thread retrieves thread info with Datastore-first, JSON fallback.
+func (s *DatastoreStore) Thread(owner, repo string, number int, channelID string) (ThreadInfo, bool) {
 	key := threadKey(owner, repo, number, channelID)
 
 	// Fast path: Check JSON cache first
-	info, exists := s.json.GetThread(owner, repo, number, channelID)
+	info, exists := s.json.Thread(owner, repo, number, channelID)
 	if exists {
 		return info, true
 	}
@@ -215,10 +215,10 @@ func (s *DatastoreStore) SaveThread(owner, repo string, number int, channelID st
 	return nil
 }
 
-// GetLastDM retrieves last DM time with Datastore-first, JSON fallback.
-func (s *DatastoreStore) GetLastDM(userID, prURL string) (time.Time, bool) {
+// LastDM retrieves last DM time with Datastore-first, JSON fallback.
+func (s *DatastoreStore) LastDM(userID, prURL string) (time.Time, bool) {
 	// Check JSON first (fast)
-	t, exists := s.json.GetLastDM(userID, prURL)
+	t, exists := s.json.LastDM(userID, prURL)
 	if exists {
 		return t, true
 	}
@@ -286,10 +286,10 @@ func (s *DatastoreStore) RecordDM(userID, prURL string, sentAt time.Time) error 
 	return nil
 }
 
-// GetLastDigest retrieves last digest time.
-func (s *DatastoreStore) GetLastDigest(userID, date string) (time.Time, bool) {
+// LastDigest retrieves last digest time.
+func (s *DatastoreStore) LastDigest(userID, date string) (time.Time, bool) {
 	// Check JSON first
-	t, exists := s.json.GetLastDigest(userID, date)
+	t, exists := s.json.LastDigest(userID, date)
 	if exists {
 		return t, true
 	}
@@ -447,8 +447,8 @@ func (s *DatastoreStore) MarkProcessed(eventKey string, ttl time.Duration) error
 	return err
 }
 
-// GetLastNotification retrieves when a PR was last notified about.
-func (s *DatastoreStore) GetLastNotification(prURL string) time.Time {
+// LastNotification retrieves when a PR was last notified about.
+func (s *DatastoreStore) LastNotification(prURL string) time.Time {
 	// Datastore disabled
 	if s.disabled || s.ds == nil {
 		return time.Time{}

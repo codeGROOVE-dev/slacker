@@ -16,9 +16,9 @@ type ConfigProvider interface {
 
 // StateProvider provides state storage for daily digests.
 type StateProvider interface {
-	GetLastDigest(userID, date string) (time.Time, bool)
+	LastDigest(userID, date string) (time.Time, bool)
 	RecordDigest(userID, date string, sentAt time.Time) error
-	GetLastDM(userID, prURL string) (time.Time, bool)
+	LastDM(userID, prURL string) (time.Time, bool)
 }
 
 // DailyDigestScheduler handles sending daily digest DMs to users blocking PRs.

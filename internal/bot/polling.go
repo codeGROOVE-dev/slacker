@@ -198,6 +198,9 @@ func (c *Coordinator) reconcilePR(ctx context.Context, pr *github.PRSnapshot) er
 
 	slog.Debug("turnclient analysis complete",
 		"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+		"pr_state", checkResult.PullRequest.State,
+		"pr_draft", checkResult.PullRequest.Draft,
+		"pr_merged", checkResult.PullRequest.Merged,
 		"ready_to_merge", checkResult.Analysis.ReadyToMerge,
 		"approved", checkResult.Analysis.Approved,
 		"next_action_count", len(checkResult.Analysis.NextAction))
@@ -271,12 +274,15 @@ func (c *Coordinator) updateClosedPRThread(ctx context.Context, pr *github.PRSna
 			continue
 		}
 
-		info, ok := c.stateStore.GetThread(pr.Owner, pr.Repo, pr.Number, id)
+		info, ok := c.stateStore.Thread(pr.Owner, pr.Repo, pr.Number, id)
 		if !ok {
 			slog.Debug("no thread found for closed PR in channel",
 				"pr", prKey,
 				"channel", ch,
-				"channel_id", id)
+				"channel_id", id,
+				"pr_state", pr.State,
+				"pr_updated_at", pr.UpdatedAt,
+				"possible_reason", "PR closed before thread created or thread in different channel")
 			continue
 		}
 
@@ -351,7 +357,9 @@ func (c *Coordinator) StartupReconciliation(ctx context.Context) {
 	slog.Info("🔄 STARTUP RECONCILIATION STARTED",
 		"org", org,
 		"purpose", "catch up on missed notifications during downtime",
-		"window", "24h")
+		"window", "24h",
+		"scope", "open_prs_only",
+		"note", "closed PRs handled by polling cycle")
 
 	// Get current GitHub token
 	token := c.github.InstallationToken(ctx)
@@ -400,7 +408,7 @@ func (c *Coordinator) StartupReconciliation(ctx context.Context) {
 		}
 
 		// Check notification state
-		lastNotified := c.stateStore.GetLastNotification(pr.URL)
+		lastNotified := c.stateStore.LastNotification(pr.URL)
 
 		// Determine if we should notify
 		var reason string

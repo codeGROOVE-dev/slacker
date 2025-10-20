@@ -103,8 +103,8 @@ func digestKey(userID, date string) string {
 	return fmt.Sprintf("digest:%s:%s", userID, date)
 }
 
-// GetThread retrieves thread information for a PR.
-func (s *JSONStore) GetThread(owner, repo string, number int, channelID string) (ThreadInfo, bool) {
+// Thread retrieves thread information for a PR.
+func (s *JSONStore) Thread(owner, repo string, number int, channelID string) (ThreadInfo, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	key := threadKey(owner, repo, number, channelID)
@@ -123,8 +123,8 @@ func (s *JSONStore) SaveThread(owner, repo string, number int, channelID string,
 	return s.save()
 }
 
-// GetLastDM retrieves the last DM timestamp for a user and PR.
-func (s *JSONStore) GetLastDM(userID, prURL string) (time.Time, bool) {
+// LastDM retrieves the last DM timestamp for a user and PR.
+func (s *JSONStore) LastDM(userID, prURL string) (time.Time, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	key := dmKey(userID, prURL)
@@ -142,8 +142,8 @@ func (s *JSONStore) RecordDM(userID, prURL string, sentAt time.Time) error {
 	return s.save()
 }
 
-// GetLastDigest retrieves the last digest timestamp for a user and date.
-func (s *JSONStore) GetLastDigest(userID, date string) (time.Time, bool) {
+// LastDigest retrieves the last digest timestamp for a user and date.
+func (s *JSONStore) LastDigest(userID, date string) (time.Time, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	key := digestKey(userID, date)
@@ -180,8 +180,8 @@ func (s *JSONStore) MarkProcessed(eventKey string, _ time.Duration) error {
 	return s.save()
 }
 
-// GetLastNotification retrieves the last notification timestamp for a PR.
-func (s *JSONStore) GetLastNotification(prURL string) time.Time {
+// LastNotification retrieves the last notification timestamp for a PR.
+func (s *JSONStore) LastNotification(prURL string) time.Time {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.notifications[prURL]

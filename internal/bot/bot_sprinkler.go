@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/codeGROOVE-dev/slacker/internal/state"
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
 )
 
@@ -57,12 +58,23 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 	// Try to claim this event atomically using persistent store (Datastore transaction).
 	// This is the single source of truth for cross-instance deduplication.
 	if err := c.stateStore.MarkProcessed(eventKey, 24*time.Hour); err != nil {
-		slog.Info("skipping duplicate event",
-			"organization", organization,
-			"type", event.Type,
-			"url", event.URL,
-			"event_key", eventKey,
-			"reason", "already_processed")
+		// Check if this is a race condition vs a database error
+		if errors.Is(err, state.ErrAlreadyProcessed) {
+			slog.Info("skipping duplicate event - claimed by this or another instance",
+				"organization", organization,
+				"type", event.Type,
+				"url", event.URL,
+				"event_key", eventKey,
+				"reason", "deduplication_race")
+		} else {
+			slog.Warn("failed to mark event as processed - database error",
+				"organization", organization,
+				"type", event.Type,
+				"url", event.URL,
+				"event_key", eventKey,
+				"error", err,
+				"impact", "will_skip_event")
+		}
 		return
 	}
 
@@ -76,7 +88,11 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 	// Process event asynchronously after deduplication checks pass
 	// This allows the event handler to return immediately and accept the next event
 	// Semaphore limits concurrent processing to prevent overwhelming APIs
+	// WaitGroup tracks in-flight events for graceful shutdown
+	c.processingEvents.Add(1)
 	go func() {
+		defer c.processingEvents.Done()
+
 		// Acquire semaphore slot (blocks if 10 events already processing)
 		c.eventSemaphore <- struct{}{}
 		defer func() { <-c.eventSemaphore }() // Release slot when done
@@ -164,6 +180,47 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 			"url", event.URL,
 			"event_key", eventKey)
 	}() // Close the goroutine
+}
+
+// waitForEventProcessing waits for all in-flight events to complete during shutdown.
+// Returns immediately if no events are being processed.
+func (c *Coordinator) waitForEventProcessing(organization string, maxWait time.Duration) {
+	// Check if any events are being processed
+	queueLen := len(c.eventSemaphore)
+	if queueLen == 0 {
+		slog.Info("no events in processing queue, shutdown can proceed immediately",
+			"organization", organization)
+		return
+	}
+
+	slog.Warn("waiting for in-flight events to complete before shutdown",
+		"organization", organization,
+		"events_in_queue", queueLen,
+		"max_wait_seconds", maxWait.Seconds())
+
+	// Create a channel to signal when all events are done
+	done := make(chan struct{})
+	go func() {
+		c.processingEvents.Wait()
+		close(done)
+	}()
+
+	// Wait for events to complete or timeout
+	select {
+	case <-done:
+		slog.Info("all in-flight events completed successfully",
+			"organization", organization,
+			"graceful_shutdown", true)
+	case <-time.After(maxWait):
+		remaining := len(c.eventSemaphore)
+		slog.Warn("shutdown timeout reached, proceeding with remaining events in queue",
+			"organization", organization,
+			"events_still_processing", remaining,
+			"waited_seconds", maxWait.Seconds(),
+			"impact", "these events may be incomplete",
+			"recovery", "polling will catch them in next 5min cycle",
+			"graceful_shutdown", false)
+	}
 }
 
 // handleAuthError handles authentication errors by refreshing the token and recreating the client.
@@ -302,6 +359,8 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 			slog.Info("sprinkler client context cancelled, stopping gracefully",
 				"organization", organization,
 				"total_attempts", attempts)
+			// Wait for in-flight events (up to 8 seconds, leaving 2s for HTTP shutdown)
+			c.waitForEventProcessing(organization, 8*time.Second)
 			return nil
 		}
 
@@ -311,6 +370,8 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 			slog.Info("context cancelled, stopping sprinkler client",
 				"organization", organization,
 				"context_error", ctxErr)
+			// Wait for in-flight events (up to 8 seconds)
+			c.waitForEventProcessing(organization, 8*time.Second)
 			return ctxErr
 		}
 
@@ -347,6 +408,7 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 						"will_retry", true)
 					select {
 					case <-ctx.Done():
+						c.waitForEventProcessing(organization, 8*time.Second)
 						return ctx.Err()
 					case <-time.After(retryDelay):
 						continue
@@ -371,6 +433,7 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				slog.Info("context cancelled during retry wait", "organization", organization)
+				c.waitForEventProcessing(organization, 8*time.Second)
 				return ctx.Err()
 			case <-time.After(retryDelay):
 				// Exponential backoff capped at maxRetryDelay
@@ -391,6 +454,7 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			slog.Info("sprinkler client stopped cleanly due to context cancellation",
 				"organization", organization)
+			c.waitForEventProcessing(organization, 8*time.Second)
 			return ctxErr
 		}
 
@@ -407,6 +471,7 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 		// This might be network hiccup or server restart
 		select {
 		case <-ctx.Done():
+			c.waitForEventProcessing(organization, 8*time.Second)
 			return ctx.Err()
 		case <-time.After(5 * time.Second):
 			slog.Info("restarting after unexpected clean disconnect",

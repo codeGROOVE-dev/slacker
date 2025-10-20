@@ -22,8 +22,8 @@ github.com/codeGROOVE-dev/prx v0.0.0-20251016165946-00c6c6e90c29 h1:MSBy3Ywr3ky/
 github.com/codeGROOVE-dev/prx v0.0.0-20251016165946-00c6c6e90c29/go.mod h1:7qLbi18baOyS8yO/6/64SBIqtyzSzLFdsDST15NPH3w=
 github.com/codeGROOVE-dev/retry v1.2.0 h1:xYpYPX2PQZmdHwuiQAGGzsBm392xIMl4nfMEFApQnu8=
 github.com/codeGROOVE-dev/retry v1.2.0/go.mod h1:8OgefgV1XP7lzX2PdKlCXILsYKuz6b4ZpHa/20iLi8E=
-github.com/codeGROOVE-dev/sprinkler v0.0.0-20251020064313-f606185b6b98 h1:unjiIF1rx/QZfcTEW/n6EJjde1yd3b1ZbjrWee2Afj4=
-github.com/codeGROOVE-dev/sprinkler v0.0.0-20251020064313-f606185b6b98/go.mod h1:/kd3ncsRNldD0MUpbtp5ojIzfCkyeXB7JdOrpuqG7Gg=
+github.com/codeGROOVE-dev/sprinkler v0.0.0-20251020140418-efb533e2ff51 h1:oPVbUoZ1jxgmrqybgRCfhwdT8KaXE/hzQ4vAswRybt0=
+github.com/codeGROOVE-dev/sprinkler v0.0.0-20251020140418-efb533e2ff51/go.mod h1:/kd3ncsRNldD0MUpbtp5ojIzfCkyeXB7JdOrpuqG7Gg=
 github.com/codeGROOVE-dev/turnclient v0.0.0-20251018202306-7cdc0d51856e h1:3qoY6h8SgoeNsIYRM7P6PegTXAHPo8OSOapUunVP/Gs=
 github.com/codeGROOVE-dev/turnclient v0.0.0-20251018202306-7cdc0d51856e/go.mod h1:fYwtN9Ql6lY8t2WvCfENx+mP5FUwjlqwXCLx9CVLY20=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=

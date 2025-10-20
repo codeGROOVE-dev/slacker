@@ -64,10 +64,6 @@ func (c *GraphQLClient) ListOpenPRs(ctx context.Context, org string, updatedSinc
 // ListClosedPRs queries all closed/merged PRs for an organization updated in the last N hours.
 // This is used to update Slack threads when PRs are closed or merged.
 func (c *GraphQLClient) ListClosedPRs(ctx context.Context, org string, updatedSinceHours int) ([]PRSnapshot, error) {
-	slog.Debug("querying closed/merged PRs via GraphQL",
-		"org", org,
-		"updated_since_hours", updatedSinceHours)
-
 	since := time.Now().Add(-time.Duration(updatedSinceHours) * time.Hour)
 
 	// GraphQL query structure
@@ -101,9 +97,10 @@ func (c *GraphQLClient) ListClosedPRs(ctx context.Context, org string, updatedSi
 		} `graphql:"search(query: $searchQuery, type: ISSUE, first: 100, after: $cursor)"`
 	}
 
-	// Build search query: "is:pr is:closed org:X updated:>YYYY-MM-DD"
-	// This will include both closed-unmerged and merged PRs
-	searchQuery := fmt.Sprintf("is:pr is:closed org:%s updated:>%s",
+	// Build search query: "is:pr is:closed org:X updated:>=YYYY-MM-DD"
+	// Use >= instead of > to include PRs closed/merged on the since date
+	// Note: GitHub search uses date-only granularity, so we need >= to catch PRs from today
+	searchQuery := fmt.Sprintf("is:pr is:closed org:%s updated:>=%s",
 		org,
 		since.Format("2006-01-02"))
 
@@ -134,6 +131,16 @@ func (c *GraphQLClient) ListClosedPRs(ctx context.Context, org string, updatedSi
 		// Process this page of results
 		for i := range query.Search.Nodes {
 			pr := query.Search.Nodes[i].PullRequest
+
+			// Filter by UpdatedAt since GitHub search only has date granularity
+			if pr.UpdatedAt.Before(since) {
+				slog.Debug("filtered out closed PR - updated before window",
+					"pr", fmt.Sprintf("%s/%s#%d", pr.Repository.Owner.Login, pr.Repository.Name, pr.Number),
+					"pr_updated_at", pr.UpdatedAt,
+					"window_start", since,
+					"reason", "outside_time_window")
+				continue
+			}
 
 			// Determine state: MERGED takes precedence over CLOSED
 			state := "CLOSED"
@@ -167,7 +174,8 @@ func (c *GraphQLClient) ListClosedPRs(ctx context.Context, org string, updatedSi
 		"org", org,
 		"total_prs", len(allPRs),
 		"pages_fetched", pageCount,
-		"query", searchQuery)
+		"query", searchQuery,
+		"time_window_start", since.Format(time.RFC3339))
 
 	return allPRs, nil
 }

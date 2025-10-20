@@ -7,7 +7,7 @@ require (
 	github.com/codeGROOVE-dev/gh-mailto v0.0.0-20251019162917-c3412c017b1f
 	github.com/codeGROOVE-dev/gsm v0.0.0-20251019065141-833fe2363d22
 	github.com/codeGROOVE-dev/retry v1.2.0
-	github.com/codeGROOVE-dev/sprinkler v0.0.0-20251020064313-f606185b6b98
+	github.com/codeGROOVE-dev/sprinkler v0.0.0-20251020140418-efb533e2ff51
 	github.com/codeGROOVE-dev/turnclient v0.0.0-20251018202306-7cdc0d51856e
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/go-github/v50 v50.2.0
