@@ -61,6 +61,117 @@ func (c *GraphQLClient) ListOpenPRs(ctx context.Context, org string, updatedSinc
 	return prs, nil
 }
 
+// ListClosedPRs queries all closed/merged PRs for an organization updated in the last N hours.
+// This is used to update Slack threads when PRs are closed or merged.
+func (c *GraphQLClient) ListClosedPRs(ctx context.Context, org string, updatedSinceHours int) ([]PRSnapshot, error) {
+	slog.Debug("querying closed/merged PRs via GraphQL",
+		"org", org,
+		"updated_since_hours", updatedSinceHours)
+
+	since := time.Now().Add(-time.Duration(updatedSinceHours) * time.Hour)
+
+	// GraphQL query structure
+	var query struct {
+		Search struct {
+			Nodes []struct {
+				PullRequest struct {
+					Number    int
+					Title     string
+					URL       string
+					UpdatedAt time.Time
+					CreatedAt time.Time
+					State     string
+					IsDraft   bool
+					Merged    bool
+					Author    struct {
+						Login string
+					}
+					Repository struct {
+						Name  string
+						Owner struct {
+							Login string
+						}
+					}
+				} `graphql:"... on PullRequest"`
+			}
+			PageInfo struct {
+				EndCursor   string
+				HasNextPage bool
+			}
+		} `graphql:"search(query: $searchQuery, type: ISSUE, first: 100, after: $cursor)"`
+	}
+
+	// Build search query: "is:pr is:closed org:X updated:>YYYY-MM-DD"
+	// This will include both closed-unmerged and merged PRs
+	searchQuery := fmt.Sprintf("is:pr is:closed org:%s updated:>%s",
+		org,
+		since.Format("2006-01-02"))
+
+	variables := map[string]any{
+		"searchQuery": githubv4.String(searchQuery),
+		"cursor":      (*githubv4.String)(nil),
+	}
+
+	var allPRs []PRSnapshot
+	pageCount := 0
+	const maxPages = 10
+
+	for {
+		pageCount++
+		if pageCount > maxPages {
+			slog.Warn("reached max page limit for closed PR GraphQL query",
+				"org", org,
+				"pages", pageCount,
+				"prs_collected", len(allPRs))
+			break
+		}
+
+		err := c.client.Query(ctx, &query, variables)
+		if err != nil {
+			return nil, fmt.Errorf("GraphQL query failed: %w", err)
+		}
+
+		// Process this page of results
+		for i := range query.Search.Nodes {
+			pr := query.Search.Nodes[i].PullRequest
+
+			// Determine state: MERGED takes precedence over CLOSED
+			state := "CLOSED"
+			if pr.Merged {
+				state = "MERGED"
+			}
+
+			allPRs = append(allPRs, PRSnapshot{
+				Owner:     pr.Repository.Owner.Login,
+				Repo:      pr.Repository.Name,
+				Number:    pr.Number,
+				Title:     pr.Title,
+				Author:    pr.Author.Login,
+				URL:       pr.URL,
+				UpdatedAt: pr.UpdatedAt,
+				CreatedAt: pr.CreatedAt,
+				State:     state,
+				IsDraft:   pr.IsDraft,
+			})
+		}
+
+		if !query.Search.PageInfo.HasNextPage {
+			break
+		}
+
+		cursor := githubv4.String(query.Search.PageInfo.EndCursor)
+		variables["cursor"] = cursor
+	}
+
+	slog.Info("GraphQL query for closed PRs complete",
+		"org", org,
+		"total_prs", len(allPRs),
+		"pages_fetched", pageCount,
+		"query", searchQuery)
+
+	return allPRs, nil
+}
+
 // listOpenPRsGraphQL queries using GraphQL for efficiency.
 func (c *GraphQLClient) listOpenPRsGraphQL(ctx context.Context, org string, updatedSinceHours int) ([]PRSnapshot, error) {
 	slog.Debug("querying open PRs via GraphQL",

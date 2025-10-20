@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/codeGROOVE-dev/slacker/internal/github"
@@ -49,7 +50,7 @@ func (c *Coordinator) PollAndReconcile(ctx context.Context) {
 		"pr_count", len(prs),
 		"will_check_each", true)
 
-	// Process each PR
+	// Process each open PR
 	successCount := 0
 	errorCount := 0
 
@@ -93,9 +94,73 @@ func (c *Coordinator) PollAndReconcile(ctx context.Context) {
 		}
 	}
 
+	// Query closed/merged PRs in last hour to update existing threads
+	closedPRs, err := gqlClient.ListClosedPRs(ctx, org, 1)
+	if err != nil {
+		slog.Warn("failed to poll closed PRs",
+			"org", org,
+			"error", err,
+			"impact", "will retry next poll")
+	} else {
+		slog.Info("poll retrieved closed/merged PRs",
+			"org", org,
+			"pr_count", len(closedPRs),
+			"will_update_threads", true)
+
+		closedSuccessCount := 0
+		closedErrorCount := 0
+
+		for i := range closedPRs {
+			pr := &closedPRs[i]
+
+			// Create event key for this PR state change
+			eventKey := fmt.Sprintf("poll_closed:%s:%s:%s", pr.URL, pr.State, pr.UpdatedAt.Format(time.RFC3339))
+
+			// Skip if already processed
+			if c.stateStore.WasProcessed(eventKey) {
+				slog.Debug("skipping closed PR - already processed",
+					"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+					"state", pr.State)
+				closedSuccessCount++
+				continue
+			}
+
+			// Update thread for this closed/merged PR
+			if err := c.updateClosedPRThread(ctx, pr); err != nil {
+				slog.Warn("failed to update closed PR thread",
+					"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+					"state", pr.State,
+					"error", err)
+				closedErrorCount++
+			} else {
+				// Mark as processed
+				if err := c.stateStore.MarkProcessed(eventKey, 24*time.Hour); err != nil {
+					slog.Warn("failed to mark closed PR event as processed",
+						"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+						"error", err)
+				}
+				closedSuccessCount++
+			}
+
+			// Rate limit
+			select {
+			case <-ctx.Done():
+				slog.Info("polling canceled during closed PR processing", "org", org)
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+
+		slog.Info("closed PR processing complete",
+			"org", org,
+			"total_closed_prs", len(closedPRs),
+			"updated", closedSuccessCount,
+			"errors", closedErrorCount)
+	}
+
 	slog.Info("poll cycle complete",
 		"org", org,
-		"total_prs", len(prs),
+		"total_open_prs", len(prs),
 		"processed", successCount,
 		"errors", errorCount,
 		"next_poll", "5m")
@@ -176,6 +241,100 @@ func (c *Coordinator) reconcilePR(ctx context.Context, pr *github.PRSnapshot) er
 
 	// Use existing event handler to process this PR
 	c.handlePullRequestEventWithData(ctx, pr.Owner, pr.Repo, event, checkResult, nil)
+
+	return nil
+}
+
+// updateClosedPRThread updates Slack threads for a closed or merged PR.
+func (c *Coordinator) updateClosedPRThread(ctx context.Context, pr *github.PRSnapshot) error {
+	prKey := fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+	slog.Debug("updating thread for closed/merged PR",
+		"pr", prKey,
+		"state", pr.State)
+
+	channels := c.configManager.ChannelsForRepo(pr.Owner, pr.Repo)
+	if len(channels) == 0 {
+		slog.Debug("no channels configured for closed PR",
+			"pr", prKey,
+			"owner", pr.Owner,
+			"repo", pr.Repo)
+		return nil
+	}
+
+	n := 0
+	for _, ch := range channels {
+		id := c.slack.ResolveChannelID(ctx, ch)
+		if id == "" {
+			slog.Debug("could not resolve channel ID for closed PR thread update",
+				"channel_name", ch,
+				"pr", prKey)
+			continue
+		}
+
+		info, ok := c.stateStore.GetThread(pr.Owner, pr.Repo, pr.Number, id)
+		if !ok {
+			slog.Debug("no thread found for closed PR in channel",
+				"pr", prKey,
+				"channel", ch,
+				"channel_id", id)
+			continue
+		}
+
+		if err := c.updateThreadForClosedPR(ctx, pr, id, info); err != nil {
+			slog.Warn("failed to update thread for closed PR",
+				"pr", prKey,
+				"channel", ch,
+				"error", err)
+			continue
+		}
+
+		n++
+		slog.Info("updated thread for closed/merged PR",
+			"pr", prKey,
+			"state", pr.State,
+			"channel", ch,
+			"thread_ts", info.ThreadTS)
+	}
+
+	if n == 0 {
+		return errors.New("no threads found or updated for closed PR")
+	}
+
+	return nil
+}
+
+// updateThreadForClosedPR updates a single thread's message to reflect closed/merged state.
+func (c *Coordinator) updateThreadForClosedPR(ctx context.Context, pr *github.PRSnapshot, channelID string, info ThreadInfo) error {
+	var emoji, msg string
+	switch pr.State {
+	case "MERGED":
+		emoji = ":rocket:"
+		msg = "This PR was merged"
+	case "CLOSED":
+		emoji = ":x:"
+		msg = "This PR was closed without merging"
+	default:
+		return fmt.Errorf("unexpected PR state: %s", pr.State)
+	}
+
+	// Replace emoji prefix in message (format: ":emoji: Title • repo#123 by @user")
+	text := info.MessageText
+	if i := strings.Index(text, " "); i == -1 {
+		text = emoji + " " + text
+	} else {
+		text = emoji + text[i:]
+	}
+
+	if err := c.slack.UpdateMessage(ctx, channelID, info.ThreadTS, text); err != nil {
+		return fmt.Errorf("failed to update message: %w", err)
+	}
+
+	// Post follow-up comment (don't fail if this errors - main update succeeded)
+	if err := c.slack.PostThreadReply(ctx, channelID, info.ThreadTS, msg); err != nil {
+		slog.Debug("failed to post follow-up comment for closed PR",
+			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+			"error", err)
+	}
 
 	return nil
 }
