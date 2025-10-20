@@ -145,7 +145,7 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 		"startup_message", "Starting Slacker server...")
 
 	// Initialize config manager for repo configs.
-	configManager := config.New(ctx)
+	configManager := config.New()
 
 	// Initialize GitHub installation manager.
 	githubManager, err := github.NewManager(ctx, cfg.GitHubAppID, cfg.GitHubPrivateKey, cfg.AllowPersonalAccounts)

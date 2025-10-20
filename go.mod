@@ -3,11 +3,11 @@ module github.com/codeGROOVE-dev/slacker
 go 1.25.1
 
 require (
-	cloud.google.com/go/datastore v1.20.0
+	cloud.google.com/go/datastore v1.21.0
 	github.com/codeGROOVE-dev/gh-mailto v0.0.0-20251019162917-c3412c017b1f
 	github.com/codeGROOVE-dev/gsm v0.0.0-20251019065141-833fe2363d22
 	github.com/codeGROOVE-dev/retry v1.2.0
-	github.com/codeGROOVE-dev/sprinkler v0.0.0-20251020140418-efb533e2ff51
+	github.com/codeGROOVE-dev/sprinkler v0.0.0-20251020171924-1aac68f58e14
 	github.com/codeGROOVE-dev/turnclient v0.0.0-20251018202306-7cdc0d51856e
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/go-github/v50 v50.2.0
@@ -48,9 +48,9 @@ require (
 	golang.org/x/sys v0.37.0 // indirect
 	golang.org/x/text v0.30.0 // indirect
 	google.golang.org/api v0.252.0 // indirect
-	google.golang.org/genproto v0.0.0-20251014184007-4626949a642f // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20251014184007-4626949a642f // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20251014184007-4626949a642f // indirect
+	google.golang.org/genproto v0.0.0-20251020155222-88f65dc88635 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20251020155222-88f65dc88635 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20251020155222-88f65dc88635 // indirect
 	google.golang.org/grpc v1.76.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 )

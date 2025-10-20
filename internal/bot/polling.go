@@ -412,11 +412,12 @@ func (c *Coordinator) StartupReconciliation(ctx context.Context) {
 
 		// Determine if we should notify
 		var reason string
-		if lastNotified.IsZero() {
+		switch {
+		case lastNotified.IsZero():
 			reason = "never_notified"
-		} else if pr.UpdatedAt.After(lastNotified) {
+		case pr.UpdatedAt.After(lastNotified):
 			reason = "updated_since_last_notification"
-		} else {
+		default:
 			skippedCount++
 			slog.Debug("skipping PR - already notified and not updated",
 				"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),

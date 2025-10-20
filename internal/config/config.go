@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/codeGROOVE-dev/retry"
@@ -59,12 +60,13 @@ type configCacheEntry struct {
 }
 
 // configCache manages configuration caching with TTL and thread safety.
+// Statistics counters use atomic operations to avoid races during concurrent reads.
 type configCache struct {
 	entries map[string]configCacheEntry
 	ttl     time.Duration
 	mu      sync.RWMutex
-	hits    int64
-	misses  int64
+	hits    atomic.Int64 // Atomic to avoid race during concurrent get() calls
+	misses  atomic.Int64 // Atomic to avoid race during concurrent get() calls
 }
 
 // get retrieves a cached configuration if it exists and is not expired.
@@ -74,16 +76,16 @@ func (c *configCache) get(org string) (*RepoConfig, bool) {
 
 	entry, exists := c.entries[org]
 	if !exists {
-		c.misses++
+		c.misses.Add(1)
 		return nil, false
 	}
 
 	if time.Since(entry.timestamp) > c.ttl {
-		c.misses++
+		c.misses.Add(1)
 		return nil, false
 	}
 
-	c.hits++
+	c.hits.Add(1)
 	return entry.config, true
 }
 
@@ -117,10 +119,9 @@ func (c *configCache) invalidateAll() {
 }
 
 // stats returns cache statistics.
+// No lock needed - atomic reads are inherently thread-safe.
 func (c *configCache) stats() (hits, misses int64) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.hits, c.misses
+	return c.hits.Load(), c.misses.Load()
 }
 
 // Manager manages repository configurations.
@@ -133,7 +134,7 @@ type Manager struct {
 }
 
 // New creates a new config manager.
-func New(ctx context.Context) *Manager {
+func New() *Manager {
 	return &Manager{
 		configs: make(map[string]*RepoConfig),
 		clients: make(map[string]*github.Client),
@@ -183,7 +184,7 @@ func createDefaultConfig() *RepoConfig {
 // LoadConfig loads the configuration for a GitHub org with retry logic.
 func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 	// Check cache first
-	if cachedConfig, found := m.cache.get(org); found {
+	if cfg, found := m.cache.get(org); found {
 		hits, misses := m.cache.stats()
 		slog.Debug("using cached config for organization",
 			logFieldOrg, org,
@@ -192,7 +193,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 			"cache_hit_ratio", float64(hits)/float64(hits+misses))
 
 		m.mu.Lock()
-		m.configs[org] = cachedConfig
+		m.configs[org] = cfg
 		m.mu.Unlock()
 		return nil
 	}
@@ -284,9 +285,9 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 	)
 	if err != nil {
 		// Use default empty config if not found
-		defaultConfig := createDefaultConfig()
-		m.configs[org] = defaultConfig
-		m.cache.set(org, defaultConfig)
+		cfg := createDefaultConfig()
+		m.configs[org] = cfg
+		m.cache.set(org, cfg)
 
 		hits, misses := m.cache.stats()
 		slog.Info("using default configuration for org",
@@ -307,9 +308,9 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 
 	var config RepoConfig
 	if err := yaml.Unmarshal([]byte(configContent), &config); err != nil {
-		defaultConfig := createDefaultConfig()
-		m.configs[org] = defaultConfig
-		m.cache.set(org, defaultConfig)
+		cfg := createDefaultConfig()
+		m.configs[org] = cfg
+		m.cache.set(org, cfg)
 
 		hits, misses := m.cache.stats()
 		slog.Error("failed to parse YAML configuration - using defaults",
@@ -331,31 +332,29 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 		"email_domain", config.Global.EmailDomain)
 
 	// Count channel configurations
-	mutedChannels := 0
-	totalRepos := 0
-	wildcardChannels := 0
-	for channelName, channelConfig := range config.Channels {
-		if channelConfig.Mute {
-			mutedChannels++
+	var muted, repos, wildcard int
+	for name, ch := range config.Channels {
+		if ch.Mute {
+			muted++
 		}
-		totalRepos += len(channelConfig.Repos)
+		repos += len(ch.Repos)
 
-		hasWildcard := false
-		for _, repo := range channelConfig.Repos {
+		hasWild := false
+		for _, repo := range ch.Repos {
 			if repo == "*" {
-				wildcardChannels++
-				hasWildcard = true
+				wildcard++
+				hasWild = true
 				break
 			}
 		}
 
 		slog.Debug("channel configuration loaded",
 			logFieldOrg, org,
-			"channel", channelName,
-			"repos_count", len(channelConfig.Repos),
-			"repos", channelConfig.Repos,
-			"muted", channelConfig.Mute,
-			"has_wildcard", hasWildcard)
+			"channel", name,
+			"repos_count", len(ch.Repos),
+			"repos", ch.Repos,
+			"muted", ch.Mute,
+			"has_wildcard", hasWild)
 	}
 
 	m.configs[org] = &config
@@ -371,9 +370,9 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 			"email_domain":        config.Global.EmailDomain,
 			"daily_reminders":     config.Global.DailyReminders,
 			"total_channels":      len(config.Channels),
-			"muted_channels":      mutedChannels,
-			"wildcard_channels":   wildcardChannels,
-			"total_repo_mappings": totalRepos,
+			"muted_channels":      muted,
+			"wildcard_channels":   wildcard,
+			"total_repo_mappings": repos,
 		},
 		"cached", true,
 		"cache_hits", hits,
