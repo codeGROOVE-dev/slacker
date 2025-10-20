@@ -161,15 +161,15 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 
 	// Initialize state store (Datastore + JSON fallback).
 	var stateStore interface {
-		GetThread(owner, repo string, number int, channelID string) (state.ThreadInfo, bool)
+		Thread(owner, repo string, number int, channelID string) (state.ThreadInfo, bool)
 		SaveThread(owner, repo string, number int, channelID string, info state.ThreadInfo) error
-		GetLastDM(userID, prURL string) (time.Time, bool)
+		LastDM(userID, prURL string) (time.Time, bool)
 		RecordDM(userID, prURL string, sentAt time.Time) error
-		GetLastDigest(userID, date string) (time.Time, bool)
+		LastDigest(userID, date string) (time.Time, bool)
 		RecordDigest(userID, date string, sentAt time.Time) error
 		WasProcessed(eventKey string) bool
 		MarkProcessed(eventKey string, ttl time.Duration) error
-		GetLastNotification(prURL string) time.Time
+		LastNotification(prURL string) time.Time
 		RecordNotification(prURL string, notifiedAt time.Time) error
 		Cleanup() error
 		Close() error
@@ -668,15 +668,15 @@ func runBotCoordinators(
 	configManager *config.Manager,
 	notifier *notify.Manager,
 	stateStore interface {
-		GetThread(owner, repo string, number int, channelID string) (state.ThreadInfo, bool)
+		Thread(owner, repo string, number int, channelID string) (state.ThreadInfo, bool)
 		SaveThread(owner, repo string, number int, channelID string, info state.ThreadInfo) error
-		GetLastDM(userID, prURL string) (time.Time, bool)
+		LastDM(userID, prURL string) (time.Time, bool)
 		RecordDM(userID, prURL string, sentAt time.Time) error
-		GetLastDigest(userID, date string) (time.Time, bool)
+		LastDigest(userID, date string) (time.Time, bool)
 		RecordDigest(userID, date string, sentAt time.Time) error
 		WasProcessed(eventKey string) bool
 		MarkProcessed(eventKey string, ttl time.Duration) error
-		GetLastNotification(prURL string) time.Time
+		LastNotification(prURL string) time.Time
 		RecordNotification(prURL string, notifiedAt time.Time) error
 		Cleanup() error
 		Close() error

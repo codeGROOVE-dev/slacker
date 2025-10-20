@@ -307,24 +307,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 
 	var config RepoConfig
 	if err := yaml.Unmarshal([]byte(configContent), &config); err != nil {
-		defaultConfig := &RepoConfig{
-			Channels: make(map[string]struct {
-				ReminderDMDelay *int     `yaml:"reminder_dm_delay"` // Optional: override global delay for this channel (0 = disabled)
-				Repos           []string `yaml:"repos"`
-				Mute            bool     `yaml:"mute"`
-			}),
-			Global: struct {
-				TeamID          string `yaml:"team_id"`
-				EmailDomain     string `yaml:"email_domain"`
-				ReminderDMDelay int    `yaml:"reminder_dm_delay"`
-				DailyReminders  bool   `yaml:"daily_reminders"`
-			}{
-				TeamID:          "",
-				EmailDomain:     "",
-				ReminderDMDelay: defaultReminderDMDelayMinutes,
-				DailyReminders:  true,
-			},
-		}
+		defaultConfig := createDefaultConfig()
 		m.configs[org] = defaultConfig
 		m.cache.set(org, defaultConfig)
 
@@ -356,26 +339,23 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 			mutedChannels++
 		}
 		totalRepos += len(channelConfig.Repos)
+
+		hasWildcard := false
 		for _, repo := range channelConfig.Repos {
 			if repo == "*" {
 				wildcardChannels++
+				hasWildcard = true
 				break
 			}
 		}
+
 		slog.Debug("channel configuration loaded",
 			logFieldOrg, org,
 			"channel", channelName,
 			"repos_count", len(channelConfig.Repos),
 			"repos", channelConfig.Repos,
 			"muted", channelConfig.Mute,
-			"has_wildcard", func() bool {
-				for _, r := range channelConfig.Repos {
-					if r == "*" {
-						return true
-					}
-				}
-				return false
-			}())
+			"has_wildcard", hasWildcard)
 	}
 
 	m.configs[org] = &config

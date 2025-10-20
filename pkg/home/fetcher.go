@@ -195,7 +195,7 @@ func (f *Fetcher) searchPRs(ctx context.Context, query string) ([]PR, error) {
 			continue // Skip malformed repo
 		}
 		owner, repoName := repoParts[0], repoParts[1]
-		if threadInfo, exists := f.stateStore.GetThread(owner, repoName, pr.Number, ""); exists {
+		if threadInfo, exists := f.stateStore.Thread(owner, repoName, pr.Number, ""); exists {
 			pr.LastEventTime = threadInfo.LastEventTime
 		}
 

@@ -83,27 +83,28 @@ func (tc *ThreadCache) Cleanup(maxAge time.Duration) {
 
 // Coordinator coordinates between GitHub, Slack, and notifications for a single org.
 type Coordinator struct {
-	slack          *slackpkg.Client
-	github         *github.Client
-	configManager  *config.Manager
-	notifier       *notify.Manager
-	userMapper     *usermapping.Service
-	sprinklerURL   string
-	threadCache    *ThreadCache  // In-memory cache for fast lookups
-	stateStore     StateStore    // Persistent state across restarts
-	workspaceName  string        // Track workspace name for better logging
-	eventSemaphore chan struct{} // Limits concurrent event processing (prevents overwhelming APIs)
+	slack            *slackpkg.Client
+	github           *github.Client
+	configManager    *config.Manager
+	notifier         *notify.Manager
+	userMapper       *usermapping.Service
+	sprinklerURL     string
+	threadCache      *ThreadCache   // In-memory cache for fast lookups
+	stateStore       StateStore     // Persistent state across restarts
+	workspaceName    string         // Track workspace name for better logging
+	eventSemaphore   chan struct{}  // Limits concurrent event processing (prevents overwhelming APIs)
+	processingEvents sync.WaitGroup // Tracks in-flight event processing for graceful shutdown
 }
 
 // StateStore interface for persistent state - allows dependency injection for testing.
 type StateStore interface {
-	GetThread(owner, repo string, number int, channelID string) (ThreadInfo, bool)
+	Thread(owner, repo string, number int, channelID string) (ThreadInfo, bool)
 	SaveThread(owner, repo string, number int, channelID string, info ThreadInfo) error
-	GetLastDM(userID, prURL string) (time.Time, bool)
+	LastDM(userID, prURL string) (time.Time, bool)
 	RecordDM(userID, prURL string, sentAt time.Time) error
 	WasProcessed(eventKey string) bool
 	MarkProcessed(eventKey string, ttl time.Duration) error
-	GetLastNotification(prURL string) time.Time
+	LastNotification(prURL string) time.Time
 	RecordNotification(prURL string, notifiedAt time.Time) error
 	Close() error
 }
@@ -1195,6 +1196,9 @@ func (c *Coordinator) handlePullRequestFromSprinkler(
 		logFieldOwner, owner,
 		logFieldRepo, repo,
 		"pr_number", prNumber,
+		"pr_state", checkResult.PullRequest.State,
+		"pr_draft", checkResult.PullRequest.Draft,
+		"pr_merged", checkResult.PullRequest.Merged,
 		"pr_size", checkResult.Analysis.Size,
 		"unresolved_comments", checkResult.Analysis.UnresolvedComments,
 		"checks_state", fmt.Sprintf("%+v", checkResult.Analysis.Checks),
