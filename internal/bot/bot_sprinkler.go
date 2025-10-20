@@ -278,19 +278,26 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 			NoReconnect:  false, // Enable automatic reconnection
 			PingInterval: 0,     // Use default (30 seconds)
 			OnConnect: func() {
-				slog.Info("sprinkler client connected",
+				slog.Warn("🟢 SPRINKLER CONNECTED",
 					"organization", organization,
-					"url", c.sprinklerURL)
+					"url", c.sprinklerURL,
+					"subscribed_events", "*",
+					"critical", "now receiving real-time webhook events")
 			},
 			OnDisconnect: func(err error) {
 				if err != nil {
-					slog.Error("sprinkler client disconnected",
+					slog.Error("🔴 SPRINKLER DISCONNECTED - WILL MISS EVENTS UNTIL RECONNECTED",
 						"organization", organization,
-						"error", err)
+						"error", err,
+						"impact", "real-time webhook events will be missed",
+						"fallback", "5-minute polling will catch missed events",
+						"action_required", "investigate why connection dropped")
 					return
 				}
-				slog.Info("sprinkler client disconnected normally",
-					"organization", organization)
+				slog.Warn("🟡 SPRINKLER DISCONNECTED (graceful)",
+					"organization", organization,
+					"reason", "clean shutdown or reconnection attempt",
+					"impact", "may miss events during reconnection window")
 			},
 			OnEvent: func(event client.Event) {
 				// SECURITY NOTE: Use detached context for event processing to prevent webhook
@@ -319,6 +326,10 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 	cleanupTicker := time.NewTicker(6 * time.Hour)
 	defer cleanupTicker.Stop()
 
+	// Connection health monitoring - log every minute to detect silent disconnections
+	healthTicker := time.NewTicker(1 * time.Minute)
+	defer healthTicker.Stop()
+
 	go func() {
 		for {
 			select {
@@ -327,6 +338,12 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 			case <-cleanupTicker.C:
 				c.threadCache.Cleanup(30 * 24 * time.Hour)
 				slog.Debug("cleaned up old thread cache entries", "organization", organization)
+			case <-healthTicker.C:
+				// Log connection health every minute
+				// This helps detect if we're silently disconnected for long periods
+				slog.Debug("sprinkler connection health check",
+					"organization", organization,
+					"note", "if you see this log but no events for >2min during active PR work, connection may be broken")
 			}
 		}
 	}()

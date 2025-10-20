@@ -232,9 +232,9 @@ func (f *Fetcher) enrichPRs(ctx context.Context, prs []PR, githubUsername string
 				checkResult, err = turnClient.Check(ctx, pr.URL, f.botUsername, pr.LastEventTime)
 				return err
 			},
-			retry.Attempts(3), // Fewer attempts for per-PR enrichment
+			retry.Attempts(5),
 			retry.Delay(500*time.Millisecond),
-			retry.MaxDelay(30*time.Second),
+			retry.MaxDelay(2*time.Minute),
 			retry.DelayType(retry.BackOffDelay),
 			retry.MaxJitter(time.Second),
 			retry.Context(ctx),
