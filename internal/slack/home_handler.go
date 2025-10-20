@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -37,10 +38,38 @@ func NewHomeHandler(
 
 // HandleAppHomeOpened updates the app home view when a user opens it.
 func (h *HomeHandler) HandleAppHomeOpened(ctx context.Context, teamID, slackUserID string) error {
-	slog.Debug("handling app home opened",
+	slog.Info("handling app home opened - fetching fresh data",
 		"team_id", teamID,
 		"slack_user_id", slackUserID)
 
+	// Try up to 2 times - first with cached client, second with fresh client after invalid_auth
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			slog.Info("retrying home view after invalid_auth", "team_id", teamID, "attempt", attempt+1)
+		}
+
+		err := h.tryHandleAppHomeOpened(ctx, teamID, slackUserID)
+		if err == nil {
+			return nil
+		}
+
+		// If invalid_auth and first attempt, invalidate cache and retry
+		if strings.Contains(err.Error(), "invalid_auth") && attempt == 0 {
+			slog.Warn("invalid_auth detected - invalidating cache and retrying",
+				"team_id", teamID)
+			h.slackManager.InvalidateCache(teamID)
+			continue
+		}
+
+		// Other errors or second attempt - return immediately
+		return err
+	}
+
+	return errors.New("failed after retries")
+}
+
+// tryHandleAppHomeOpened attempts to handle app home opened event.
+func (h *HomeHandler) tryHandleAppHomeOpened(ctx context.Context, teamID, slackUserID string) error {
 	// Get Slack client for this workspace
 	slackClient, err := h.slackManager.Client(ctx, teamID)
 	if err != nil {
@@ -50,8 +79,12 @@ func (h *HomeHandler) HandleAppHomeOpened(ctx context.Context, teamID, slackUser
 	// Get Slack user info to extract email
 	slackUser, err := slackClient.API().GetUserInfo(slackUserID)
 	if err != nil {
+		// Don't mask invalid_auth errors - let them propagate for retry logic
+		if strings.Contains(err.Error(), "invalid_auth") {
+			return fmt.Errorf("failed to get Slack user info: %w", err)
+		}
 		slog.Warn("failed to get Slack user info", "user_id", slackUserID, "error", err)
-		return h.publishPlaceholderHome(slackClient, slackUserID)
+		return h.publishPlaceholderHome(ctx, slackClient, slackUserID)
 	}
 
 	// Extract GitHub username from email (simple heuristic: part before @)
@@ -62,7 +95,7 @@ func (h *HomeHandler) HandleAppHomeOpened(ctx context.Context, teamID, slackUser
 		slog.Warn("could not extract GitHub username from Slack email",
 			"slack_user_id", slackUserID,
 			"email", email)
-		return h.publishPlaceholderHome(slackClient, slackUserID)
+		return h.publishPlaceholderHome(ctx, slackClient, slackUserID)
 	}
 	githubUsername := email[:atIndex]
 
@@ -70,7 +103,7 @@ func (h *HomeHandler) HandleAppHomeOpened(ctx context.Context, teamID, slackUser
 	workspaceOrgs := h.workspaceOrgs(teamID)
 	if len(workspaceOrgs) == 0 {
 		slog.Warn("no workspace orgs found", "team_id", teamID)
-		return h.publishPlaceholderHome(slackClient, slackUserID)
+		return h.publishPlaceholderHome(ctx, slackClient, slackUserID)
 	}
 
 	// Get GitHub client for first org (they all share the same app)
@@ -92,7 +125,7 @@ func (h *HomeHandler) HandleAppHomeOpened(ctx context.Context, teamID, slackUser
 		slog.Error("failed to fetch dashboard",
 			"github_user", githubUsername,
 			"error", err)
-		return h.publishPlaceholderHome(slackClient, slackUserID)
+		return h.publishPlaceholderHome(ctx, slackClient, slackUserID)
 	}
 
 	// Add workspace orgs to dashboard for UI display
@@ -102,15 +135,17 @@ func (h *HomeHandler) HandleAppHomeOpened(ctx context.Context, teamID, slackUser
 	blocks := home.BuildBlocks(dashboard, workspaceOrgs[0])
 
 	// Publish to Slack
-	if err := slackClient.PublishHomeView(slackUserID, blocks); err != nil {
+	if err := slackClient.PublishHomeView(ctx, slackUserID, blocks); err != nil {
 		return fmt.Errorf("failed to publish home view: %w", err)
 	}
 
-	slog.Info("published home view",
+	slog.Info("published home view with fresh data",
 		"slack_user_id", slackUserID,
 		"github_user", githubUsername,
 		"incoming_prs", len(dashboard.IncomingPRs),
+		"incoming_blocked", dashboard.Counts().IncomingBlocked,
 		"outgoing_prs", len(dashboard.OutgoingPRs),
+		"outgoing_blocked", dashboard.Counts().OutgoingBlocked,
 		"workspace_orgs", len(workspaceOrgs))
 
 	return nil
@@ -137,7 +172,7 @@ func (h *HomeHandler) workspaceOrgs(teamID string) []string {
 }
 
 // publishPlaceholderHome publishes a simple placeholder home view.
-func (*HomeHandler) publishPlaceholderHome(slackClient *Client, slackUserID string) error {
+func (*HomeHandler) publishPlaceholderHome(ctx context.Context, slackClient *Client, slackUserID string) error {
 	slog.Debug("publishing placeholder home", "user_id", slackUserID)
 
 	blocks := home.BuildBlocks(&home.Dashboard{
@@ -146,5 +181,5 @@ func (*HomeHandler) publishPlaceholderHome(slackClient *Client, slackUserID stri
 		WorkspaceOrgs: []string{"your-org"},
 	}, "your-org")
 
-	return slackClient.PublishHomeView(slackUserID, blocks)
+	return slackClient.PublishHomeView(ctx, slackUserID, blocks)
 }

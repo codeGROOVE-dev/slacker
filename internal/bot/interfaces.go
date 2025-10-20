@@ -19,7 +19,7 @@ type SlackClient interface {
 	IsBotInChannel(ctx context.Context, channelID string) bool
 	BotInfo(ctx context.Context) (*slack.AuthTestResponse, error)
 	WorkspaceInfo(ctx context.Context) (*slack.TeamInfo, error)
-	PublishHomeView(userID string, blocks []slack.Block) error
+	PublishHomeView(ctx context.Context, userID string, blocks []slack.Block) error
 	API() *slack.Client
 }
 

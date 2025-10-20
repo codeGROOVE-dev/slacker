@@ -50,6 +50,7 @@ type Client struct {
 	cache             *apiCache
 	signingSecret     string
 	teamID            string                                                 // Workspace team ID
+	manager           *Manager                                               // Reference to manager for cache invalidation
 	homeViewHandler   func(ctx context.Context, teamID, userID string) error // Callback for app_home_opened events
 	homeViewHandlerMu sync.RWMutex
 	stateStore        StateStore // State store for DM message tracking
@@ -138,6 +139,21 @@ func (c *Client) SetStateStore(store StateStore) {
 	c.stateStoreMu.Lock()
 	defer c.stateStoreMu.Unlock()
 	c.stateStore = store
+}
+
+// SetManager sets the manager reference for cache invalidation.
+func (c *Client) SetManager(manager *Manager) {
+	c.manager = manager
+}
+
+// invalidateWorkspaceCache invalidates this workspace's client in the manager cache.
+// This forces a fresh token to be fetched from GSM on next access.
+func (c *Client) invalidateWorkspaceCache() {
+	if c.manager != nil && c.teamID != "" {
+		c.manager.InvalidateCache(c.teamID)
+		slog.Info("invalidated workspace cache due to auth event",
+			"team_id", c.teamID)
+	}
 }
 
 // WorkspaceInfo returns information about the current workspace (cached for 1 hour).
@@ -878,7 +894,11 @@ func (c *Client) EventsHandler(writer http.ResponseWriter, r *http.Request) {
 			slog.Debug("received app mention", "event", evt)
 		case *slackevents.AppHomeOpenedEvent:
 			// Update app home when user opens it
-			slog.Debug("app home opened", "user", evt.User)
+			slog.Info("app home opened - rendering fresh dashboard",
+				"user_id", evt.User,
+				"team_id", c.teamID,
+				"tab", evt.Tab,
+				"trigger", "slack_event")
 
 			// Call registered home view handler if present
 			c.homeViewHandlerMu.RLock()
@@ -896,6 +916,11 @@ func (c *Client) EventsHandler(writer http.ResponseWriter, r *http.Request) {
 							"team_id", teamID,
 							"user", userID,
 							"error", err)
+					} else {
+						slog.Info("successfully rendered home view",
+							"team_id", teamID,
+							"user", userID,
+							"trigger", "slack_event")
 					}
 				}(c.teamID, evt.User)
 			} else {
@@ -914,6 +939,16 @@ func (c *Client) EventsHandler(writer http.ResponseWriter, r *http.Request) {
 				"channel_id", evt.Channel,
 				"user_id", evt.User)
 			c.invalidateChannelCache(evt.Channel)
+		case *slackevents.TokensRevokedEvent:
+			// Tokens revoked - invalidate workspace client cache to force refresh
+			slog.Warn("tokens revoked event received - invalidating workspace cache",
+				"team_id", c.teamID)
+			c.invalidateWorkspaceCache()
+		case *slackevents.AppUninstalledEvent:
+			// App uninstalled - invalidate workspace client cache
+			slog.Warn("app uninstalled event received",
+				"team_id", c.teamID)
+			c.invalidateWorkspaceCache()
 		}
 	}
 
@@ -925,22 +960,41 @@ func (c *Client) InteractionsHandler(writer http.ResponseWriter, r *http.Request
 	// Parse the payload.
 	payload := r.FormValue("payload")
 	if payload == "" {
+		slog.Error("interaction missing payload",
+			"remote_addr", r.RemoteAddr,
+			"user_agent", r.Header.Get("User-Agent"))
 		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
 	var interaction slack.InteractionCallback
 	if err := json.Unmarshal([]byte(payload), &interaction); err != nil {
-		slog.Error("failed to unmarshal interaction", "error", err)
+		slog.Error("failed to unmarshal interaction",
+			"error", err,
+			"payload_size", len(payload),
+			"remote_addr", r.RemoteAddr)
 		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	// Verify the request signature.
-	if !c.verifyRequest(r) {
-		writer.WriteHeader(http.StatusUnauthorized)
-		return
+	// NOTE: Signature verification is handled by EventRouter before routing here.
+	// We don't verify again because FormValue() already consumed the body above.
+
+	// Log the interaction for debugging
+	var actionIDs []string
+	if interaction.Type == slack.InteractionTypeBlockActions {
+		for _, action := range interaction.ActionCallback.BlockActions {
+			actionIDs = append(actionIDs, action.ActionID)
+		}
 	}
+
+	slog.Info("processing interaction",
+		"type", interaction.Type,
+		"team_id", interaction.Team.ID,
+		"user_id", interaction.User.ID,
+		"user_name", interaction.User.Name,
+		"action_ids", actionIDs,
+		"remote_addr", r.RemoteAddr)
 
 	// Handle different interaction types.
 	switch interaction.Type {
@@ -956,6 +1010,10 @@ func (c *Client) InteractionsHandler(writer http.ResponseWriter, r *http.Request
 		slog.Debug("unhandled interaction type", "type", interaction.Type)
 	}
 
+	slog.Debug("interaction handled successfully",
+		"type", interaction.Type,
+		"user_id", interaction.User.ID,
+		"response_status", http.StatusOK)
 	writer.WriteHeader(http.StatusOK)
 }
 
@@ -977,20 +1035,26 @@ func (c *Client) handleBlockAction(interaction *slack.InteractionCallback) {
 
 			if handler != nil {
 				// Refresh asynchronously to avoid blocking the response
-				//nolint:contextcheck // Use detached context for async button refresh - ensures operation completes even if parent context is cancelled
 				go func(teamID, userID string) {
 					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					defer cancel()
 
 					slog.Info("refreshing dashboard via button click",
 						"team_id", teamID,
-						"user", userID)
+						"user_id", userID,
+						"trigger", "refresh_button")
 
 					if err := handler(ctx, teamID, userID); err != nil {
 						slog.Error("failed to refresh dashboard",
 							"team_id", teamID,
-							"user", userID,
+							"user_id", userID,
+							"trigger", "refresh_button",
 							"error", err)
+					} else {
+						slog.Info("successfully refreshed dashboard",
+							"team_id", teamID,
+							"user_id", userID,
+							"trigger", "refresh_button")
 					}
 				}(interaction.Team.ID, interaction.User.ID)
 			} else {
@@ -1129,7 +1193,7 @@ func isRateLimitError(err error) bool {
 }
 
 // PublishHomeView publishes a view to a user's app home with retry logic.
-func (c *Client) PublishHomeView(userID string, blocks []slack.Block) error {
+func (c *Client) PublishHomeView(ctx context.Context, userID string, blocks []slack.Block) error {
 	view := slack.HomeTabViewRequest{
 		Type:   "home",
 		Blocks: slack.Blocks{BlockSet: blocks},
@@ -1137,11 +1201,20 @@ func (c *Client) PublishHomeView(userID string, blocks []slack.Block) error {
 
 	err := retry.Do(
 		func() error {
-			_, err := c.api.PublishView(userID, view, "")
+			// Properly omit hash field to avoid hash_conflict errors
+			_, err := c.api.PublishViewContext(ctx, slack.PublishViewContextRequest{
+				UserID: userID,
+				View:   view,
+				Hash:   nil, // Properly omits hash field
+			})
 			if err != nil {
 				if isRateLimitError(err) {
 					slog.Warn("rate limited publishing home view, backing off", "user", userID)
 					return err
+				}
+				// invalid_auth should propagate up to home handler for proper retry with fresh client
+				if strings.Contains(err.Error(), "invalid_auth") {
+					return retry.Unrecoverable(err)
 				}
 				// Don't retry on user_not_found
 				if strings.Contains(err.Error(), "user_not_found") {
@@ -1152,7 +1225,7 @@ func (c *Client) PublishHomeView(userID string, blocks []slack.Block) error {
 			}
 			return nil
 		},
-		retry.Attempts(5),
+		retry.Attempts(2),
 		retry.Delay(time.Second),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
