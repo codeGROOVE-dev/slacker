@@ -318,12 +318,24 @@ func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 		if startErr != nil {
 			errCount++
 
-			// Check if it's an authentication error
-			if strings.Contains(startErr.Error(), "403") || strings.Contains(startErr.Error(), "401") {
-				slog.Warn("authentication failed, refreshing token",
-					"organization", organization,
-					"consecutive_errors", errCount,
-					"error", startErr)
+			// Check if it's an authentication error OR if we've had many failures (token might be expired)
+			// After 5 consecutive failures, proactively refresh the token
+			isAuthError := strings.Contains(startErr.Error(), "403") || strings.Contains(startErr.Error(), "401")
+			shouldRefreshToken := isAuthError || errCount >= 5
+
+			if shouldRefreshToken {
+				if isAuthError {
+					slog.Warn("authentication failed, refreshing token",
+						"organization", organization,
+						"consecutive_errors", errCount,
+						"error", startErr)
+				} else {
+					slog.Info("multiple connection failures, proactively refreshing token",
+						"organization", organization,
+						"consecutive_errors", errCount,
+						"error", startErr,
+						"reason", "token may have expired")
+				}
 
 				sprinklerClient.Stop() // Stop old client before creating new one
 

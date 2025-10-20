@@ -37,6 +37,22 @@ type Client struct {
 	tokenMutex        sync.RWMutex
 }
 
+// refreshingTokenSource implements oauth2.TokenSource that automatically refreshes tokens.
+type refreshingTokenSource struct {
+	client *Client
+}
+
+// Token returns a fresh token, refreshing if necessary.
+func (ts *refreshingTokenSource) Token() (*oauth2.Token, error) {
+	// Use a background context for token refresh - token operations should complete
+	// independently of request contexts to avoid breaking long-running connections
+	token := ts.client.InstallationToken(context.Background())
+	if token == "" {
+		return nil, errors.New("no token available")
+	}
+	return &oauth2.Token{AccessToken: token}, nil
+}
+
 // userAgentTransport adds a custom User-Agent header to requests.
 type userAgentTransport struct {
 	base http.RoundTripper
@@ -186,16 +202,19 @@ func (c *Client) authenticate(ctx context.Context) error {
 			"installation_id", c.installationID)
 	}
 
-	// Create installation client with custom user-agent.
-	ts = oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token.GetToken()})
+	// Create installation client with auto-refreshing token source and custom user-agent.
+	// The refreshingTokenSource will automatically call InstallationToken() which handles
+	// token expiry checking and refreshing.
+	ts = &refreshingTokenSource{client: c}
 	tc = oauth2.NewClient(ctx, ts)
 	tc.Transport = &userAgentTransport{base: tc.Transport}
 	c.client = github.NewClient(tc)
 
 	// Store the token with expiry (GitHub tokens expire after 1 hour).
+	// For security, refresh every 30 minutes instead of waiting until near expiry.
 	c.tokenMutex.Lock()
 	c.installationToken = token.GetToken()
-	c.tokenExpiry = time.Now().Add(55 * time.Minute) // Refresh 5 minutes before expiry
+	c.tokenExpiry = time.Now().Add(30 * time.Minute) // Refresh every 30 minutes for security
 	c.tokenMutex.Unlock()
 
 	// Test the token by making a simple API call

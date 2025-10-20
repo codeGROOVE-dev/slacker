@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -427,6 +428,9 @@ func (m *Manager) ChannelsForRepo(org, repo string) []string {
 
 	// First, check explicit YAML configuration
 	for channelName, channelConfig := range config.Channels {
+		// Normalize channel name to lowercase (Slack channels are always lowercase)
+		normalizedChannelName := strings.ToLower(channelName)
+
 		// Check if this channel explicitly includes this repo
 		for _, configRepo := range channelConfig.Repos {
 			if m.matchesRepo(configRepo, repo) {
@@ -436,11 +440,11 @@ func (m *Manager) ChannelsForRepo(org, repo string) []string {
 					slog.Debug("skipping explicitly muted channel",
 						logFieldOrg, org,
 						"repo", repo,
-						"channel", channelName,
+						"channel", normalizedChannelName,
 						"muted", true)
 					continue
 				}
-				channels = append(channels, channelName)
+				channels = append(channels, normalizedChannelName)
 				break // Don't add the same channel multiple times
 			}
 		}
@@ -467,7 +471,15 @@ func (m *Manager) ChannelsForRepo(org, repo string) []string {
 		}
 
 		// Check if auto-discovered channel is explicitly muted
-		if channelConfig, exists := config.Channels[autoChannel]; exists && channelConfig.Mute {
+		// Need to check case-insensitively since YAML keys preserve case
+		var channelMuted bool
+		for yamlChannelName, channelConfig := range config.Channels {
+			if strings.EqualFold(yamlChannelName, autoChannel) && channelConfig.Mute {
+				channelMuted = true
+				break
+			}
+		}
+		if channelMuted {
 			slog.Info("auto-discovered channel is explicitly muted in config",
 				logFieldOrg, org,
 				"repo", repo,
@@ -518,8 +530,8 @@ func (*Manager) matchesRepo(pattern, repo string) bool {
 // For example: repo "goose" -> channel "#goose", repo "my-service" -> channel "#my-service".
 func (*Manager) autoDiscoverChannels(org, repo string) []string {
 	// Convert repo name to channel name
-	// Most repos will match their channel name directly
-	channelName := repo
+	// Slack channel names are always lowercase
+	channelName := strings.ToLower(repo)
 
 	slog.Debug("attempting auto-discovery of channel for repo",
 		logFieldOrg, org,
