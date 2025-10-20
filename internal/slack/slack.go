@@ -799,6 +799,7 @@ func (c *Client) EventsHandler(writer http.ResponseWriter, r *http.Request) {
 			c.homeViewHandlerMu.RUnlock()
 
 			if handler != nil {
+				//nolint:contextcheck // Use detached context for async event processing - prevents webhook events from being lost during shutdown
 				go func(teamID, userID string) {
 					homeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					defer cancel()
@@ -858,7 +859,8 @@ func (c *Client) InteractionsHandler(writer http.ResponseWriter, r *http.Request
 	switch interaction.Type {
 	case slack.InteractionTypeBlockActions:
 		// Handle block actions (buttons, selects, etc.).
-		slog.Debug("received block action", "interaction", interaction)
+		//nolint:contextcheck // handleBlockAction spawns async goroutines with detached contexts - this is intentional
+		c.handleBlockAction(&interaction)
 	case slack.InteractionTypeViewSubmission:
 		// Handle modal submissions.
 		slog.Debug("received view submission", "interaction", interaction)
@@ -868,6 +870,51 @@ func (c *Client) InteractionsHandler(writer http.ResponseWriter, r *http.Request
 	}
 
 	writer.WriteHeader(http.StatusOK)
+}
+
+// handleBlockAction handles block action interactions (button clicks, etc.).
+func (c *Client) handleBlockAction(interaction *slack.InteractionCallback) {
+	// Process each action in the callback
+	for _, action := range interaction.ActionCallback.BlockActions {
+		slog.Debug("processing block action",
+			"action_id", action.ActionID,
+			"user", interaction.User.ID,
+			"team", interaction.Team.ID)
+
+		switch action.ActionID {
+		case "refresh_dashboard":
+			// Trigger home view refresh
+			c.homeViewHandlerMu.RLock()
+			handler := c.homeViewHandler
+			c.homeViewHandlerMu.RUnlock()
+
+			if handler != nil {
+				// Refresh asynchronously to avoid blocking the response
+				//nolint:contextcheck // Use detached context for async button refresh - ensures operation completes even if parent context is cancelled
+				go func(teamID, userID string) {
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+
+					slog.Info("refreshing dashboard via button click",
+						"team_id", teamID,
+						"user", userID)
+
+					if err := handler(ctx, teamID, userID); err != nil {
+						slog.Error("failed to refresh dashboard",
+							"team_id", teamID,
+							"user", userID,
+							"error", err)
+					}
+				}(interaction.Team.ID, interaction.User.ID)
+			} else {
+				slog.Warn("refresh requested but no home view handler registered",
+					"user", interaction.User.ID)
+			}
+
+		default:
+			slog.Debug("unhandled action_id", "action_id", action.ActionID)
+		}
+	}
 }
 
 // SlashCommandHandler handles Slack slash commands.

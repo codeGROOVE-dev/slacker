@@ -95,6 +95,9 @@ func (h *HomeHandler) HandleAppHomeOpened(ctx context.Context, teamID, slackUser
 		return h.publishPlaceholderHome(slackClient, slackUserID)
 	}
 
+	// Add workspace orgs to dashboard for UI display
+	dashboard.WorkspaceOrgs = workspaceOrgs
+
 	// Build Block Kit UI - use first org as primary
 	blocks := home.BuildBlocks(dashboard, workspaceOrgs[0])
 

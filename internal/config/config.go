@@ -28,11 +28,12 @@ const (
 
 // ServerConfig holds the server configuration from environment variables.
 type ServerConfig struct {
-	DataDir            string
-	SlackSigningSecret string
-	GitHubAppID        string
-	GitHubPrivateKey   string
-	SprinklerURL       string
+	DataDir               string
+	SlackSigningSecret    string
+	GitHubAppID           string
+	GitHubPrivateKey      string
+	SprinklerURL          string
+	AllowPersonalAccounts bool // Allow processing GitHub personal accounts (default: false for DoS protection)
 }
 
 // RepoConfig represents the slack.yaml configuration for a GitHub org.
