@@ -15,6 +15,15 @@ type ThreadInfo struct {
 	MessageText   string    `json:"message_text"`
 }
 
+// DMInfo stores information about a DM message for a PR.
+type DMInfo struct {
+	ChannelID   string    `json:"channel_id"`   // DM conversation channel ID
+	MessageTS   string    `json:"message_ts"`   // Message timestamp for updating
+	MessageText string    `json:"message_text"` // Current message text
+	UpdatedAt   time.Time `json:"updated_at"`   // When we last updated this message
+	SentAt      time.Time `json:"sent_at"`      // When we first sent this message
+}
+
 // Store provides persistent storage for bot state.
 // Implementations must be safe for concurrent use.
 type Store interface {
@@ -25,6 +34,10 @@ type Store interface {
 	// DM tracking - prevent duplicate notifications
 	LastDM(userID, prURL string) (time.Time, bool)
 	RecordDM(userID, prURL string, sentAt time.Time) error
+
+	// DM message tracking - store DM message info for updating
+	DMMessage(userID, prURL string) (DMInfo, bool)
+	SaveDMMessage(userID, prURL string, info DMInfo) error
 
 	// Daily digest tracking - one per user per day
 	LastDigest(userID, date string) (time.Time, bool)

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/retry"
+	"github.com/codeGROOVE-dev/slacker/internal/state"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 )
@@ -51,6 +52,8 @@ type Client struct {
 	teamID            string                                                 // Workspace team ID
 	homeViewHandler   func(ctx context.Context, teamID, userID string) error // Callback for app_home_opened events
 	homeViewHandlerMu sync.RWMutex
+	stateStore        StateStore // State store for DM message tracking
+	stateStoreMu      sync.RWMutex
 }
 
 // set stores a value in the cache with TTL.
@@ -128,6 +131,13 @@ func (c *Client) SetHomeViewHandler(handler func(ctx context.Context, teamID, us
 // SetTeamID sets the team ID for this client.
 func (c *Client) SetTeamID(teamID string) {
 	c.teamID = teamID
+}
+
+// SetStateStore sets the state store for DM message tracking.
+func (c *Client) SetStateStore(store StateStore) {
+	c.stateStoreMu.Lock()
+	defer c.stateStoreMu.Unlock()
+	c.stateStore = store
 }
 
 // WorkspaceInfo returns information about the current workspace (cached for 1 hour).
@@ -562,13 +572,13 @@ func (c *Client) HasRecentDMAboutPR(ctx context.Context, userID, prURL string) (
 }
 
 // SendDirectMessage sends a direct message to a user with retry logic.
-func (c *Client) SendDirectMessage(ctx context.Context, userID, text string) error {
+func (c *Client) SendDirectMessage(ctx context.Context, userID, text string) (dmChannelID, messageTS string, err error) {
 	slog.Info("sending DM to user", "user", userID)
 
 	var channelID string
 
 	// First, open conversation with retry
-	err := retry.Do(
+	err = retry.Do(
 		func() error {
 			channel, _, _, err := c.api.OpenConversationContext(ctx, &slack.OpenConversationParameters{
 				Users: []string{userID},
@@ -589,13 +599,14 @@ func (c *Client) SendDirectMessage(ctx context.Context, userID, text string) err
 		retry.Context(ctx),
 	)
 	if err != nil {
-		return fmt.Errorf("failed to open conversation after retries: %w", err)
+		return "", "", fmt.Errorf("failed to open conversation after retries: %w", err)
 	}
 
+	var msgTS string
 	// Then send message with retry
 	err = retry.Do(
 		func() error {
-			_, _, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText(text, false))
+			_, ts, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText(text, false))
 			if err != nil {
 				if isRateLimitError(err) {
 					slog.Warn("rate limited sending DM, backing off", "user", userID)
@@ -604,6 +615,7 @@ func (c *Client) SendDirectMessage(ctx context.Context, userID, text string) err
 				slog.Warn("failed to send DM, retrying", "user", userID, "error", err)
 				return err
 			}
+			msgTS = ts
 			return nil
 		},
 		retry.Attempts(5),
@@ -615,10 +627,85 @@ func (c *Client) SendDirectMessage(ctx context.Context, userID, text string) err
 		retry.Context(ctx),
 	)
 	if err != nil {
-		return fmt.Errorf("failed to send DM after retries: %w", err)
+		return "", "", fmt.Errorf("failed to send DM after retries: %w", err)
 	}
 
-	slog.Info("successfully sent DM", "user", userID)
+	slog.Info("successfully sent DM", "user", userID, "channel_id", channelID, "message_ts", msgTS)
+	return channelID, msgTS, nil
+}
+
+// SaveDMMessageInfo saves DM message info to state store for future updates.
+func (c *Client) SaveDMMessageInfo(ctx context.Context, userID, prURL, channelID, messageTS, messageText string) error {
+	c.stateStoreMu.RLock()
+	store := c.stateStore
+	c.stateStoreMu.RUnlock()
+
+	if store == nil {
+		slog.Debug("no state store configured, skipping DM message save", "user", userID, "pr_url", prURL)
+		return nil
+	}
+
+	info := state.DMInfo{
+		ChannelID:   channelID,
+		MessageTS:   messageTS,
+		MessageText: messageText,
+		SentAt:      time.Now(),
+	}
+
+	if err := store.SaveDMMessage(userID, prURL, info); err != nil {
+		return fmt.Errorf("failed to save DM message info: %w", err)
+	}
+
+	slog.Debug("saved DM message info for future updates",
+		"user", userID,
+		"pr_url", prURL,
+		"channel_id", channelID,
+		"message_ts", messageTS)
+
+	return nil
+}
+
+// UpdateDMMessage updates a previously sent DM message.
+func (c *Client) UpdateDMMessage(ctx context.Context, userID, prURL, newText string) error {
+	c.stateStoreMu.RLock()
+	store := c.stateStore
+	c.stateStoreMu.RUnlock()
+
+	if store == nil {
+		slog.Debug("no state store configured, cannot update DM", "user", userID, "pr_url", prURL)
+		return nil
+	}
+
+	// Get stored DM message info
+	info, exists := store.DMMessage(userID, prURL)
+	if !exists {
+		slog.Debug("no DM message found to update",
+			"user", userID,
+			"pr_url", prURL,
+			"reason", "never sent or too old")
+		return nil
+	}
+
+	// Update the message using Slack API
+	if err := c.UpdateMessage(ctx, info.ChannelID, info.MessageTS, newText); err != nil {
+		return fmt.Errorf("failed to update DM message: %w", err)
+	}
+
+	// Update stored message text
+	info.MessageText = newText
+	if err := store.SaveDMMessage(userID, prURL, info); err != nil {
+		slog.Warn("failed to update stored DM message text",
+			"user", userID,
+			"pr_url", prURL,
+			"error", err)
+	}
+
+	slog.Info("updated DM message",
+		"user", userID,
+		"pr_url", prURL,
+		"channel_id", info.ChannelID,
+		"message_ts", info.MessageTS)
+
 	return nil
 }
 
@@ -1361,7 +1448,9 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 		}
 	}
 
-	slog.Warn("could not resolve channel name to ID", "channel", channelName)
+	slog.Warn("could not resolve channel name to ID",
+		"channel", channelName,
+		"team_id", c.teamID)
 	// Cache the failure for SHORT time (user might create channel or fix typo)
 	c.cache.set(cacheKey, channelName, 45*time.Second)
 	slog.Info("caching channel resolution failure briefly to allow for channel creation",

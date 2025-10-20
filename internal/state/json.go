@@ -20,6 +20,7 @@ type JSONStore struct {
 	// In-memory cache for fast lookups
 	threads       map[string]ThreadInfo
 	dms           map[string]time.Time
+	dmMessages    map[string]DMInfo // DM message tracking for updates
 	digests       map[string]time.Time
 	events        map[string]time.Time
 	notifications map[string]time.Time
@@ -42,6 +43,7 @@ func NewJSONStore() (*JSONStore, error) {
 		baseDir:       baseDir,
 		threads:       make(map[string]ThreadInfo),
 		dms:           make(map[string]time.Time),
+		dmMessages:    make(map[string]DMInfo),
 		digests:       make(map[string]time.Time),
 		events:        make(map[string]time.Time),
 		notifications: make(map[string]time.Time),
@@ -142,6 +144,26 @@ func (s *JSONStore) RecordDM(userID, prURL string, sentAt time.Time) error {
 	return s.save()
 }
 
+// DMMessage retrieves DM message information for a user and PR.
+func (s *JSONStore) DMMessage(userID, prURL string) (DMInfo, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	key := dmKey(userID, prURL)
+	info, exists := s.dmMessages[key]
+	return info, exists
+}
+
+// SaveDMMessage saves DM message information for a user and PR.
+func (s *JSONStore) SaveDMMessage(userID, prURL string, info DMInfo) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := dmKey(userID, prURL)
+	info.UpdatedAt = time.Now()
+	s.dmMessages[key] = info
+	s.modified = true
+	return s.save()
+}
+
 // LastDigest retrieves the last digest timestamp for a user and date.
 func (s *JSONStore) LastDigest(userID, date string) (time.Time, bool) {
 	s.mu.RLock()
@@ -204,6 +226,7 @@ func (s *JSONStore) Cleanup() error {
 	now := time.Now()
 	cleanedThreads := 0
 	cleanedDMs := 0
+	cleanedDMMessages := 0
 	cleanedDigests := 0
 	cleanedEvents := 0
 
@@ -223,6 +246,14 @@ func (s *JSONStore) Cleanup() error {
 		}
 	}
 
+	// Clean up old DM messages (>90 days)
+	for key, info := range s.dmMessages {
+		if now.Sub(info.UpdatedAt) > 90*24*time.Hour {
+			delete(s.dmMessages, key)
+			cleanedDMMessages++
+		}
+	}
+
 	// Clean up old digests (>30 days)
 	for key, t := range s.digests {
 		if now.Sub(t) > 30*24*time.Hour {
@@ -239,10 +270,11 @@ func (s *JSONStore) Cleanup() error {
 		}
 	}
 
-	if cleanedThreads+cleanedDMs+cleanedDigests+cleanedEvents > 0 {
+	if cleanedThreads+cleanedDMs+cleanedDMMessages+cleanedDigests+cleanedEvents > 0 {
 		slog.Info("cleaned up old state",
 			"threads", cleanedThreads,
 			"dms", cleanedDMs,
+			"dm_messages", cleanedDMMessages,
 			"digests", cleanedDigests,
 			"events", cleanedEvents)
 		s.modified = true
@@ -266,6 +298,7 @@ func (s *JSONStore) Close() error {
 type persistentState struct {
 	Threads       map[string]ThreadInfo `json:"threads"`
 	DMs           map[string]time.Time  `json:"dms"`
+	DMMessages    map[string]DMInfo     `json:"dm_messages"`
 	Digests       map[string]time.Time  `json:"digests"`
 	Events        map[string]time.Time  `json:"events"`
 	Notifications map[string]time.Time  `json:"notifications"`
@@ -281,6 +314,7 @@ func (s *JSONStore) save() error {
 	state := persistentState{
 		Threads:       s.threads,
 		DMs:           s.dms,
+		DMMessages:    s.dmMessages,
 		Digests:       s.digests,
 		Events:        s.events,
 		Notifications: s.notifications,
@@ -329,6 +363,7 @@ func (s *JSONStore) load() error {
 
 	s.threads = state.Threads
 	s.dms = state.DMs
+	s.dmMessages = state.DMMessages
 	s.digests = state.Digests
 	s.events = state.Events
 	s.notifications = state.Notifications
@@ -338,6 +373,9 @@ func (s *JSONStore) load() error {
 	}
 	if s.dms == nil {
 		s.dms = make(map[string]time.Time)
+	}
+	if s.dmMessages == nil {
+		s.dmMessages = make(map[string]DMInfo)
 	}
 	if s.digests == nil {
 		s.digests = make(map[string]time.Time)
@@ -352,6 +390,7 @@ func (s *JSONStore) load() error {
 	slog.Info("loaded state from disk",
 		"threads", len(s.threads),
 		"dms", len(s.dms),
+		"dm_messages", len(s.dmMessages),
 		"digests", len(s.digests),
 		"events", len(s.events),
 		"notifications", len(s.notifications))

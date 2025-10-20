@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/codeGROOVE-dev/gsm"
+	"github.com/codeGROOVE-dev/slacker/internal/state"
 )
 
 // WorkspaceMetadata contains metadata about a Slack workspace installation.
@@ -18,12 +19,19 @@ type WorkspaceMetadata struct {
 	AccessToken string `json:"-"` // Never serialize token to JSON
 }
 
+// StateStore interface for DM message tracking.
+type StateStore interface {
+	DMMessage(userID, prURL string) (state.DMInfo, bool)
+	SaveDMMessage(userID, prURL string, info state.DMInfo) error
+}
+
 // Manager manages Slack clients for multiple workspaces.
 type Manager struct {
 	clients         map[string]*Client // team_id -> client
 	metadata        map[string]*WorkspaceMetadata
 	signingSecret   string
 	homeViewHandler func(ctx context.Context, teamID, userID string) error // Global home view handler
+	stateStore      StateStore                                             // State store for DM message tracking
 	mu              sync.RWMutex
 }
 
@@ -33,6 +41,18 @@ func NewManager(signingSecret string) *Manager {
 		clients:       make(map[string]*Client),
 		metadata:      make(map[string]*WorkspaceMetadata),
 		signingSecret: signingSecret,
+	}
+}
+
+// SetStateStore sets the state store for DM message tracking.
+func (m *Manager) SetStateStore(store StateStore) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stateStore = store
+
+	// Update existing clients with the state store
+	for _, client := range m.clients {
+		client.SetStateStore(store)
 	}
 }
 
@@ -87,6 +107,11 @@ func (m *Manager) Client(ctx context.Context, teamID string) (*Client, error) {
 	// Set home view handler if configured
 	if m.homeViewHandler != nil {
 		client.SetHomeViewHandler(m.homeViewHandler)
+	}
+
+	// Set state store if configured
+	if m.stateStore != nil {
+		client.SetStateStore(m.stateStore)
 	}
 
 	// Cache it
