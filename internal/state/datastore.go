@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/datastore"
@@ -317,13 +318,7 @@ func (s *DatastoreStore) DMMessage(userID, prURL string) (DMInfo, bool) {
 	}
 
 	// Found in Datastore - update memory cache and return
-	result := DMInfo{
-		ChannelID:   entity.ChannelID,
-		MessageTS:   entity.MessageTS,
-		MessageText: entity.MessageText,
-		UpdatedAt:   entity.UpdatedAt,
-		SentAt:      entity.SentAt,
-	}
+	result := DMInfo(entity)
 
 	// Update memory cache async
 	go func() {
@@ -370,6 +365,59 @@ func (s *DatastoreStore) SaveDMMessage(userID, prURL string, info DMInfo) error 
 	}()
 
 	return nil
+}
+
+// ListDMUsers returns all user IDs who have received DMs for a given PR.
+// Queries both memory cache and Datastore to ensure data persists across restarts.
+func (s *DatastoreStore) ListDMUsers(prURL string) []string {
+	// Check memory cache first (fast path)
+	users := s.memory.ListDMUsers(prURL)
+	if len(users) > 0 || s.disabled || s.ds == nil {
+		return users
+	}
+
+	// PERFORMANCE NOTE: Datastore queries are expensive and lack substring/regex filtering.
+	// We must fetch all DM message keys and filter client-side. This is acceptable because:
+	// 1. Uses KeysOnly() to minimize data transfer (no entity bodies)
+	// 2. Bounded by reasonable limit (1000 - PRs rarely have >100 participants)
+	// 3. Only runs on cache miss (typically at startup)
+	// 4. Results populate memory cache for future fast lookups
+	//
+	// Alternative considered: Ancestor queries require schema change (breaking existing data)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	query := datastore.NewQuery(kindDMMessage).KeysOnly().Limit(1000)
+	keys, err := s.ds.GetAll(ctx, query, nil)
+	if err != nil {
+		slog.Warn("failed to query Datastore for DM users",
+			"pr_url", prURL,
+			"error", err,
+			"fallback", "returning empty list")
+		return nil
+	}
+
+	// Filter keys matching this PR URL
+	// Key format: "dm:{userID}:{prURL}"
+	suffix := ":" + prURL
+	filtered := make([]string, 0, min(len(keys), 50)) // Most PRs have <50 DM recipients
+
+	for _, key := range keys {
+		if strings.HasSuffix(key.Name, suffix) {
+			// Extract userID from key
+			parts := strings.SplitN(key.Name, ":", 3)
+			if len(parts) == 3 {
+				filtered = append(filtered, parts[1])
+			}
+		}
+	}
+
+	slog.Debug("queried Datastore for DM users",
+		"pr_url", prURL,
+		"users_found", len(filtered),
+		"keys_scanned", len(keys))
+
+	return filtered
 }
 
 // LastDigest retrieves last digest time.

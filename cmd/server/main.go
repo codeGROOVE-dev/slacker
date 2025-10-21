@@ -167,6 +167,7 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 		RecordDM(userID, prURL string, sentAt time.Time) error
 		DMMessage(userID, prURL string) (state.DMInfo, bool)
 		SaveDMMessage(userID, prURL string, info state.DMInfo) error
+		ListDMUsers(prURL string) []string
 		LastDigest(userID, date string) (time.Time, bool)
 		RecordDigest(userID, date string, sentAt time.Time) error
 		WasProcessed(eventKey string) bool
@@ -684,6 +685,7 @@ func runBotCoordinators(
 		RecordDM(userID, prURL string, sentAt time.Time) error
 		DMMessage(userID, prURL string) (state.DMInfo, bool)
 		SaveDMMessage(userID, prURL string, info state.DMInfo) error
+		ListDMUsers(prURL string) []string
 		LastDigest(userID, date string) (time.Time, bool)
 		RecordDigest(userID, date string, sentAt time.Time) error
 		WasProcessed(eventKey string) bool
