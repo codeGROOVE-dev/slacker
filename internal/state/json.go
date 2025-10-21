@@ -164,6 +164,27 @@ func (s *JSONStore) SaveDMMessage(userID, prURL string, info DMInfo) error {
 	return s.save()
 }
 
+// ListDMUsers returns all user IDs who have received DMs for a given PR.
+func (s *JSONStore) ListDMUsers(prURL string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var users []string
+	suffix := ":" + prURL
+
+	for key := range s.dmMessages {
+		if strings.HasSuffix(key, suffix) {
+			// Extract userID from key format "dm:{userID}:{prURL}"
+			parts := strings.SplitN(key, ":", 3)
+			if len(parts) == 3 {
+				users = append(users, parts[1])
+			}
+		}
+	}
+
+	return users
+}
+
 // LastDigest retrieves the last digest timestamp for a user and date.
 func (s *JSONStore) LastDigest(userID, date string) (time.Time, bool) {
 	s.mu.RLock()

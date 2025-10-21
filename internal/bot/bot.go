@@ -102,6 +102,7 @@ type StateStore interface {
 	SaveThread(owner, repo string, number int, channelID string, info ThreadInfo) error
 	LastDM(userID, prURL string) (time.Time, bool)
 	RecordDM(userID, prURL string, sentAt time.Time) error
+	ListDMUsers(prURL string) []string
 	WasProcessed(eventKey string) bool
 	MarkProcessed(eventKey string, ttl time.Duration) error
 	LastNotification(prURL string) time.Time
@@ -793,18 +794,82 @@ func (*Coordinator) extractBlockedUsersFromTurnclient(checkResult *turn.CheckRes
 	return blockedUsers
 }
 
-// updateDMMessagesForPR updates DM messages for all blocked users on a PR.
-func (c *Coordinator) updateDMMessagesForPR(ctx context.Context, checkResult *turn.CheckResponse, owner, repo string, prNumber int, title, author, prState, prURL string) {
-	if checkResult == nil || len(checkResult.Analysis.NextAction) == 0 {
-		slog.Debug("no blocked users, skipping DM updates",
-			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber))
-		return
+// prUpdateInfo groups PR information for DM updates.
+type prUpdateInfo struct {
+	checkRes   *turn.CheckResponse
+	owner      string
+	repo       string
+	title      string
+	author     string
+	state      string
+	url        string
+	number     int
+}
+
+// updateDMMessagesForPR updates DM messages for all relevant users on a PR.
+// For merged/closed PRs, updates all users who previously received DMs.
+// For other states, updates users in NextAction (currently blocked).
+func (c *Coordinator) updateDMMessagesForPR(ctx context.Context, pr prUpdateInfo) {
+	owner, repo, prNumber := pr.owner, pr.repo, pr.number
+	prState, prURL := pr.state, pr.url
+	checkResult := pr.checkRes
+	// Determine which users to update based on PR state
+	var slackUserIDs []string
+
+	// For terminal states (merged/closed), update all users who received DMs
+	if prState == "merged" || prState == "closed" {
+		slackUserIDs = c.stateStore.ListDMUsers(prURL)
+		if len(slackUserIDs) == 0 {
+			slog.Debug("no DM recipients found for merged/closed PR",
+				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+				"pr_state", prState)
+			return
+		}
+		slog.Info("updating DMs for merged/closed PR",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+			"pr_state", prState,
+			"dm_recipients", len(slackUserIDs))
+	} else {
+		// For other states, update only users who are currently blocked
+		if checkResult == nil || len(checkResult.Analysis.NextAction) == 0 {
+			slog.Debug("no blocked users, skipping DM updates",
+				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber))
+			return
+		}
+
+		// Map GitHub users to Slack users
+		domain := c.configManager.Domain(owner)
+		for githubUser := range checkResult.Analysis.NextAction {
+			if githubUser == "_system" {
+				continue
+			}
+
+			slackUserID, err := c.userMapper.SlackHandle(ctx, githubUser, owner, domain)
+			if err != nil || slackUserID == "" {
+				slog.Debug("no Slack mapping for GitHub user, skipping",
+					"github_user", githubUser,
+					"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
+					"error", err)
+				continue
+			}
+			slackUserIDs = append(slackUserIDs, slackUserID)
+		}
+
+		if len(slackUserIDs) == 0 {
+			slog.Debug("no Slack users found for blocked GitHub users",
+				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber))
+			return
+		}
 	}
 
 	// Format the DM message (same format as initial send)
 	prefix := notify.PrefixForState(prState)
 	var action string
 	switch prState {
+	case "merged":
+		action = "merged"
+	case "closed":
+		action = "closed"
 	case "tests_broken":
 		action = "fix tests"
 	case "awaiting_review":
@@ -820,41 +885,22 @@ func (c *Coordinator) updateDMMessagesForPR(ctx context.Context, checkResult *tu
 	message := fmt.Sprintf(
 		"%s %s <%s|%s#%d> · %s → %s",
 		prefix,
-		title,
+		pr.title,
 		prURL,
 		repo,
 		prNumber,
-		author,
+		pr.author,
 		action,
 	)
 
-	// Update DM for each blocked user
+	// Update DM for each user
 	updatedCount := 0
 	skippedCount := 0
-	domain := c.configManager.Domain(owner)
 
-	for githubUser := range checkResult.Analysis.NextAction {
-		// Skip _system user
-		if githubUser == "_system" {
-			continue
-		}
-
-		// Map GitHub user to Slack user
-		slackUserID, err := c.userMapper.SlackHandle(ctx, githubUser, owner, domain)
-		if err != nil || slackUserID == "" {
-			slog.Debug("no Slack mapping for GitHub user, skipping DM update",
-				"github_user", githubUser,
-				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
-				"error", err)
-			skippedCount++
-			continue
-		}
-
-		// Update the DM message
+	for _, slackUserID := range slackUserIDs {
 		if err := c.slack.UpdateDMMessage(ctx, slackUserID, prURL, message); err != nil {
 			slog.Debug("failed to update DM message",
 				"user", slackUserID,
-				"github_user", githubUser,
 				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
 				"error", err,
 				"reason", "DM may not exist or too old")
@@ -869,7 +915,8 @@ func (c *Coordinator) updateDMMessagesForPR(ctx context.Context, checkResult *tu
 			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
 			"pr_state", prState,
 			"updated", updatedCount,
-			"skipped", skippedCount)
+			"skipped", skippedCount,
+			"total_recipients", len(slackUserIDs))
 	}
 }
 
@@ -1212,7 +1259,16 @@ func (c *Coordinator) processPRForChannel(
 					"pr_state", prState)
 
 				// Also update DM messages for blocked users
-				c.updateDMMessagesForPR(ctx, checkResult, owner, repo, prNumber, event.PullRequest.Title, event.PullRequest.User.Login, prState, event.PullRequest.HTMLURL)
+				c.updateDMMessagesForPR(ctx, prUpdateInfo{
+					owner:    owner,
+					repo:     repo,
+					number:   prNumber,
+					title:    event.PullRequest.Title,
+					author:   event.PullRequest.User.Login,
+					state:    prState,
+					url:      event.PullRequest.HTMLURL,
+					checkRes: checkResult,
+				})
 			}
 		} else {
 			slog.Debug("message already matches expected content, no update needed",

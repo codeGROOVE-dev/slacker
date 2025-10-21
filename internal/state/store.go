@@ -38,6 +38,7 @@ type Store interface {
 	// DM message tracking - store DM message info for updating
 	DMMessage(userID, prURL string) (DMInfo, bool)
 	SaveDMMessage(userID, prURL string, info DMInfo) error
+	ListDMUsers(prURL string) []string
 
 	// Daily digest tracking - one per user per day
 	LastDigest(userID, date string) (time.Time, bool)
