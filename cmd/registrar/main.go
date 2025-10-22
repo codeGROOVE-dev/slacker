@@ -86,10 +86,6 @@ func main() {
 	router.Handle("/install", rateLimitMiddleware(oauthLimiter)(http.HandlerFunc(oauthHandler.HandleInstall))).Methods("GET")
 	router.Handle("/oauth/callback", rateLimitMiddleware(oauthLimiter)(http.HandlerFunc(oauthHandler.HandleCallback))).Methods("GET")
 
-	// Debug endpoint - DO NOT EXPOSE IN PRODUCTION
-	// Remove this endpoint entirely or protect with strong authentication
-	// router.HandleFunc("/debug", oauthHandler.HandleDebug).Methods("GET")
-
 	// Determine port
 	port := os.Getenv("PORT")
 	if port == "" {

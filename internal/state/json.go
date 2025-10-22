@@ -120,9 +120,14 @@ func (s *JSONStore) SaveThread(owner, repo string, number int, channelID string,
 	defer s.mu.Unlock()
 	key := threadKey(owner, repo, number, channelID)
 	info.UpdatedAt = time.Now()
+	// Always save to memory (primary storage)
 	s.threads[key] = info
 	s.modified = true
-	return s.save()
+	// Best-effort persistence to JSON file for restart recovery
+	if err := s.save(); err != nil {
+		slog.Error("failed to persist thread to JSON file", "key", key, "error", err)
+	}
+	return nil
 }
 
 // LastDM retrieves the last DM timestamp for a user and PR.
@@ -139,9 +144,14 @@ func (s *JSONStore) RecordDM(userID, prURL string, sentAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := dmKey(userID, prURL)
+	// Always save to memory (primary storage)
 	s.dms[key] = sentAt
 	s.modified = true
-	return s.save()
+	// Best-effort persistence to JSON file for restart recovery
+	if err := s.save(); err != nil {
+		slog.Error("failed to persist DM record to JSON file", "user", userID, "error", err)
+	}
+	return nil
 }
 
 // DMMessage retrieves DM message information for a user and PR.
@@ -159,9 +169,14 @@ func (s *JSONStore) SaveDMMessage(userID, prURL string, info DMInfo) error {
 	defer s.mu.Unlock()
 	key := dmKey(userID, prURL)
 	info.UpdatedAt = time.Now()
+	// Always save to memory (primary storage)
 	s.dmMessages[key] = info
 	s.modified = true
-	return s.save()
+	// Best-effort persistence to JSON file for restart recovery
+	if err := s.save(); err != nil {
+		slog.Error("failed to persist DM message to JSON file", "user", userID, "error", err)
+	}
+	return nil
 }
 
 // ListDMUsers returns all user IDs who have received DMs for a given PR.
@@ -199,9 +214,18 @@ func (s *JSONStore) RecordDigest(userID, date string, sentAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := digestKey(userID, date)
+	// Always save to memory (primary storage)
 	s.digests[key] = sentAt
 	s.modified = true
-	return s.save()
+	// Best-effort persistence to JSON file for restart recovery
+	if err := s.save(); err != nil {
+		slog.Error("failed to persist digest to JSON file - may send duplicate after restart",
+			"user", userID,
+			"date", date,
+			"error", err)
+		// Graceful degradation: log error but don't fail the operation
+	}
+	return nil
 }
 
 // WasProcessed checks if an event was already processed.
@@ -218,9 +242,14 @@ func (s *JSONStore) WasProcessed(eventKey string) bool {
 func (s *JSONStore) MarkProcessed(eventKey string, _ time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Always save to memory (primary storage)
 	s.events[eventKey] = time.Now()
 	s.modified = true
-	return s.save()
+	// Best-effort persistence to JSON file for restart recovery
+	if err := s.save(); err != nil {
+		slog.Error("failed to persist event record to JSON file", "event", eventKey, "error", err)
+	}
+	return nil
 }
 
 // LastNotification retrieves the last notification timestamp for a PR.
@@ -234,9 +263,14 @@ func (s *JSONStore) LastNotification(prURL string) time.Time {
 func (s *JSONStore) RecordNotification(prURL string, notifiedAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Always save to memory (primary storage)
 	s.notifications[prURL] = notifiedAt
 	s.modified = true
-	return s.save()
+	// Best-effort persistence to JSON file for restart recovery
+	if err := s.save(); err != nil {
+		slog.Error("failed to persist notification record to JSON file", "pr_url", prURL, "error", err)
+	}
+	return nil
 }
 
 // Cleanup removes old data from all maps.

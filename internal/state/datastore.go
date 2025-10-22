@@ -211,7 +211,7 @@ func (s *DatastoreStore) SaveThread(owner, repo string, number int, channelID st
 		}
 
 		if _, err := s.ds.Put(ctx, dsKey, entity); err != nil {
-			slog.Warn("failed to save thread to Datastore",
+			slog.Error("failed to save thread to Datastore",
 				"key", key,
 				"error", err)
 		}
@@ -282,7 +282,7 @@ func (s *DatastoreStore) RecordDM(userID, prURL string, sentAt time.Time) error 
 		}
 
 		if _, err := s.ds.Put(ctx, dsKey, entity); err != nil {
-			slog.Warn("failed to record DM in Datastore",
+			slog.Error("failed to record DM in Datastore",
 				"user", userID,
 				"error", err)
 		}
@@ -358,7 +358,7 @@ func (s *DatastoreStore) SaveDMMessage(userID, prURL string, info DMInfo) error 
 		}
 
 		if _, err := s.ds.Put(ctx, dsKey, entity); err != nil {
-			slog.Warn("failed to save DM message to Datastore",
+			slog.Error("failed to save DM message to Datastore",
 				"user", userID,
 				"error", err)
 		}
@@ -456,9 +456,11 @@ func (s *DatastoreStore) LastDigest(userID, date string) (time.Time, bool) {
 	return entity.SentAt, true
 }
 
-// RecordDigest saves digest timestamp.
+// RecordDigest saves digest timestamp to memory and attempts persistence to Datastore.
+// Memory is always updated (primary storage for runtime). Datastore is best-effort for restart recovery.
+// Degrades gracefully: logs errors but continues operating if Datastore unavailable.
 func (s *DatastoreStore) RecordDigest(userID, date string, sentAt time.Time) error {
-	// Save to memory
+	// Always save to memory first (primary storage, must succeed)
 	if err := s.memory.RecordDigest(userID, date, sentAt); err != nil {
 		slog.Warn("failed to record digest in memory", "error", err)
 	}
@@ -468,23 +470,27 @@ func (s *DatastoreStore) RecordDigest(userID, date string, sentAt time.Time) err
 		return nil
 	}
 
-	// Save to Datastore async
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
+	// Best-effort persistence to Datastore for restart recovery
+	// Synchronous write for maximum reliability, but don't fail operation if it doesn't work
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-		key := digestKey(userID, date)
-		dsKey := datastore.NameKey(kindDigest, key, nil)
-		entity := &digestEntity{
-			UserID: userID,
-			Date:   date,
-			SentAt: sentAt,
-		}
+	key := digestKey(userID, date)
+	dsKey := datastore.NameKey(kindDigest, key, nil)
+	entity := &digestEntity{
+		UserID: userID,
+		Date:   date,
+		SentAt: sentAt,
+	}
 
-		if _, err := s.ds.Put(ctx, dsKey, entity); err != nil {
-			slog.Warn("failed to record digest in Datastore", "error", err)
-		}
-	}()
+	if _, err := s.ds.Put(ctx, dsKey, entity); err != nil {
+		slog.Error("failed to persist digest to Datastore - may send duplicate after restart",
+			"user", userID,
+			"date", date,
+			"error", err)
+		// Graceful degradation: log error but don't fail the operation
+		// System continues running even if external persistence unavailable
+	}
 
 	return nil
 }
@@ -566,19 +572,21 @@ func (s *DatastoreStore) MarkProcessed(eventKey string, ttl time.Duration) error
 		// Other error
 		return err
 	})
-	// Return the error to caller so they can detect race condition
+	// Return error only for race conditions (ErrAlreadyProcessed)
+	// For other errors, degrade gracefully
 	if err != nil {
 		if errors.Is(err, ErrAlreadyProcessed) {
 			// This is expected during rolling deployments - return error to caller
 			return err
 		}
-		// Unexpected error - log but don't fail processing
-		slog.Warn("failed to mark event in Datastore",
+		// Unexpected error - log but don't fail processing (graceful degradation)
+		slog.Error("failed to mark event in Datastore - continuing with memory-only tracking",
 			"event", eventKey,
 			"error", err)
+		return nil
 	}
 
-	return err
+	return nil
 }
 
 // LastNotification retrieves when a PR was last notified about.
@@ -621,7 +629,7 @@ func (s *DatastoreStore) RecordNotification(prURL string, notifiedAt time.Time) 
 		}
 
 		if _, err := s.ds.Put(ctx, dsKey, entity); err != nil {
-			slog.Warn("failed to record notification in Datastore", "error", err)
+			slog.Error("failed to record notification in Datastore", "error", err)
 		}
 	}()
 

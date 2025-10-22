@@ -314,10 +314,6 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 		router.Handle("/slack/install", rateLimitMiddleware(oauthLimiter)(http.HandlerFunc(oauthHandler.HandleInstall))).Methods("GET")
 		router.Handle("/slack/oauth/callback", rateLimitMiddleware(oauthLimiter)(http.HandlerFunc(oauthHandler.HandleCallback))).Methods("GET")
 
-		// Debug endpoint - DO NOT EXPOSE IN PRODUCTION
-		// Remove this endpoint entirely or protect with strong authentication
-		// router.HandleFunc("/slack/debug", oauthHandler.HandleDebug).Methods("GET")
-
 		slog.Info("registered OAuth endpoints with rate limiting",
 			"install_url", "/slack/install",
 			"callback_url", "/slack/oauth/callback",
@@ -710,7 +706,7 @@ func runBotCoordinators(
 	}
 
 	// Initialize daily digest scheduler
-	dailyDigest := notify.NewDailyDigestScheduler(notifier, githubManager, configManager, stateStore)
+	dailyDigest := notify.NewDailyDigestScheduler(notifier, githubManager, configManager, stateStore, slackManager)
 
 	// Start initial coordinators
 	cm.startCoordinators(ctx)
