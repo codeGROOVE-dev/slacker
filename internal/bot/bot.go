@@ -796,14 +796,14 @@ func (*Coordinator) extractBlockedUsersFromTurnclient(checkResult *turn.CheckRes
 
 // prUpdateInfo groups PR information for DM updates.
 type prUpdateInfo struct {
-	checkRes   *turn.CheckResponse
-	owner      string
-	repo       string
-	title      string
-	author     string
-	state      string
-	url        string
-	number     int
+	checkRes *turn.CheckResponse
+	owner    string
+	repo     string
+	title    string
+	author   string
+	state    string
+	url      string
+	number   int
 }
 
 // updateDMMessagesForPR updates DM messages for all relevant users on a PR.
@@ -1409,14 +1409,18 @@ func (c *Coordinator) handlePullRequestFromSprinkler(
 }
 
 // handlePullRequestReviewFromSprinkler handles PR review events from sprinkler.
-func (*Coordinator) handlePullRequestReviewFromSprinkler(ctx context.Context, owner, repo string, prNumber int, sprinklerURL string, _ time.Time) {
+// Reviews update PR state (approved, changes requested, etc), so we treat them
+// like regular pull_request events and let turnclient analyze the current state.
+func (c *Coordinator) handlePullRequestReviewFromSprinkler(ctx context.Context, owner, repo string, prNumber int, sprinklerURL string, eventTimestamp time.Time) {
 	slog.Info("handling PR review event from sprinkler",
 		logFieldOwner, owner,
 		logFieldRepo, repo,
 		"pr_number", prNumber,
 		"sprinkler_url", sprinklerURL,
-		"note", "review events not fully implemented yet")
-	// TODO: Implement review event handling if needed
+		"note", "treating as pull_request event - turnclient will analyze review state")
+
+	// Reviews change PR state, so handle like any other PR update
+	c.handlePullRequestFromSprinkler(ctx, owner, repo, prNumber, sprinklerURL, eventTimestamp)
 }
 
 // createPRThread creates a new thread in Slack for a PR.
