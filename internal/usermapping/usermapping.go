@@ -387,7 +387,9 @@ func (s *Service) findSlackMatches(ctx context.Context, githubUsername string, e
 
 	// Search for each email in Slack user directory
 	for _, email := range emails {
-		user, err := s.slackClient.GetUserByEmailContext(ctx, email)
+		// Normalize email to lowercase for consistent matching
+		normalizedEmail := strings.ToLower(email)
+		user, err := s.slackClient.GetUserByEmailContext(ctx, normalizedEmail)
 		if err != nil {
 			slog.Debug("no Slack user found for email",
 				"email", email,

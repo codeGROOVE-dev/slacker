@@ -36,8 +36,8 @@ func TestFormatDigestMessage(t *testing.T) {
 _Your daily digest from Ready to Review_`,
 		},
 		{
-			name: "outgoing PRs only at 8:15am",
-			time: time.Date(2025, 10, 22, 8, 15, 0, 0, time.UTC),
+			name:     "outgoing PRs only at 8:15am",
+			time:     time.Date(2025, 10, 22, 8, 15, 0, 0, time.UTC),
 			incoming: nil,
 			outgoing: []home.PR{
 				{
