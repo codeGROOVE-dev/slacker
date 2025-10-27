@@ -90,6 +90,8 @@ type PRInfo struct {
 // Exported for use by bot package to ensure consistent PR state display.
 func PrefixForState(prState string) string {
 	switch prState {
+	case "newly_published":
+		return ":new:"
 	case "tests_running":
 		return ":test_tube:"
 	case "tests_broken":
@@ -249,6 +251,8 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 	// Format: :emoji: Title <url|repo#123> · author → action
 	var action string
 	switch pr.State {
+	case "newly_published":
+		action = "newly published"
 	case "tests_broken":
 		action = "fix tests"
 	case "awaiting_review":

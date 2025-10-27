@@ -11,6 +11,7 @@ Ready to Review is an elegant modern Slack bot written in Go that integrates wit
 ### 1. Channel Thread Management
 - Start threads in Slack channels when new PRs are created
 - Update message prefix emoji based on PR state:
+  - `:new:` - newly published (appears for ~15 seconds before state changes)
   - `:test_tube:` - tests running/pending
   - `:cockroach:` - tests broken (blocked on author)
   - `:hourglass:` - waiting on review
