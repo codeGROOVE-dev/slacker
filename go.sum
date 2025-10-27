@@ -23,12 +23,16 @@ github.com/codeGROOVE-dev/prx v0.0.0-20251024000018-35ba2605d031 h1:wLeo/dwpE5F2
 github.com/codeGROOVE-dev/prx v0.0.0-20251024000018-35ba2605d031/go.mod h1:7qLbi18baOyS8yO/6/64SBIqtyzSzLFdsDST15NPH3w=
 github.com/codeGROOVE-dev/prx v0.0.0-20251027012315-7b273aabfc7d h1:kUaCKFRxWFrWEyl4fVHi+eY/D5tKhBU29a8YbQyihEk=
 github.com/codeGROOVE-dev/prx v0.0.0-20251027012315-7b273aabfc7d/go.mod h1:7qLbi18baOyS8yO/6/64SBIqtyzSzLFdsDST15NPH3w=
+github.com/codeGROOVE-dev/prx v0.0.0-20251027204543-4e6165f046e5 h1:tjxTLJ5NXx1xhReL4M+J4LTl/JGNSZjPrznAoci06OA=
+github.com/codeGROOVE-dev/prx v0.0.0-20251027204543-4e6165f046e5/go.mod h1:FEy3gz9IYDXWnKWkoDSL+pWu6rujxbBSrF4w5A8QSK0=
 github.com/codeGROOVE-dev/retry v1.2.0 h1:xYpYPX2PQZmdHwuiQAGGzsBm392xIMl4nfMEFApQnu8=
 github.com/codeGROOVE-dev/retry v1.2.0/go.mod h1:8OgefgV1XP7lzX2PdKlCXILsYKuz6b4ZpHa/20iLi8E=
 github.com/codeGROOVE-dev/retry v1.3.0 h1:/+ipAWRJLL6y1R1vprYo0FSjSBvH6fE5j9LKXjpD54g=
 github.com/codeGROOVE-dev/retry v1.3.0/go.mod h1:8OgefgV1XP7lzX2PdKlCXILsYKuz6b4ZpHa/20iLi8E=
 github.com/codeGROOVE-dev/sprinkler v0.0.0-20251027150242-98f387d0502a h1:bMRtyBA38hvuXZJUH5UDFpOAuwNINg2j/ecug31wp+M=
 github.com/codeGROOVE-dev/sprinkler v0.0.0-20251027150242-98f387d0502a/go.mod h1:/kd3ncsRNldD0MUpbtp5ojIzfCkyeXB7JdOrpuqG7Gg=
+github.com/codeGROOVE-dev/sprinkler v0.0.0-20251027213037-05bb80a9db89 h1:8Z3SM90hy1nuK2r2yhtv4HwitnO9si4GzVRktRDQ68g=
+github.com/codeGROOVE-dev/sprinkler v0.0.0-20251027213037-05bb80a9db89/go.mod h1:/kd3ncsRNldD0MUpbtp5ojIzfCkyeXB7JdOrpuqG7Gg=
 github.com/codeGROOVE-dev/turnclient v0.0.0-20251022064427-5a712e1e10e6 h1:7FCmaftkl362oTZHVJyUg+xhxqfQFx+JisBf7RgklL8=
 github.com/codeGROOVE-dev/turnclient v0.0.0-20251022064427-5a712e1e10e6/go.mod h1:fYwtN9Ql6lY8t2WvCfENx+mP5FUwjlqwXCLx9CVLY20=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
