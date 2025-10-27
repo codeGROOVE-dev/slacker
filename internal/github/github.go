@@ -586,6 +586,80 @@ type PRInfo struct {
 	Number    int
 }
 
+// FindPRsForCommit finds all open PRs associated with a commit SHA.
+func (c *Client) FindPRsForCommit(ctx context.Context, owner, repo, sha string) ([]int, error) {
+	if owner == "" || repo == "" || sha == "" {
+		return nil, fmt.Errorf("invalid parameters: owner=%q, repo=%q, sha=%q", owner, repo, sha)
+	}
+
+	slog.Debug("looking up PRs for commit",
+		"owner", owner,
+		"repo", repo,
+		"sha", sha)
+
+	var allPRs []*github.PullRequest
+	err := retry.Do(
+		func() error {
+			var resp *github.Response
+			var err error
+			allPRs, resp, err = c.client.PullRequests.ListPullRequestsWithCommit(
+				ctx,
+				owner,
+				repo,
+				sha,
+				&github.PullRequestListOptions{
+					State: "all", // Include open, closed, and merged
+				},
+			)
+			if err != nil {
+				if resp != nil && resp.StatusCode == http.StatusNotFound {
+					// Commit doesn't exist or no PRs found - don't retry
+					return retry.Unrecoverable(err)
+				}
+				slog.Warn("failed to list PRs for commit, retrying",
+					"owner", owner,
+					"repo", repo,
+					"sha", sha,
+					"error", err)
+				return err
+			}
+			return nil
+		},
+		retry.Attempts(5),
+		retry.Delay(time.Second),
+		retry.MaxDelay(2*time.Minute),
+		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
+		retry.LastErrorOnly(true),
+		retry.Context(ctx),
+	)
+	if err != nil {
+		slog.Debug("no PRs found for commit",
+			"owner", owner,
+			"repo", repo,
+			"sha", sha,
+			"error", err)
+		return []int{}, nil // Return empty list, not error
+	}
+
+	// Extract PR numbers from open PRs only
+	var prNumbers []int
+	for _, pr := range allPRs {
+		if pr.GetState() == "open" {
+			prNumbers = append(prNumbers, pr.GetNumber())
+		}
+	}
+
+	slog.Debug("found PRs for commit",
+		"owner", owner,
+		"repo", repo,
+		"sha", sha,
+		"pr_count", len(prNumbers),
+		"pr_numbers", prNumbers)
+
+	return prNumbers, nil
+}
+
 // Client returns the underlying GitHub client.
 func (c *Client) Client() *github.Client {
 	return c.client

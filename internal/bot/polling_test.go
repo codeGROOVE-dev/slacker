@@ -15,12 +15,12 @@ import (
 // See: internal/bot/polling.go:98 - ListClosedPRs(ctx, org, 1)
 func TestClosedPRPollingWindow(t *testing.T) {
 	tests := []struct {
-		name              string
-		prClosedAt        time.Time
-		pollingRunsAt     time.Time
-		lookbackHours     int
-		expectPRIncluded  bool
-		scenario          string
+		name             string
+		prClosedAt       time.Time
+		pollingRunsAt    time.Time
+		lookbackHours    int
+		expectPRIncluded bool
+		scenario         string
 	}{
 		{
 			name:             "PR closed 5 minutes ago - should be caught",
@@ -210,6 +210,10 @@ func TestClosedPRRecoveryScenarios(t *testing.T) {
 // parseTime is a helper to create times on today's date for testing.
 func parseTime(hhMM string) time.Time {
 	now := time.Now()
-	parsed, _ := time.Parse("15:04", hhMM)
+	parsed, err := time.Parse("15:04", hhMM)
+	if err != nil {
+		// This should never happen in tests with valid time strings
+		panic("parseTime: invalid time format " + hhMM + ": " + err.Error())
+	}
 	return time.Date(now.Year(), now.Month(), now.Day(), parsed.Hour(), parsed.Minute(), 0, 0, now.Location())
 }
