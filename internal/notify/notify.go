@@ -286,13 +286,16 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 		slog.Warn("failed to check for recent DM, will send anyway to avoid false negative",
 			"user", userID,
 			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
-			"error", err)
+			"error", err,
+			"check_window", "1h",
+			"impact", "possible_duplicate_dm")
 	} else if hasRecent {
 		slog.Info("skipping DM - already sent notification about this PR recently",
 			"user", userID,
 			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
-			"check_window", "1 hour",
-			"reason", "duplicate prevention during rolling deployment")
+			"check_window", "1h",
+			"reason", "duplicate prevention during rolling deployment",
+			"will_retry_later", false)
 		return nil
 	}
 

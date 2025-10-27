@@ -13,12 +13,12 @@ import (
 
 // JSONStore implements Store using JSON files in the user cache directory.
 // Simple, reliable, and easy to debug.
+//
+//nolint:govet // Field order optimized for logical grouping over memory alignment
 type JSONStore struct {
-	baseDir string
-	mu      sync.RWMutex
-
-	// In-memory cache for fast lookups
-	threads       map[string]ThreadInfo
+	mu            sync.RWMutex
+	baseDir       string
+	threads       map[string]ThreadInfo // In-memory cache for fast lookups
 	dms           map[string]time.Time
 	dmMessages    map[string]DMInfo // DM message tracking for updates
 	digests       map[string]time.Time

@@ -17,15 +17,17 @@ type ThreadInfo struct {
 
 // DMInfo stores information about a DM message for a PR.
 type DMInfo struct {
+	UpdatedAt   time.Time `json:"updated_at"`   // When we last updated this message
+	SentAt      time.Time `json:"sent_at"`      // When we first sent this message
 	ChannelID   string    `json:"channel_id"`   // DM conversation channel ID
 	MessageTS   string    `json:"message_ts"`   // Message timestamp for updating
 	MessageText string    `json:"message_text"` // Current message text
-	UpdatedAt   time.Time `json:"updated_at"`   // When we last updated this message
-	SentAt      time.Time `json:"sent_at"`      // When we first sent this message
 }
 
 // Store provides persistent storage for bot state.
 // Implementations must be safe for concurrent use.
+//
+//nolint:interfacebloat // Store intentionally groups all state operations for simplicity
 type Store interface {
 	// Thread operations - map PR to Slack thread
 	Thread(owner, repo string, number int, channelID string) (ThreadInfo, bool)

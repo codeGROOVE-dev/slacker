@@ -172,7 +172,7 @@ func TestDailyDigestExample(t *testing.T) {
 	t.Logf("Example daily digest DM:\n\n%s\n", message)
 
 	// Verify it has the expected structure
-	if len(message) == 0 {
+	if message == "" {
 		t.Error("Message should not be empty")
 	}
 
@@ -185,7 +185,9 @@ func TestDailyDigestExample(t *testing.T) {
 	}
 
 	// Should contain all PR URLs
-	allPRs := append(exampleIncoming, exampleOutgoing...)
+	allPRs := make([]home.PR, 0, len(exampleIncoming)+len(exampleOutgoing))
+	allPRs = append(allPRs, exampleIncoming...)
+	allPRs = append(allPRs, exampleOutgoing...)
 	for _, pr := range allPRs {
 		if !strings.Contains(message, pr.URL) {
 			t.Errorf("Message should contain PR URL: %s", pr.URL)

@@ -264,7 +264,7 @@ func (c *Coordinator) updateClosedPRThread(ctx context.Context, pr *github.PRSna
 		return nil
 	}
 
-	n := 0
+	updatedCount := 0
 	for _, ch := range channels {
 		id := c.slack.ResolveChannelID(ctx, ch)
 
@@ -283,14 +283,46 @@ func (c *Coordinator) updateClosedPRThread(ctx context.Context, pr *github.PRSna
 
 		info, ok := c.stateStore.Thread(pr.Owner, pr.Repo, pr.Number, id)
 		if !ok {
-			slog.Debug("no thread found for closed PR in channel",
+			// Thread not in persistent storage - search channel history as fallback
+			// This handles cases where state was lost or thread created before persistence was added
+			slog.Debug("thread not in state store, searching channel history",
 				"pr", prKey,
 				"channel", ch,
 				"channel_id", id,
-				"pr_state", pr.State,
-				"pr_updated_at", pr.UpdatedAt,
-				"possible_reason", "PR closed before thread created or thread in different channel")
-			continue
+				"pr_state", pr.State)
+
+			threadTS, messageText := c.searchForPRThread(ctx, id, pr.URL, pr.CreatedAt)
+			if threadTS == "" {
+				slog.Debug("no thread found in channel history for closed PR",
+					"pr", prKey,
+					"channel", ch,
+					"channel_id", id,
+					"pr_state", pr.State,
+					"pr_created_at", pr.CreatedAt,
+					"possible_reason", "PR closed before thread created or thread in different channel")
+				continue
+			}
+
+			// Found via channel history - reconstruct ThreadInfo
+			info = ThreadInfo{
+				ThreadTS:    threadTS,
+				ChannelID:   id,
+				MessageText: messageText,
+				UpdatedAt:   time.Now(),
+			}
+
+			// Persist for future use (avoid redundant searches)
+			if err := c.stateStore.SaveThread(pr.Owner, pr.Repo, pr.Number, id, info); err != nil {
+				slog.Warn("failed to persist recovered thread",
+					"pr", prKey,
+					"error", err)
+			}
+
+			slog.Info("found thread via channel history search",
+				"pr", prKey,
+				"channel", ch,
+				"thread_ts", threadTS,
+				"message_preview", messageText[:min(len(messageText), 100)])
 		}
 
 		if err := c.updateThreadForClosedPR(ctx, pr, id, info); err != nil {
@@ -301,7 +333,7 @@ func (c *Coordinator) updateClosedPRThread(ctx context.Context, pr *github.PRSna
 			continue
 		}
 
-		n++
+		updatedCount++
 		slog.Info("updated thread for closed/merged PR",
 			"pr", prKey,
 			"state", pr.State,
@@ -309,7 +341,7 @@ func (c *Coordinator) updateClosedPRThread(ctx context.Context, pr *github.PRSna
 			"thread_ts", info.ThreadTS)
 	}
 
-	if n == 0 {
+	if updatedCount == 0 {
 		return errors.New("no threads found or updated for closed PR")
 	}
 

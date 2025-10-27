@@ -67,13 +67,14 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 				"event_key", eventKey,
 				"reason", "deduplication_race")
 		} else {
-			slog.Warn("failed to mark event as processed - database error",
+			slog.Error("failed to mark event as processed - database error",
 				"organization", organization,
 				"type", event.Type,
 				"url", event.URL,
 				"event_key", eventKey,
 				"error", err,
-				"impact", "will_skip_event")
+				"impact", "event_dropped_will_retry_via_polling",
+				"next_poll_in", "5m")
 		}
 		return
 	}
@@ -161,16 +162,24 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 			Timestamp: event.Timestamp,
 		}
 
-		if err := c.processEvent(ctx, msg); err != nil {
+		// Add timeout to prevent hanging on external API failures
+		processCtx, processCancel := context.WithTimeout(ctx, 30*time.Second)
+		defer processCancel()
+
+		if err := c.processEvent(processCtx, msg); err != nil {
+			timedOut := errors.Is(err, context.DeadlineExceeded)
 			slog.Error("error processing event",
 				"organization", organization,
 				"error", err,
 				"type", event.Type,
 				"url", event.URL,
-				"repo", repo)
+				"repo", repo,
+				"timed_out", timedOut,
+				"impact", "event_dropped_will_retry_via_polling",
+				"next_poll_in", "5m")
 			// Event already marked as processed before goroutine started.
 			// Failed processing won't be retried automatically.
-			// This is intentional - we don't want infinite retries of broken events.
+			// Polling will catch this within 5 minutes for open PRs.
 			return
 		}
 
@@ -184,6 +193,8 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 
 // waitForEventProcessing waits for all in-flight events to complete during shutdown.
 // Returns immediately if no events are being processed.
+//
+//nolint:unparam // maxWait parameter provides flexibility for different shutdown scenarios
 func (c *Coordinator) waitForEventProcessing(organization string, maxWait time.Duration) {
 	// Check if any events are being processed
 	queueLen := len(c.eventSemaphore)
@@ -252,6 +263,8 @@ func (c *Coordinator) handleAuthError(
 }
 
 // RunWithSprinklerClient runs the bot using the official sprinkler client library.
+//
+//nolint:revive,maintidx // Complex retry/reconnection logic requires length for robustness
 func (c *Coordinator) RunWithSprinklerClient(ctx context.Context) error {
 	slog.Info("starting bot coordinator with sprinkler client")
 

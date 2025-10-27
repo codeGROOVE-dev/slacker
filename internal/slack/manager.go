@@ -26,13 +26,15 @@ type StateStore interface {
 }
 
 // Manager manages Slack clients for multiple workspaces.
+//
+//nolint:govet // Field order optimized for logical grouping over memory alignment
 type Manager struct {
+	mu              sync.RWMutex
+	signingSecret   string
+	stateStore      StateStore         // State store for DM message tracking
 	clients         map[string]*Client // team_id -> client
 	metadata        map[string]*WorkspaceMetadata
-	signingSecret   string
 	homeViewHandler func(ctx context.Context, teamID, userID string) error // Global home view handler
-	stateStore      StateStore                                             // State store for DM message tracking
-	mu              sync.RWMutex
 }
 
 // NewManager creates a new Slack client manager.

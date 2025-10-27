@@ -198,7 +198,7 @@ func (d *DailyDigestScheduler) processOrgDigests(ctx context.Context, org string
 }
 
 // fetchOrgPRs fetches all open PRs for an organization.
-func (d *DailyDigestScheduler) fetchOrgPRs(ctx context.Context, githubClient *github.Client, org string) ([]home.PR, error) {
+func (*DailyDigestScheduler) fetchOrgPRs(ctx context.Context, githubClient *github.Client, org string) ([]home.PR, error) {
 	client := githubClient.Client()
 
 	// Search for all open PRs in this org
@@ -267,7 +267,7 @@ func (d *DailyDigestScheduler) fetchOrgPRs(ctx context.Context, githubClient *gi
 }
 
 // analyzePR analyzes a PR with turnclient.
-func (d *DailyDigestScheduler) analyzePR(ctx context.Context, githubClient *github.Client, org string, pr home.PR) (*turn.CheckResponse, error) {
+func (*DailyDigestScheduler) analyzePR(ctx context.Context, githubClient *github.Client, _ string, pr home.PR) (*turn.CheckResponse, error) {
 	turnClient, err := turn.NewDefaultClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create turn client: %w", err)
@@ -305,7 +305,7 @@ func (d *DailyDigestScheduler) analyzePR(ctx context.Context, githubClient *gith
 }
 
 // enrichPR enriches a PR with turnclient analysis results.
-func (d *DailyDigestScheduler) enrichPR(pr home.PR, checkResult *turn.CheckResponse, githubUser string, action turn.Action) home.PR {
+func (*DailyDigestScheduler) enrichPR(pr home.PR, _ *turn.CheckResponse, _ string, action turn.Action) home.PR {
 	pr.ActionKind = string(action.Kind)
 	pr.ActionReason = action.Reason
 	pr.NeedsReview = action.Kind == "review" || action.Kind == "approve"
@@ -315,7 +315,10 @@ func (d *DailyDigestScheduler) enrichPR(pr home.PR, checkResult *turn.CheckRespo
 }
 
 // shouldSendDigest determines if a digest should be sent to a user now.
-func (d *DailyDigestScheduler) shouldSendDigest(ctx context.Context, userMapper *usermapping.Service, slackClient *slackpkg.Client, githubUser, org, domain string, prs []home.PR) bool {
+func (d *DailyDigestScheduler) shouldSendDigest(
+	ctx context.Context, userMapper *usermapping.Service, slackClient *slackpkg.Client,
+	githubUser, org, domain string, _ []home.PR,
+) bool {
 	// Map to Slack user
 	slackUserID, err := userMapper.SlackHandle(ctx, githubUser, org, domain)
 	if err != nil || slackUserID == "" {
@@ -368,7 +371,10 @@ func (d *DailyDigestScheduler) shouldSendDigest(ctx context.Context, userMapper 
 }
 
 // sendDigest sends a daily digest to a user.
-func (d *DailyDigestScheduler) sendDigest(ctx context.Context, userMapper *usermapping.Service, slackClient *slackpkg.Client, githubUser, org, domain string, prs []home.PR) error {
+func (d *DailyDigestScheduler) sendDigest(
+	ctx context.Context, userMapper *usermapping.Service, slackClient *slackpkg.Client,
+	githubUser, org, domain string, prs []home.PR,
+) error {
 	// Map to Slack user
 	slackUserID, err := userMapper.SlackHandle(ctx, githubUser, org, domain)
 	if err != nil {
@@ -435,7 +441,7 @@ func (d *DailyDigestScheduler) formatDigestMessage(incoming, outgoing []home.PR)
 }
 
 // formatDigestMessageAt formats a daily digest message at a specific time (for testing).
-func (d *DailyDigestScheduler) formatDigestMessageAt(incoming, outgoing []home.PR, now time.Time) string {
+func (*DailyDigestScheduler) formatDigestMessageAt(incoming, outgoing []home.PR, now time.Time) string {
 	var sb strings.Builder
 
 	// Friendly, happy greetings - keep it chill and inviting

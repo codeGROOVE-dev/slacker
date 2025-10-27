@@ -14,15 +14,15 @@ import (
 
 // PRSnapshot contains minimal PR information from GraphQL query.
 type PRSnapshot struct {
+	UpdatedAt time.Time
+	CreatedAt time.Time
 	Owner     string
 	Repo      string
-	Number    int
 	Title     string
 	Author    string
 	URL       string
-	UpdatedAt time.Time
-	CreatedAt time.Time
 	State     string // "OPEN", "CLOSED", "MERGED"
+	Number    int
 	IsDraft   bool
 }
 
@@ -67,16 +67,17 @@ func (c *GraphQLClient) ListClosedPRs(ctx context.Context, org string, updatedSi
 	since := time.Now().Add(-time.Duration(updatedSinceHours) * time.Hour)
 
 	// GraphQL query structure
+	//nolint:govet // Inline anonymous struct matches GraphQL API structure for clarity
 	var query struct {
 		Search struct {
 			Nodes []struct {
 				PullRequest struct {
-					Number    int
-					Title     string
-					URL       string
 					UpdatedAt time.Time
 					CreatedAt time.Time
+					Title     string
+					URL       string
 					State     string
+					Number    int
 					IsDraft   bool
 					Merged    bool
 					Author    struct {
@@ -190,16 +191,17 @@ func (c *GraphQLClient) listOpenPRsGraphQL(ctx context.Context, org string, upda
 	since := time.Now().Add(-time.Duration(updatedSinceHours) * time.Hour)
 
 	// GraphQL query structure
+	//nolint:govet // Inline anonymous struct matches GraphQL API structure for clarity
 	var query struct {
 		Search struct {
 			Nodes []struct {
 				PullRequest struct {
-					Number    int
-					Title     string
-					URL       string
 					UpdatedAt time.Time
 					CreatedAt time.Time
+					Title     string
+					URL       string
 					State     string
+					Number    int
 					IsDraft   bool
 					Author    struct {
 						Login string

@@ -264,7 +264,7 @@ func TestConcurrentEventDeduplicationStress(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(numConcurrentEvents)
 
-	handleEvent := func(id int) {
+	handleEvent := func(_ int) {
 		defer wg.Done()
 
 		// Check if currently being processed
@@ -299,7 +299,7 @@ func TestConcurrentEventDeduplicationStress(t *testing.T) {
 	}
 
 	// Launch all goroutines simultaneously
-	for i := 0; i < numConcurrentEvents; i++ {
+	for i := range numConcurrentEvents {
 		go handleEvent(i)
 	}
 

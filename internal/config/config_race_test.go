@@ -24,11 +24,11 @@ func TestConfigCacheRace(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(numGoroutines)
 
-	for i := 0; i < numGoroutines; i++ {
+	for range numGoroutines {
 		go func() {
 			defer wg.Done()
 			// Each goroutine performs 100 cache accesses
-			for j := 0; j < 100; j++ {
+			for j := range 100 {
 				// Mix of hits and misses
 				if j%2 == 0 {
 					cache.get("test-org") // Cache hit
@@ -69,7 +69,7 @@ func TestConfigCacheStatsNoLock(t *testing.T) {
 	done := make(chan struct{})
 
 	// Reader goroutines - continuously call stats()
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -85,11 +85,11 @@ func TestConfigCacheStatsNoLock(t *testing.T) {
 	}
 
 	// Writer goroutines - continuously call get()
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 1000; j++ {
+			for range 1000 {
 				cache.get("test-org")
 			}
 		}()

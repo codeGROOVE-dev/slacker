@@ -8,11 +8,11 @@ import (
 
 // MemoryStore implements Store using in-memory maps only (no persistence).
 // This is used as a cache layer on top of Datastore or JSON backends.
+//
+//nolint:govet // Field order optimized for logical grouping over memory alignment
 type MemoryStore struct {
-	mu sync.RWMutex
-
-	// In-memory cache for fast lookups
-	threads       map[string]ThreadInfo
+	mu            sync.RWMutex
+	threads       map[string]ThreadInfo // In-memory cache for fast lookups
 	dms           map[string]time.Time
 	dmMessages    map[string]DMInfo
 	digests       map[string]time.Time

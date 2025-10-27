@@ -34,46 +34,46 @@ var ErrAlreadyProcessed = errors.New("event already processed by another instanc
 
 // Thread entity for Datastore.
 type threadEntity struct {
+	UpdatedAt     time.Time `datastore:"updated_at"`
+	LastEventTime time.Time `datastore:"last_event_time"`
 	ThreadTS      string    `datastore:"thread_ts"`
 	ChannelID     string    `datastore:"channel_id"`
 	MessageText   string    `datastore:"message_text,noindex"`
-	UpdatedAt     time.Time `datastore:"updated_at"`
-	LastEventTime time.Time `datastore:"last_event_time"`
 }
 
 // DM tracking entity.
 type dmEntity struct {
+	SentAt time.Time `datastore:"sent_at"`
 	UserID string    `datastore:"user_id"`
 	PRURL  string    `datastore:"pr_url"`
-	SentAt time.Time `datastore:"sent_at"`
 }
 
 // DM message entity for updating messages.
 type dmMessageEntity struct {
+	UpdatedAt   time.Time `datastore:"updated_at"`
+	SentAt      time.Time `datastore:"sent_at"`
 	ChannelID   string    `datastore:"channel_id"`
 	MessageTS   string    `datastore:"message_ts"`
 	MessageText string    `datastore:"message_text,noindex"`
-	UpdatedAt   time.Time `datastore:"updated_at"`
-	SentAt      time.Time `datastore:"sent_at"`
 }
 
 // Digest tracking entity.
 type digestEntity struct {
+	SentAt time.Time `datastore:"sent_at"`
 	UserID string    `datastore:"user_id"`
 	Date   string    `datastore:"date"` // YYYY-MM-DD format
-	SentAt time.Time `datastore:"sent_at"`
 }
 
 // Event deduplication entity.
 type eventEntity struct {
-	EventKey  string    `datastore:"event_key"`
 	Processed time.Time `datastore:"processed"`
+	EventKey  string    `datastore:"event_key"`
 }
 
 // Notification tracking entity.
 type notifyEntity struct {
-	PRURL      string    `datastore:"pr_url"`
 	NotifiedAt time.Time `datastore:"notified_at"`
+	PRURL      string    `datastore:"pr_url"`
 }
 
 // NewDatastoreStore creates a new Datastore-backed store with in-memory cache.
