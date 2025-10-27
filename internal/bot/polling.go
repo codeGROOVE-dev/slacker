@@ -350,14 +350,12 @@ func (c *Coordinator) updateClosedPRThread(ctx context.Context, pr *github.PRSna
 
 // updateThreadForClosedPR updates a single thread's message to reflect closed/merged state.
 func (c *Coordinator) updateThreadForClosedPR(ctx context.Context, pr *github.PRSnapshot, channelID string, info ThreadInfo) error {
-	var emoji, msg string
+	var emoji string
 	switch pr.State {
 	case "MERGED":
 		emoji = ":rocket:"
-		msg = "This PR was merged"
 	case "CLOSED":
 		emoji = ":x:"
-		msg = "This PR was closed without merging"
 	default:
 		return fmt.Errorf("unexpected PR state: %s", pr.State)
 	}
@@ -372,13 +370,6 @@ func (c *Coordinator) updateThreadForClosedPR(ctx context.Context, pr *github.PR
 
 	if err := c.slack.UpdateMessage(ctx, channelID, info.ThreadTS, text); err != nil {
 		return fmt.Errorf("failed to update message: %w", err)
-	}
-
-	// Post follow-up comment (don't fail if this errors - main update succeeded)
-	if err := c.slack.PostThreadReply(ctx, channelID, info.ThreadTS, msg); err != nil {
-		slog.Debug("failed to post follow-up comment for closed PR",
-			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
-			"error", err)
 	}
 
 	return nil
