@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -44,17 +45,32 @@ type apiCache struct {
 	misses  int64 // Cache miss counter
 }
 
+// circuitBreaker implements simple circuit breaker pattern for API calls.
+//
+//nolint:govet // Field order prioritizes logical grouping over memory alignment optimization
+type circuitBreaker struct {
+	mu           sync.Mutex
+	lastFailure  time.Time
+	openUntil    time.Time
+	state        string // "closed", "open", "half-open"
+	failures     int
+	failureLimit int // Number of failures before opening circuit
+}
+
 // Client wraps the Slack API client with caching.
+//
+//nolint:govet // Field order optimized for logical grouping over memory alignment
 type Client struct {
+	homeViewHandlerMu sync.RWMutex
+	stateStoreMu      sync.RWMutex
+	signingSecret     string
+	teamID            string     // Workspace team ID
+	stateStore        StateStore // State store for DM message tracking
 	api               *slack.Client
 	cache             *apiCache
-	signingSecret     string
-	teamID            string                                                 // Workspace team ID
+	breaker           *circuitBreaker
 	manager           *Manager                                               // Reference to manager for cache invalidation
 	homeViewHandler   func(ctx context.Context, teamID, userID string) error // Callback for app_home_opened events
-	homeViewHandlerMu sync.RWMutex
-	stateStore        StateStore // State store for DM message tracking
-	stateStoreMu      sync.RWMutex
 }
 
 // set stores a value in the cache with TTL.
@@ -111,6 +127,63 @@ func (c *Client) invalidateChannelCache(channelID string) {
 	slog.Debug("invalidated channel caches", "channel_id", channelID, "cleared", "membership")
 }
 
+// shouldSkipCall checks if circuit breaker is open (API unavailable).
+func (cb *circuitBreaker) shouldSkipCall() bool {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	// Circuit open - fast-fail
+	if time.Now().Before(cb.openUntil) {
+		return true
+	}
+
+	// Circuit was open but timeout elapsed - move to half-open (allow one retry)
+	if cb.state == "open" {
+		cb.state = "half-open"
+	}
+
+	// Reset failure count if last failure was >1 minute ago
+	if time.Since(cb.lastFailure) > 1*time.Minute {
+		cb.failures = 0
+		cb.state = "closed"
+	}
+
+	return false
+}
+
+// recordSuccess resets circuit breaker on successful API call.
+func (cb *circuitBreaker) recordSuccess() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	if cb.state == "half-open" {
+		slog.Info("Slack API circuit breaker recovered - back to normal operation")
+	}
+
+	cb.failures = 0
+	cb.state = "closed"
+	cb.openUntil = time.Time{}
+}
+
+// recordFailure tracks API failures and opens circuit if threshold exceeded.
+func (cb *circuitBreaker) recordFailure() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	cb.failures++
+	cb.lastFailure = time.Now()
+
+	// Open circuit after threshold
+	if cb.failures >= cb.failureLimit && cb.state != "open" {
+		cb.state = "open"
+		cb.openUntil = time.Now().Add(1 * time.Minute)
+		slog.Error("Slack API circuit breaker opened - fast-failing for 1 minute",
+			"failure_count", cb.failures,
+			"will_retry_at", cb.openUntil.Format(time.RFC3339),
+			"impact", "Slack operations will fail-fast until circuit closes")
+	}
+}
+
 // New creates a new Slack client with caching.
 func New(token, signingSecret string) *Client {
 	return &Client{
@@ -118,6 +191,10 @@ func New(token, signingSecret string) *Client {
 		signingSecret: signingSecret,
 		cache: &apiCache{
 			entries: make(map[string]cacheEntry),
+		},
+		breaker: &circuitBreaker{
+			state:        "closed",
+			failureLimit: 10, // Open circuit after 10 consecutive failures
 		},
 	}
 }
@@ -206,6 +283,11 @@ func (c *Client) WorkspaceInfo(ctx context.Context) (*slack.TeamInfo, error) {
 
 // PostThread creates a new thread in a channel for a PR with retry logic.
 func (c *Client) PostThread(ctx context.Context, channelID, text string, attachments []slack.Attachment) (string, error) {
+	// Check circuit breaker before making API call
+	if c.breaker.shouldSkipCall() {
+		return "", errors.New("slack API circuit breaker open - service temporarily unavailable")
+	}
+
 	slog.Info("posting thread to channel",
 		"channel_id", channelID,
 		"text_preview", func() string {
@@ -265,9 +347,11 @@ func (c *Client) PostThread(ctx context.Context, channelID, text string, attachm
 		retry.Context(ctx),
 	)
 	if err != nil {
+		c.breaker.recordFailure()
 		return "", fmt.Errorf("failed to post message after retries: %w", err)
 	}
 
+	c.breaker.recordSuccess()
 	slog.Info("successfully posted thread",
 		"thread_timestamp", timestamp,
 		"channel_id", channelID,
@@ -284,6 +368,10 @@ func (c *Client) PostThread(ctx context.Context, channelID, text string, attachm
 
 // UpdateMessage updates an existing message with retry logic.
 func (c *Client) UpdateMessage(ctx context.Context, channelID, timestamp, text string) error {
+	// Check circuit breaker before making API call
+	if c.breaker.shouldSkipCall() {
+		return errors.New("slack API circuit breaker open - service temporarily unavailable")
+	}
 	slog.Debug("updating message",
 		"channel_id", channelID,
 		"timestamp", timestamp,
@@ -328,9 +416,11 @@ func (c *Client) UpdateMessage(ctx context.Context, channelID, timestamp, text s
 		retry.Context(ctx),
 	)
 	if err != nil {
+		c.breaker.recordFailure()
 		return fmt.Errorf("failed to update message after retries: %w", err)
 	}
 
+	c.breaker.recordSuccess()
 	slog.Debug("successfully updated message",
 		"timestamp", timestamp,
 		"channel_id", channelID)
@@ -589,6 +679,11 @@ func (c *Client) HasRecentDMAboutPR(ctx context.Context, userID, prURL string) (
 
 // SendDirectMessage sends a direct message to a user with retry logic.
 func (c *Client) SendDirectMessage(ctx context.Context, userID, text string) (dmChannelID, messageTS string, err error) {
+	// Check circuit breaker before making API call
+	if c.breaker.shouldSkipCall() {
+		return "", "", errors.New("slack API circuit breaker open - service temporarily unavailable")
+	}
+
 	slog.Info("sending DM to user", "user", userID)
 
 	var channelID string
@@ -643,9 +738,11 @@ func (c *Client) SendDirectMessage(ctx context.Context, userID, text string) (dm
 		retry.Context(ctx),
 	)
 	if err != nil {
+		c.breaker.recordFailure()
 		return "", "", fmt.Errorf("failed to send DM after retries: %w", err)
 	}
 
+	c.breaker.recordSuccess()
 	slog.Info("successfully sent DM", "user", userID, "channel_id", channelID, "message_ts", msgTS)
 	return channelID, msgTS, nil
 }

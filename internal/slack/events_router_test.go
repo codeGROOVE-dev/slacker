@@ -33,14 +33,6 @@ func (m *mockHomeHandler) handler(ctx context.Context, teamID, userID string) er
 	return m.callErr
 }
 
-func (m *mockHomeHandler) getCalls() []homeViewCall {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	result := make([]homeViewCall, len(m.calls))
-	copy(result, m.calls)
-	return result
-}
-
 // TestHandleInteractionsRefreshButton tests the refresh button interaction flow.
 func TestHandleInteractionsRefreshButton(t *testing.T) {
 	tests := []struct {

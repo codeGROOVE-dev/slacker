@@ -48,13 +48,15 @@ type GitHubEmailLookup interface {
 }
 
 // Service handles GitHub-to-Slack user mapping.
+//
+//nolint:govet // Field order optimized for logical grouping over memory alignment
 type Service struct {
+	cacheMu      sync.RWMutex
+	flight       singleflight.Group // Deduplicates concurrent identical lookups
 	slackClient  SlackAPI
 	githubLookup GitHubEmailLookup
 	cache        map[string]*UserMapping
 	lookupSem    chan struct{} // Semaphore for limiting concurrent lookups
-	cacheMu      sync.RWMutex
-	flight       singleflight.Group // Deduplicates concurrent identical lookups
 }
 
 // New creates a new user mapping service.

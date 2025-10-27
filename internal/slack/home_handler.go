@@ -43,7 +43,7 @@ func (h *HomeHandler) HandleAppHomeOpened(ctx context.Context, teamID, slackUser
 		"slack_user_id", slackUserID)
 
 	// Try up to 2 times - first with cached client, second with fresh client after invalid_auth
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		if attempt > 0 {
 			slog.Info("retrying home view after invalid_auth", "team_id", teamID, "attempt", attempt+1)
 		}

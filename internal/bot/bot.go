@@ -41,11 +41,13 @@ type prContext struct {
 }
 
 // ThreadCache manages PR thread IDs for a workspace.
+//
+//nolint:govet // Field order optimized for logical grouping over memory alignment
 type ThreadCache struct {
-	prThreads    map[string]ThreadInfo // "owner/repo#123" -> thread info
 	mu           sync.RWMutex
-	creationLock sync.Mutex      // Prevents concurrent creation of the same PR thread
-	creating     map[string]bool // Track PRs currently being created
+	creationLock sync.Mutex            // Prevents concurrent creation of the same PR thread
+	prThreads    map[string]ThreadInfo // "owner/repo#123" -> thread info
+	creating     map[string]bool       // Track PRs currently being created
 }
 
 // ThreadInfo is an alias to state.ThreadInfo to avoid duplication.
@@ -82,18 +84,20 @@ func (tc *ThreadCache) Cleanup(maxAge time.Duration) {
 }
 
 // Coordinator coordinates between GitHub, Slack, and notifications for a single org.
+//
+//nolint:govet // Field order optimized for logical grouping over memory alignment
 type Coordinator struct {
+	processingEvents sync.WaitGroup // Tracks in-flight event processing for graceful shutdown
+	stateStore       StateStore     // Persistent state across restarts
+	sprinklerURL     string
+	workspaceName    string // Track workspace name for better logging
 	slack            *slackpkg.Client
 	github           *github.Client
 	configManager    *config.Manager
 	notifier         *notify.Manager
 	userMapper       *usermapping.Service
-	sprinklerURL     string
-	threadCache      *ThreadCache   // In-memory cache for fast lookups
-	stateStore       StateStore     // Persistent state across restarts
-	workspaceName    string         // Track workspace name for better logging
-	eventSemaphore   chan struct{}  // Limits concurrent event processing (prevents overwhelming APIs)
-	processingEvents sync.WaitGroup // Tracks in-flight event processing for graceful shutdown
+	threadCache      *ThreadCache  // In-memory cache for fast lookups
+	eventSemaphore   chan struct{} // Limits concurrent event processing (prevents overwhelming APIs)
 }
 
 // StateStore interface for persistent state - allows dependency injection for testing.
@@ -157,16 +161,40 @@ func New(
 	return c
 }
 
+// saveThread persists thread info to both cache and persistent storage.
+// This ensures threads survive restarts and are available for closed PR updates.
+func (c *Coordinator) saveThread(owner, repo string, number int, channelID string, info ThreadInfo) {
+	// Save to in-memory cache for fast lookups
+	key := fmt.Sprintf("%s/%s#%d:%s", owner, repo, number, channelID)
+	c.threadCache.Set(key, info)
+
+	// Persist to state store for cross-instance sharing and restart recovery
+	if err := c.stateStore.SaveThread(owner, repo, number, channelID, info); err != nil {
+		slog.Warn("failed to persist thread to state store",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, number),
+			"channel_id", channelID,
+			"error", err,
+			"impact", "thread updates may fail after restart")
+	} else {
+		slog.Debug("persisted thread to state store",
+			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, number),
+			"channel_id", channelID,
+			"thread_ts", info.ThreadTS)
+	}
+}
+
 // findOrCreatePRThread finds an existing thread or creates a new one for a PR.
-// Returns (threadTS, wasNewlyCreated, error).
+// Returns (threadTS, wasNewlyCreated, currentMessageText, error).
+//
+//nolint:revive // Four return values needed to track thread state and creation status
 func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner, repo string, prNumber int, prState string, pullRequest struct {
-	User struct {
+	CreatedAt time.Time `json:"created_at"`
+	User      struct {
 		Login string `json:"login"`
 	} `json:"user"`
-	HTMLURL   string    `json:"html_url"`
-	Title     string    `json:"title"`
-	Number    int       `json:"number"`
-	CreatedAt time.Time `json:"created_at"`
+	HTMLURL string `json:"html_url"`
+	Title   string `json:"title"`
+	Number  int    `json:"number"`
 }, checkResult *turn.CheckResponse,
 ) (threadTS string, wasNewlyCreated bool, currentMessageText string, err error) {
 	// Use cache key that includes channel ID to support multiple channels per PR
@@ -212,8 +240,8 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 			logFieldChannel, channelID,
 			"current_message_preview", initialSearchText[:min(100, len(initialSearchText))])
 
-		// Cache the found thread with its current message text
-		c.threadCache.Set(cacheKey, ThreadInfo{
+		// Save the found thread (cache + persist)
+		c.saveThread(owner, repo, prNumber, channelID, ThreadInfo{
 			ThreadTS:    initialSearchTS,
 			ChannelID:   channelID,
 			LastState:   prState,
@@ -289,8 +317,8 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 			"current_message_preview", crossInstanceText[:min(100, len(crossInstanceText))],
 			"note", "this prevented duplicate thread creation during rolling deployment")
 
-		// Cache it and return
-		c.threadCache.Set(cacheKey, ThreadInfo{
+		// Save it and return (cache + persist)
+		c.saveThread(owner, repo, prNumber, channelID, ThreadInfo{
 			ThreadTS:    crossInstanceCheckTS,
 			ChannelID:   channelID,
 			LastState:   prState,
@@ -312,8 +340,8 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 		return "", false, "", fmt.Errorf("failed to create PR thread: %w", err)
 	}
 
-	// Cache the new thread with its message text
-	c.threadCache.Set(cacheKey, ThreadInfo{
+	// Save the new thread (cache + persist)
+	c.saveThread(owner, repo, prNumber, channelID, ThreadInfo{
 		ThreadTS:    newThreadTS,
 		ChannelID:   channelID,
 		LastState:   prState,
@@ -337,7 +365,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 // Note: This is more expensive than search API but works reliably with basic bot permissions.
 // Results are cached by the calling code to minimize API calls.
 // Returns (threadTS, currentMessageText) - both empty if not found.
-func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL string, prCreatedAt time.Time) (string, string) {
+func (c *Coordinator) searchForPRThread(ctx context.Context, channelID, prURL string, prCreatedAt time.Time) (threadTS string, messageText string) {
 	slog.Info("searching for existing PR thread using channel history",
 		logFieldChannel, channelID,
 		"pr_url", prURL)
@@ -789,6 +817,10 @@ func (*Coordinator) extractStateFromTurnclient(checkResult *turn.CheckResponse) 
 func (*Coordinator) extractBlockedUsersFromTurnclient(checkResult *turn.CheckResponse) []string {
 	var blockedUsers []string
 	for user := range checkResult.Analysis.NextAction {
+		// Skip _system sentinel value - it indicates processing state, not an actual user
+		if user == "_system" {
+			continue
+		}
 		blockedUsers = append(blockedUsers, user)
 	}
 	return blockedUsers
@@ -899,10 +931,11 @@ func (c *Coordinator) updateDMMessagesForPR(ctx context.Context, pr prUpdateInfo
 
 	for _, slackUserID := range slackUserIDs {
 		if err := c.slack.UpdateDMMessage(ctx, slackUserID, prURL, message); err != nil {
-			slog.Debug("failed to update DM message",
+			slog.Warn("failed to update DM message",
 				"user", slackUserID,
 				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
 				"error", err,
+				"impact", "user sees stale PR state in DM",
 				"reason", "DM may not exist or too old")
 			skippedCount++
 		} else {
@@ -1140,13 +1173,13 @@ func (c *Coordinator) processPRForChannel(
 	// Find or create thread for this PR in this channel
 	// Convert to the expected struct format
 	pullRequestStruct := struct {
-		User struct {
+		CreatedAt time.Time `json:"created_at"`
+		User      struct {
 			Login string `json:"login"`
 		} `json:"user"`
-		HTMLURL   string    `json:"html_url"`
-		Title     string    `json:"title"`
-		Number    int       `json:"number"`
-		CreatedAt time.Time `json:"created_at"`
+		HTMLURL string `json:"html_url"`
+		Title   string `json:"title"`
+		Number  int    `json:"number"`
 	}{
 		User:      event.PullRequest.User,
 		HTMLURL:   event.PullRequest.HTMLURL,
@@ -1154,7 +1187,9 @@ func (c *Coordinator) processPRForChannel(
 		Number:    event.PullRequest.Number,
 		CreatedAt: event.PullRequest.CreatedAt,
 	}
-	threadTS, wasNewlyCreated, currentText, err := c.findOrCreatePRThread(ctx, channelID, owner, repo, prNumber, prState, pullRequestStruct, checkResult)
+	threadTS, wasNewlyCreated, currentText, err := c.findOrCreatePRThread(
+		ctx, channelID, owner, repo, prNumber, prState, pullRequestStruct, checkResult,
+	)
 	if err != nil {
 		slog.Error("failed to find or create PR thread",
 			"workspace", c.workspaceName,
@@ -1162,6 +1197,8 @@ func (c *Coordinator) processPRForChannel(
 			"channel", channelDisplay,
 			"channel_id", channelID,
 			"error", err,
+			"impact", "channel_update_skipped_will_retry_via_polling",
+			"next_poll_in", "5m",
 			"will_continue_with_next_channel", true)
 		return
 	}
@@ -1240,11 +1277,12 @@ func (c *Coordinator) processPRForChannel(
 					"channel", channelDisplay,
 					"channel_id", channelID,
 					"thread_ts", threadTS,
-					"error", err)
+					"error", err,
+					"impact", "message_update_skipped_will_retry_via_polling",
+					"next_poll_in", "5m")
 			} else {
-				// Update cache with new message text
-				cacheKey := fmt.Sprintf("%s/%s#%d:%s", owner, repo, prNumber, channelID)
-				c.threadCache.Set(cacheKey, ThreadInfo{
+				// Save updated thread info (cache + persist)
+				c.saveThread(owner, repo, prNumber, channelID, ThreadInfo{
 					ThreadTS:    threadTS,
 					ChannelID:   channelID,
 					LastState:   prState,
@@ -1411,7 +1449,9 @@ func (c *Coordinator) handlePullRequestFromSprinkler(
 // handlePullRequestReviewFromSprinkler handles PR review events from sprinkler.
 // Reviews update PR state (approved, changes requested, etc), so we treat them
 // like regular pull_request events and let turnclient analyze the current state.
-func (c *Coordinator) handlePullRequestReviewFromSprinkler(ctx context.Context, owner, repo string, prNumber int, sprinklerURL string, eventTimestamp time.Time) {
+func (c *Coordinator) handlePullRequestReviewFromSprinkler(
+	ctx context.Context, owner, repo string, prNumber int, sprinklerURL string, eventTimestamp time.Time,
+) {
 	slog.Info("handling PR review event from sprinkler",
 		logFieldOwner, owner,
 		logFieldRepo, repo,
@@ -1427,13 +1467,13 @@ func (c *Coordinator) handlePullRequestReviewFromSprinkler(ctx context.Context, 
 // Critical performance optimization: Posts thread immediately WITHOUT user mentions,
 // then updates asynchronously once email lookups complete (which take 13-20 seconds each).
 func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo string, number int, prState string, pr struct {
-	User struct {
+	CreatedAt time.Time `json:"created_at"`
+	User      struct {
 		Login string `json:"login"`
 	} `json:"user"`
-	HTMLURL   string    `json:"html_url"`
-	Title     string    `json:"title"`
-	Number    int       `json:"number"`
-	CreatedAt time.Time `json:"created_at"`
+	HTMLURL string `json:"html_url"`
+	Title   string `json:"title"`
+	Number  int    `json:"number"`
 }, checkResult *turn.CheckResponse,
 ) (threadTS string, messageText string, err error) {
 	// Get state-based prefix

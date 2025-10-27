@@ -65,10 +65,7 @@ func BuildBlocks(dashboard *Dashboard, primaryOrg string) []slack.Block {
 		slack.NewContextBlock("",
 			slack.NewTextBlockObject("mrkdwn", ctx, false, false),
 		),
-	)
-
-	// Refresh button
-	blocks = append(blocks,
+		// Refresh button
 		slack.NewActionBlock(
 			"refresh_actions",
 			slack.NewButtonBlockElement(
@@ -77,10 +74,9 @@ func BuildBlocks(dashboard *Dashboard, primaryOrg string) []slack.Block {
 				slack.NewTextBlockObject("plain_text", "🔄 Refresh Dashboard", true, false),
 			).WithStyle("primary"),
 		),
+		// Incoming PRs section
+		slack.NewDividerBlock(),
 	)
-
-	// Incoming PRs section
-	blocks = append(blocks, slack.NewDividerBlock())
 
 	incoming := fmt.Sprintf(":arrow_down: *Incoming PRs* (%d total)", counts.IncomingTotal)
 	if counts.IncomingBlocked > 0 {
@@ -160,21 +156,20 @@ func BuildBlocks(dashboard *Dashboard, primaryOrg string) []slack.Block {
 func formatEnhancedPRBlock(pr *PR) slack.Block {
 	// Status indicators - clear visual hierarchy
 	var emoji, status string
-	if pr.IsBlocked {
-		if pr.NeedsReview {
-			// Blocked on YOU - highest priority
-			emoji = "🚨"
-			status = "*BLOCKED ON YOU*"
-		} else {
-			// Blocked on author
-			emoji = "⏸️"
-			status = "Blocked on author"
-		}
-	} else if pr.NeedsReview {
+	switch {
+	case pr.IsBlocked && pr.NeedsReview:
+		// Blocked on YOU - highest priority
+		emoji = "🚨"
+		status = "*BLOCKED ON YOU*"
+	case pr.IsBlocked:
+		// Blocked on author
+		emoji = "⏸️"
+		status = "Blocked on author"
+	case pr.NeedsReview:
 		// Ready for your review
 		emoji = "👀"
 		status = "Ready for review"
-	} else {
+	default:
 		// Waiting/in progress
 		emoji = "⏳"
 		status = "In progress"

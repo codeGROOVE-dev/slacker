@@ -33,7 +33,8 @@ import (
 // Returns empty string if not running on GCP or detection fails.
 func detectGCPProjectID(ctx context.Context) string {
 	// Try metadata service (works on Cloud Run, GCE, GKE, Cloud Functions)
-	client := &http.Client{Timeout: 2 * time.Second}
+	httpClient := &http.Client{Timeout: 2 * time.Second}
+	//nolint:revive // GCP metadata service is internal and always accessed via HTTP
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		"http://metadata.google.internal/computeMetadata/v1/project/project-id", http.NoBody)
 	if err != nil {
@@ -41,7 +42,7 @@ func detectGCPProjectID(ctx context.Context) string {
 	}
 	req.Header.Set("Metadata-Flavor", "Google")
 
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		slog.Debug("metadata service not available (not running on GCP?)", "error", err)
 		return ""
@@ -87,7 +88,7 @@ func main() {
 	logHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		AddSource: true,
 		Level:     slog.LevelInfo,
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
 			// Shorten source paths to relative paths for cleaner logs
 			if a.Key == slog.SourceKey {
 				if source, ok := a.Value.Any().(*slog.Source); ok {
@@ -121,6 +122,7 @@ func main() {
 	os.Exit(exitCode)
 }
 
+//nolint:revive,maintidx // Complex initialization requires length for clarity and maintainability
 func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfig) int {
 	// Handle graceful shutdown.
 	sigChan := make(chan os.Signal, 1)
@@ -160,6 +162,7 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	slackManager := slack.NewManager(cfg.SlackSigningSecret)
 
 	// Initialize state store (in-memory + Datastore or JSON for persistence).
+	//nolint:interfacebloat // Interface mirrors state.Store for local type safety
 	var stateStore interface {
 		Thread(owner, repo string, number int, channelID string) (state.ThreadInfo, bool)
 		SaveThread(owner, repo string, number int, channelID string, info state.ThreadInfo) error
@@ -668,6 +671,8 @@ func (cm *coordinatorManager) handleRefreshInstallations(ctx context.Context) {
 // runBotCoordinators manages bot coordinators for all GitHub installations.
 // It spawns one coordinator per org and refreshes the list every 5 minutes.
 // Failed coordinators are automatically restarted every minute.
+//
+//nolint:interfacebloat // Interface mirrors state.Store for local type safety
 func runBotCoordinators(
 	ctx context.Context,
 	slackManager *slack.Manager,
