@@ -1132,8 +1132,6 @@ func (c *Coordinator) processPRForChannel(
 
 	// Resolve channel name to ID for API calls
 	channelID := c.slack.ResolveChannelID(ctx, channelName)
-
-	// Check if channel resolution failed
 	if channelID == channelName || (channelName != "" && channelName[0] == '#' && channelID == channelName[1:]) {
 		slog.Warn("could not resolve channel for PR processing",
 			"workspace", c.workspaceName,
@@ -1206,24 +1204,17 @@ func (c *Coordinator) processPRForChannel(
 	// Track that we notified users in this channel for DM delay logic
 	c.notifier.Tracker.UpdateChannelNotification(workspaceID, owner, repo, prNumber)
 
-	// Track user tags in channel asynchronously to avoid blocking thread creation
-	// This is the critical performance optimization - email lookups take 13-20 seconds each
-	// Extract GitHub usernames who are blocked on this PR
+	// Track user tags in channel for DM delay logic
 	blockedUsers := c.extractBlockedUsersFromTurnclient(checkResult)
 	domain := c.configManager.Domain(owner)
 	if len(blockedUsers) > 0 {
 		// Record tags for blocked users synchronously to prevent race with DM sending
-		// This must complete BEFORE DM notifications check tag info
-		// Note: Most lookups hit cache and are instant; occasional cold lookups may delay slightly
-		// but this is necessary for correct DM delay logic
 		lookupCtx, lookupCancel := context.WithTimeout(ctx, 5*time.Second)
 		defer lookupCancel()
 
 		for _, githubUser := range blockedUsers {
-			// Map GitHub username to Slack user ID
 			slackUserID, err := c.userMapper.SlackHandle(lookupCtx, githubUser, owner, domain)
 			if err == nil && slackUserID != "" {
-				// Track with channelID - this will only update on FIRST call per user/PR
 				c.notifier.Tracker.UpdateUserPRChannelTag(workspaceID, slackUserID, channelID, owner, repo, prNumber)
 				slog.Debug("tracked user tag in channel",
 					"workspace", workspaceID,

@@ -49,6 +49,88 @@ func eventKey(event client.Event) string {
 	return fmt.Sprintf("%s:%s:%s", event.Timestamp.Format(time.RFC3339Nano), event.URL, event.Type)
 }
 
+// lookupPRsForCheckEvent looks up PRs for a check event that only has a repo URL.
+// This happens when sprinkler's cache doesn't know about the PR yet (timing race).
+func (c *Coordinator) lookupPRsForCheckEvent(ctx context.Context, event client.Event, organization string) []int {
+	commitSHA := ""
+	deliveryID := ""
+	if event.Raw != nil {
+		if sha, ok := event.Raw["commit_sha"].(string); ok {
+			commitSHA = sha
+		}
+		if id, ok := event.Raw["delivery_id"].(string); ok {
+			deliveryID = id
+		}
+	}
+
+	if commitSHA == "" {
+		slog.Warn("check event without PR number or commit SHA - cannot look up PRs",
+			"organization", organization,
+			"url", event.URL,
+			"type", event.Type,
+			"delivery_id", deliveryID)
+		return nil
+	}
+
+	// Extract owner/repo from URL
+	parts := strings.Split(event.URL, "/")
+	if len(parts) < 5 || parts[2] != "github.com" {
+		slog.Error("could not extract repo from check event URL",
+			"organization", organization,
+			"url", event.URL,
+			"error", "invalid URL format")
+		return nil
+	}
+	owner := parts[3]
+	repo := parts[4]
+
+	slog.Info("sprinkler cache miss - looking up PRs for commit via GitHub API",
+		"organization", organization,
+		"owner", owner,
+		"repo", repo,
+		"commit_sha", commitSHA,
+		"type", event.Type,
+		"delivery_id", deliveryID)
+
+	// Look up PRs for this commit using GitHub API
+	// Allow up to 3 minutes for retries (2 min max delay + buffer)
+	lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+
+	prNumbers, lookupErr := c.github.FindPRsForCommit(lookupCtx, owner, repo, commitSHA)
+	if lookupErr != nil {
+		slog.Error("failed to look up PRs for commit",
+			"organization", organization,
+			"owner", owner,
+			"repo", repo,
+			"commit_sha", commitSHA,
+			"error", lookupErr,
+			"impact", "will miss this check event",
+			"fallback", "5-minute polling will catch it")
+		return nil
+	}
+
+	if len(prNumbers) == 0 {
+		slog.Debug("no open PRs found for commit - likely push to main",
+			"organization", organization,
+			"owner", owner,
+			"repo", repo,
+			"commit_sha", commitSHA,
+			"type", event.Type)
+		return nil
+	}
+
+	slog.Info("found PRs for commit - processing check event",
+		"organization", organization,
+		"owner", owner,
+		"repo", repo,
+		"commit_sha", commitSHA,
+		"pr_count", len(prNumbers),
+		"pr_numbers", prNumbers)
+
+	return prNumbers
+}
+
 // handleSprinklerEvent processes a single event from sprinkler.
 func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Event, organization string) {
 	// Generate event key using delivery_id if available, otherwise timestamp + URL + type.
@@ -130,10 +212,62 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 
 		prNumber, err := parsePRNumberFromURL(event.URL)
 		if err != nil {
-			slog.Error("failed to parse PR number from URL",
+			// Sprinkler sends events with just repo URLs when it can't find PRs for a commit
+			// For check events, try to recover by looking up PRs ourselves
+			if event.Type == "check_suite" || event.Type == "check_run" {
+				prNumbers := c.lookupPRsForCheckEvent(ctx, event, organization)
+				if prNumbers == nil {
+					return
+				}
+
+				// Extract owner/repo from URL for constructing PR URLs
+				parts := strings.Split(event.URL, "/")
+				owner := parts[3]
+				repo := parts[4]
+
+				// Process event for each PR found
+				for _, num := range prNumbers {
+					msg := SprinklerMessage{
+						Type:      event.Type,
+						Event:     event.Type,
+						Repo:      owner + "/" + repo,
+						PRNumber:  num,
+						URL:       fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, num),
+						Timestamp: event.Timestamp,
+					}
+
+					// Process with timeout
+					processCtx, processCancel := context.WithTimeout(ctx, 30*time.Second)
+					if err := c.processEvent(processCtx, msg); err != nil {
+						slog.Error("error processing recovered check event",
+							"organization", organization,
+							"error", err,
+							"type", event.Type,
+							"url", msg.URL,
+							"repo", msg.Repo,
+							"pr_number", num)
+					}
+					processCancel()
+				}
+				return
+			}
+
+			// Non-check events without PR numbers - just log and ignore
+			var commitSHA, deliveryID string
+			if event.Raw != nil {
+				if sha, ok := event.Raw["commit_sha"].(string); ok {
+					commitSHA = sha
+				}
+				if id, ok := event.Raw["delivery_id"].(string); ok {
+					deliveryID = id
+				}
+			}
+			slog.Debug("ignoring event without PR number",
 				"organization", organization,
 				"url", event.URL,
-				"error", err)
+				"type", event.Type,
+				"commit_sha", commitSHA,
+				"delivery_id", deliveryID)
 			return
 		}
 
