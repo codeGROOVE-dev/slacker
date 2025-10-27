@@ -898,6 +898,8 @@ func (c *Coordinator) updateDMMessagesForPR(ctx context.Context, pr prUpdateInfo
 	prefix := notify.PrefixForState(prState)
 	var action string
 	switch prState {
+	case "newly_published":
+		action = "newly published"
 	case "merged":
 		action = "merged"
 	case "closed":
