@@ -173,14 +173,23 @@ func PrimaryAction(nextActions map[string]turn.Action) string {
 	var primaryAction string
 	minPriority := 999
 
+	// Track all actions considered for debugging
+	actionPriorities := make(map[string]int)
+
 	for _, action := range nextActions {
 		kind := string(action.Kind)
 		priority := actionPriority(kind)
+		actionPriorities[kind] = priority
 		if priority < minPriority {
 			minPriority = priority
 			primaryAction = kind
 		}
 	}
+
+	slog.Debug("determined primary action from priorities",
+		"primary_action", primaryAction,
+		"primary_priority", minPriority,
+		"all_action_priorities", actionPriorities)
 
 	return primaryAction
 }
@@ -190,18 +199,37 @@ func PrimaryAction(nextActions map[string]turn.Action) string {
 // 1. If workflow_state == "newly_published" → ":new:"
 // 2. Otherwise → emoji based on primary next_action
 func PrefixForAnalysis(workflowState string, nextActions map[string]turn.Action) string {
+	// Log input for debugging emoji selection
+	actionKinds := make([]string, 0, len(nextActions))
+	for user, action := range nextActions {
+		actionKinds = append(actionKinds, fmt.Sprintf("%s:%s", user, action.Kind))
+	}
+	slog.Debug("determining emoji prefix",
+		"workflow_state", workflowState,
+		"next_actions_count", len(nextActions),
+		"next_actions", actionKinds)
+
 	// Special case: newly published PRs always show :new:
 	if workflowState == "newly_published" {
+		slog.Debug("using :new: emoji for newly published PR")
 		return ":new:"
 	}
 
 	// Determine primary action and return corresponding emoji
 	primaryAction := PrimaryAction(nextActions)
 	if primaryAction != "" {
-		return PrefixForAction(primaryAction)
+		emoji := PrefixForAction(primaryAction)
+		slog.Debug("determined emoji from primary action",
+			"primary_action", primaryAction,
+			"emoji", emoji)
+		return emoji
 	}
 
 	// Fallback if no actions
+	slog.Info("no primary action found - using fallback emoji",
+		"workflow_state", workflowState,
+		"next_actions_count", len(nextActions),
+		"fallback_emoji", ":postal_horn:")
 	return ":postal_horn:"
 }
 
