@@ -138,10 +138,16 @@ func (s *Service) SlackHandle(ctx context.Context, githubUsername, organization,
 // Extracted from SlackHandle to work with singleflight pattern.
 func (s *Service) doLookup(ctx context.Context, githubUsername, organization, domain string) (string, error) {
 	// Get emails for GitHub user with organization context
+	slog.Info("starting email lookup for GitHub user",
+		"github_user", githubUsername,
+		"organization", organization,
+		"domain", domain)
+
 	result, err := s.githubLookup.Lookup(ctx, githubUsername, organization)
 	if err != nil {
 		slog.Warn("failed to get emails for GitHub user",
 			"github_user", githubUsername,
+			"organization", organization,
 			"error", err)
 		return "", err
 	}
@@ -154,10 +160,17 @@ func (s *Service) doLookup(ctx context.Context, githubUsername, organization, do
 			emails[i] = addr.Email
 		}
 
-		slog.Debug("found emails for GitHub user",
+		slog.Info("found emails for GitHub user via lookup",
 			"github_user", githubUsername,
 			"email_count", len(emails),
-			"emails", emails)
+			"emails", emails,
+			"methods", func() []string {
+				methods := make([]string, len(result.Addresses))
+				for i, addr := range result.Addresses {
+					methods[i] = addr.Methods[0] // Show first method
+				}
+				return methods
+			}())
 
 		// Try finding Slack matches with all emails first
 		matches := s.findSlackMatches(ctx, githubUsername, emails)
@@ -208,9 +221,11 @@ func (s *Service) doLookup(ctx context.Context, githubUsername, organization, do
 			}
 		}
 		// Finally, try intelligent guessing
-		slog.Debug("trying intelligent email guessing",
+		slog.Info("starting intelligent email guessing",
 			"github_user", githubUsername,
-			"domain", domain)
+			"organization", organization,
+			"domain", domain,
+			"found_addresses_count", len(result.Addresses))
 
 		guessResult, err := s.githubLookup.Guess(ctx, githubUsername, organization, ghmailto.GuessOptions{
 			Domain: domain,
@@ -218,18 +233,26 @@ func (s *Service) doLookup(ctx context.Context, githubUsername, organization, do
 		if err != nil {
 			slog.Warn("email guessing failed",
 				"github_user", githubUsername,
+				"organization", organization,
 				"domain", domain,
 				"error", err)
 		} else if len(guessResult.Guesses) > 0 {
 			guessedEmails := make([]string, len(guessResult.Guesses))
+			confidences := make([]int, len(guessResult.Guesses))
+			patterns := make([]string, len(guessResult.Guesses))
 			for i, addr := range guessResult.Guesses {
 				guessedEmails[i] = addr.Email
+				confidences[i] = addr.Confidence
+				patterns[i] = addr.Pattern
 			}
 
-			slog.Debug("generated email guesses",
+			slog.Info("generated email guesses for Slack lookup",
 				"github_user", githubUsername,
 				"domain", domain,
-				"guesses", guessedEmails)
+				"guess_count", len(guessedEmails),
+				"guesses", guessedEmails,
+				"confidences", confidences,
+				"patterns", patterns)
 
 			matches := s.findSlackMatches(ctx, githubUsername, guessedEmails)
 			if len(matches) > 0 {
@@ -243,13 +266,25 @@ func (s *Service) doLookup(ctx context.Context, githubUsername, organization, do
 				s.cacheMapping(bestMatch)
 				return bestMatch.SlackUserID, nil
 			}
+			slog.Warn("email guesses generated but no Slack matches found",
+				"github_user", githubUsername,
+				"domain", domain,
+				"guesses_tried", len(guessedEmails),
+				"guesses", guessedEmails)
+		} else {
+			slog.Warn("email guessing completed but no guesses generated",
+				"github_user", githubUsername,
+				"domain", domain)
 		}
 	}
 
 	// No matches found through any method
-	slog.Info("no Slack mapping found for GitHub user",
+	slog.Warn("no Slack mapping found for GitHub user after exhausting all methods",
 		"github_user", githubUsername,
+		"organization", organization,
+		"domain", domain,
 		"tried_direct_emails", len(emails) > 0,
+		"direct_emails_tried", emails,
 		"tried_domain_filtering", domain != "",
 		"tried_guessing", domain != "")
 
@@ -387,15 +422,31 @@ func (s *Service) cacheMapping(mapping *UserMapping) {
 func (s *Service) findSlackMatches(ctx context.Context, githubUsername string, emails []string) []*UserMapping {
 	var matches []*UserMapping
 
+	slog.Info("starting Slack user lookup phase",
+		"github_user", githubUsername,
+		"email_count", len(emails),
+		"emails", emails)
+
 	// Search for each email in Slack user directory
-	for _, email := range emails {
+	for i, email := range emails {
 		// Normalize email to lowercase for consistent matching
 		normalizedEmail := strings.ToLower(email)
+		slog.Info("attempting Slack API lookup",
+			"github_user", githubUsername,
+			"attempt", i+1,
+			"of", len(emails),
+			"original_email", email,
+			"normalized_email", normalizedEmail)
+
 		user, err := s.slackClient.GetUserByEmailContext(ctx, normalizedEmail)
 		if err != nil {
-			slog.Debug("no Slack user found for email",
+			// Log detailed error info to help debug Slack API issues
+			slog.Warn("Slack API lookup failed for email",
+				"github_user", githubUsername,
 				"email", email,
-				"error", err)
+				"normalized_email", normalizedEmail,
+				"error_type", fmt.Sprintf("%T", err),
+				"error_message", err.Error())
 			continue
 		}
 
@@ -420,11 +471,19 @@ func (s *Service) findSlackMatches(ctx context.Context, githubUsername string, e
 
 		matches = append(matches, mapping)
 
-		slog.Debug("found Slack user match",
+		slog.Info("found Slack user match",
+			"github_user", githubUsername,
 			"email", email,
-			"slack_user", user.Name,
-			"confidence", confidence)
+			"slack_user_id", user.ID,
+			"slack_user_name", user.Name,
+			"confidence", confidence,
+			"is_primary_email", user.Profile.Email == email)
 	}
+
+	slog.Info("Slack user lookup phase complete",
+		"github_user", githubUsername,
+		"emails_tried", len(emails),
+		"matches_found", len(matches))
 
 	return matches
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/slacker/internal/slack"
+	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
 
 // Constants for notification defaults.
@@ -77,17 +78,21 @@ func (m *Manager) Run(ctx context.Context) error {
 
 // PRInfo contains the minimal information needed to notify about a PR.
 type PRInfo struct {
-	Owner   string
-	Repo    string
-	Title   string
-	Author  string
-	State   string
-	HTMLURL string
-	Number  int
+	Owner         string
+	Repo          string
+	Title         string
+	Author        string
+	State         string // Deprecated: use WorkflowState and NextAction for emoji determination
+	HTMLURL       string
+	Number        int
+	WorkflowState string                 // Workflow state from turnclient Analysis
+	NextAction    map[string]turn.Action // Next actions from turnclient Analysis
 }
 
 // PrefixForState returns the emoji prefix for a given PR state.
 // Exported for use by bot package to ensure consistent PR state display.
+//
+// Deprecated: Use PrefixForAnalysis instead to derive emoji from NextAction.
 func PrefixForState(prState string) string {
 	switch prState {
 	case "newly_published":
@@ -109,6 +114,95 @@ func PrefixForState(prState string) string {
 	default:
 		return ":postal_horn:"
 	}
+}
+
+// PrefixForAction returns the emoji prefix for a given action kind.
+func PrefixForAction(action string) string {
+	switch action {
+	case "publish_draft":
+		return ":construction:"
+	case "fix_tests":
+		return ":cockroach:"
+	case "tests_pending":
+		return ":test_tube:"
+	case "review", "re_review", "request_reviewers":
+		return ":hourglass:"
+	case "resolve_comments", "respond", "review_discussion":
+		return ":carpentry_saw:"
+	case "approve":
+		return ":white_check_mark:"
+	case "merge":
+		return ":rocket:"
+	default:
+		return ":postal_horn:"
+	}
+}
+
+// actionPriority returns a priority score for action kinds (lower = higher priority).
+// Used to determine which emoji to show when multiple actions are pending.
+func actionPriority(action string) int {
+	switch action {
+	case "publish_draft":
+		return 1
+	case "fix_tests":
+		return 2
+	case "tests_pending":
+		return 3
+	case "fix_conflict":
+		return 4
+	case "resolve_comments", "respond", "review_discussion":
+		return 5
+	case "review", "re_review", "request_reviewers":
+		return 6
+	case "approve":
+		return 7
+	case "merge":
+		return 8
+	default:
+		return 99
+	}
+}
+
+// PrimaryAction determines the primary action kind from a NextAction map.
+// Returns the highest-priority action (lowest priority score).
+func PrimaryAction(nextActions map[string]turn.Action) string {
+	if len(nextActions) == 0 {
+		return ""
+	}
+
+	var primaryAction string
+	minPriority := 999
+
+	for _, action := range nextActions {
+		kind := string(action.Kind)
+		priority := actionPriority(kind)
+		if priority < minPriority {
+			minPriority = priority
+			primaryAction = kind
+		}
+	}
+
+	return primaryAction
+}
+
+// PrefixForAnalysis returns the emoji prefix based on workflow state and next actions.
+// This is the primary function for determining PR emoji - it handles the logic:
+// 1. If workflow_state == "newly_published" → ":new:"
+// 2. Otherwise → emoji based on primary next_action
+func PrefixForAnalysis(workflowState string, nextActions map[string]turn.Action) string {
+	// Special case: newly published PRs always show :new:
+	if workflowState == "newly_published" {
+		return ":new:"
+	}
+
+	// Determine primary action and return corresponding emoji
+	primaryAction := PrimaryAction(nextActions)
+	if primaryAction != "" {
+		return PrefixForAction(primaryAction)
+	}
+
+	// Fallback if no actions
+	return ":postal_horn:"
 }
 
 // NotifyUser sends a smart notification to a user about a PR using the configured logic.
@@ -245,8 +339,14 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 	}
 
 	// Format notification message using same style as channel messages
-	// Use state-based emoji prefix like channel messages do
-	prefix := PrefixForState(pr.State)
+	// Determine emoji prefix based on workflow state and next actions
+	var prefix string
+	if pr.WorkflowState != "" {
+		prefix = PrefixForAnalysis(pr.WorkflowState, pr.NextAction)
+	} else {
+		// Fallback to state if workflow state not available
+		prefix = PrefixForState(pr.State)
+	}
 
 	// Format: :emoji: Title <url|repo#123> · author → action
 	var action string

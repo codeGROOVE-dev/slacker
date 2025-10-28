@@ -139,6 +139,7 @@ slacker/
 - `reactions:write` - Add and edit emoji reactions
 - `team:read` - **View workspace name and domain (required for workspace validation)**
 - `users:read` - View people in the workspace
+- `users:read.email` - **Access user email addresses (required for GitHub→Slack user mapping)**
 
 ### State Management
 - Track PR states and transitions for notification logic
