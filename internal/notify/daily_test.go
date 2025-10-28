@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codeGROOVE-dev/prx/pkg/prx"
 	"github.com/codeGROOVE-dev/slacker/pkg/home"
+	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
 
 func TestFormatDigestMessage(t *testing.T) {
@@ -197,5 +199,220 @@ func TestDailyDigestExample(t *testing.T) {
 	// Should contain footer
 	if !strings.Contains(message, "Your daily digest from Ready to Review") {
 		t.Error("Message should contain footer")
+	}
+}
+
+// TestEnrichPR verifies PR enrichment with turnclient data.
+func TestEnrichPR(t *testing.T) {
+	scheduler := &DailyDigestScheduler{}
+
+	tests := []struct {
+		name       string
+		pr         home.PR
+		action     turn.Action
+		wantFields map[string]interface{}
+	}{
+		{
+			name: "review action",
+			pr: home.PR{
+				Number:     123,
+				Title:      "Update README",
+				Author:     "alice",
+				Repository: "org/repo",
+				URL:        "https://github.com/org/repo/pull/123",
+			},
+			action: turn.Action{
+				Kind:   "review",
+				Reason: "PR needs review",
+			},
+			wantFields: map[string]interface{}{
+				"ActionKind":   "review",
+				"ActionReason": "PR needs review",
+				"NeedsReview":  true,
+				"IsBlocked":    true,
+			},
+		},
+		{
+			name: "approve action",
+			pr: home.PR{
+				Number: 456,
+				Title:  "Add feature",
+			},
+			action: turn.Action{
+				Kind:   "approve",
+				Reason: "LGTM but needs approval",
+			},
+			wantFields: map[string]interface{}{
+				"ActionKind":   "approve",
+				"ActionReason": "LGTM but needs approval",
+				"NeedsReview":  true,
+				"IsBlocked":    true,
+			},
+		},
+		{
+			name: "address_feedback action",
+			pr: home.PR{
+				Number: 789,
+				Title:  "Fix bug",
+			},
+			action: turn.Action{
+				Kind:   "address_feedback",
+				Reason: "Comments need resolution",
+			},
+			wantFields: map[string]interface{}{
+				"ActionKind":   "address_feedback",
+				"ActionReason": "Comments need resolution",
+				"NeedsReview":  false, // Not a review action
+				"IsBlocked":    true,
+			},
+		},
+		{
+			name: "merge action",
+			pr: home.PR{
+				Number: 999,
+				Title:  "Ready to merge",
+			},
+			action: turn.Action{
+				Kind:   "merge",
+				Reason: "All checks passed",
+			},
+			wantFields: map[string]interface{}{
+				"ActionKind":   "merge",
+				"ActionReason": "All checks passed",
+				"NeedsReview":  false,
+				"IsBlocked":    true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create minimal CheckResponse (only Action is used by enrichPR)
+			checkResult := &turn.CheckResponse{
+				PullRequest: prx.PullRequest{},
+				Analysis:    turn.Analysis{},
+			}
+
+			enriched := scheduler.enrichPR(tt.pr, checkResult, "testuser", tt.action)
+
+			// Verify all expected fields
+			if enriched.ActionKind != tt.wantFields["ActionKind"].(string) {
+				t.Errorf("ActionKind = %q, want %q", enriched.ActionKind, tt.wantFields["ActionKind"])
+			}
+
+			if enriched.ActionReason != tt.wantFields["ActionReason"].(string) {
+				t.Errorf("ActionReason = %q, want %q", enriched.ActionReason, tt.wantFields["ActionReason"])
+			}
+
+			if enriched.NeedsReview != tt.wantFields["NeedsReview"].(bool) {
+				t.Errorf("NeedsReview = %v, want %v", enriched.NeedsReview, tt.wantFields["NeedsReview"])
+			}
+
+			if enriched.IsBlocked != tt.wantFields["IsBlocked"].(bool) {
+				t.Errorf("IsBlocked = %v, want %v", enriched.IsBlocked, tt.wantFields["IsBlocked"])
+			}
+
+			// Verify original fields are preserved
+			if enriched.Number != tt.pr.Number {
+				t.Errorf("Number = %d, want %d", enriched.Number, tt.pr.Number)
+			}
+			if enriched.Title != tt.pr.Title {
+				t.Errorf("Title = %q, want %q", enriched.Title, tt.pr.Title)
+			}
+		})
+	}
+}
+
+// TestEnrichPR_PreservesOriginalFields verifies that enrichment doesn't lose PR data.
+func TestEnrichPR_PreservesOriginalFields(t *testing.T) {
+	scheduler := &DailyDigestScheduler{}
+
+	originalPR := home.PR{
+		Number:     123,
+		Title:      "Test PR",
+		Author:     "alice",
+		Repository: "org/repo",
+		URL:        "https://github.com/org/repo/pull/123",
+		UpdatedAt:  time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC),
+	}
+
+	action := turn.Action{
+		Kind:   "review",
+		Reason: "Needs review",
+	}
+
+	checkResult := &turn.CheckResponse{
+		PullRequest: prx.PullRequest{},
+		Analysis:    turn.Analysis{},
+	}
+
+	enriched := scheduler.enrichPR(originalPR, checkResult, "reviewer", action)
+
+	// Verify all original fields are preserved
+	if enriched.Number != originalPR.Number {
+		t.Errorf("Number changed: %d -> %d", originalPR.Number, enriched.Number)
+	}
+	if enriched.Title != originalPR.Title {
+		t.Errorf("Title changed: %q -> %q", originalPR.Title, enriched.Title)
+	}
+	if enriched.Author != originalPR.Author {
+		t.Errorf("Author changed: %q -> %q", originalPR.Author, enriched.Author)
+	}
+	if enriched.Repository != originalPR.Repository {
+		t.Errorf("Repository changed: %q -> %q", originalPR.Repository, enriched.Repository)
+	}
+	if enriched.URL != originalPR.URL {
+		t.Errorf("URL changed: %q -> %q", originalPR.URL, enriched.URL)
+	}
+	if !enriched.UpdatedAt.Equal(originalPR.UpdatedAt) {
+		t.Errorf("UpdatedAt changed: %v -> %v", originalPR.UpdatedAt, enriched.UpdatedAt)
+	}
+}
+
+// TestFormatDigestMessage_EmptyPRLists verifies handling of empty incoming/outgoing lists.
+func TestFormatDigestMessage_EmptyPRLists(t *testing.T) {
+	scheduler := &DailyDigestScheduler{}
+
+	testTime := time.Date(2025, 1, 15, 8, 30, 0, 0, time.UTC)
+
+	tests := []struct {
+		name     string
+		incoming []home.PR
+		outgoing []home.PR
+	}{
+		{
+			name:     "both empty",
+			incoming: nil,
+			outgoing: nil,
+		},
+		{
+			name:     "incoming empty",
+			incoming: nil,
+			outgoing: []home.PR{{Title: "Test", URL: "https://github.com/test/repo/pull/1", ActionKind: "merge"}},
+		},
+		{
+			name:     "outgoing empty",
+			incoming: []home.PR{{Title: "Test", URL: "https://github.com/test/repo/pull/1", ActionKind: "review"}},
+			outgoing: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			message := scheduler.formatDigestMessageAt(tt.incoming, tt.outgoing, testTime)
+
+			// Should always have greeting and footer
+			if !strings.Contains(message, "*") {
+				t.Error("expected greeting")
+			}
+			if !strings.Contains(message, "Ready to Review") {
+				t.Error("expected footer")
+			}
+
+			// Should not crash
+			if message == "" {
+				t.Error("message should not be empty")
+			}
+		})
 	}
 }
