@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -414,5 +415,73 @@ func TestFormatDigestMessage_EmptyPRLists(t *testing.T) {
 				t.Error("message should not be empty")
 			}
 		})
+	}
+}
+
+
+// TestCheckAndSend_NoOrgs tests when there are no organizations configured.
+func TestCheckAndSend_NoOrgs(t *testing.T) {
+	mockGitHubMgr := &mockGitHubManager{
+		allOrgsFunc: func() []string {
+			return []string{} // No orgs
+		},
+	}
+
+	scheduler := &DailyDigestScheduler{
+		githubManager: mockGitHubMgr,
+		configManager: &mockConfigProvider{},
+		stateStore:    &mockStateProvider{},
+		slackManager:  &mockSlackManagerWithClient{},
+	}
+
+	ctx := context.Background()
+
+	// Should not crash
+	scheduler.CheckAndSend(ctx)
+}
+
+// TestCheckAndSend_DailyRemindersDisabled tests when daily reminders are disabled.
+func TestCheckAndSend_DailyRemindersDisabled(t *testing.T) {
+	mockGitHubMgr := &mockGitHubManager{
+		allOrgsFunc: func() []string {
+			return []string{"test-org"}
+		},
+	}
+
+	mockConfigMgr := &mockConfigProvider{
+		dailyRemindersEnabledFunc: func(org string) bool {
+			return false // Disabled
+		},
+	}
+
+	scheduler := &DailyDigestScheduler{
+		githubManager: mockGitHubMgr,
+		configManager: mockConfigMgr,
+		stateStore:    &mockStateProvider{},
+		slackManager:  &mockSlackManagerWithClient{},
+	}
+
+	ctx := context.Background()
+
+	// Should not crash and should skip processing
+	scheduler.CheckAndSend(ctx)
+}
+
+// TestNewDailyDigestScheduler_WithInterfaces tests scheduler creation with interfaces.
+func TestNewDailyDigestScheduler_WithInterfaces(t *testing.T) {
+	mockGitHubMgr := &mockGitHubManager{}
+	mockConfigMgr := &mockConfigProvider{}
+	mockState := &mockStateProvider{}
+	mockSlack := &mockSlackManagerWithClient{}
+	manager := New(mockSlack, mockConfigMgr)
+
+	scheduler := NewDailyDigestScheduler(manager, mockGitHubMgr, mockConfigMgr, mockState, mockSlack)
+
+	if scheduler == nil {
+		t.Fatal("expected non-nil scheduler")
+	}
+
+	if scheduler.githubManager != mockGitHubMgr {
+		t.Error("expected github manager to be set")
 	}
 }

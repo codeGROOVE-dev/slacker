@@ -1353,7 +1353,8 @@ func (c *Coordinator) processPRForChannel(
 	domain := c.configManager.Domain(owner)
 	if len(blockedUsers) > 0 {
 		// Record tags for blocked users synchronously to prevent race with DM sending
-		lookupCtx, lookupCancel := context.WithTimeout(ctx, 5*time.Second)
+		// Generous timeout: GitHub email lookup (~5-10s) + Slack API lookups (~5-10s)
+		lookupCtx, lookupCancel := context.WithTimeout(ctx, 30*time.Second)
 		defer lookupCancel()
 
 		for _, githubUser := range blockedUsers {

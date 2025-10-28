@@ -459,3 +459,232 @@ func TestService_ClearCache(t *testing.T) {
 		t.Errorf("expected total 0 after clear, got %d", total)
 	}
 }
+
+// Test New constructor
+func TestNew(t *testing.T) {
+	client := &slack.Client{}
+	token := "test-token"
+
+	service := New(client, token)
+
+	if service == nil {
+		t.Fatal("expected non-nil service")
+	}
+	if service.slackClient == nil {
+		t.Error("expected non-nil slackClient")
+	}
+	if service.githubLookup == nil {
+		t.Error("expected non-nil githubLookup")
+	}
+	if service.cache == nil {
+		t.Error("expected non-nil cache")
+	}
+	if service.lookupSem == nil {
+		t.Error("expected non-nil lookupSem")
+	}
+}
+
+// Test NewForTesting
+func TestNewForTesting(t *testing.T) {
+	mockSlack := &MockSlackAPI{}
+	mockGitHub := &MockGitHubLookup{}
+
+	service := NewForTesting(mockSlack, mockGitHub)
+
+	if service == nil {
+		t.Fatal("expected non-nil service")
+	}
+	if service.slackClient != mockSlack {
+		t.Error("expected mockSlack as slackClient")
+	}
+	if service.githubLookup != mockGitHub {
+		t.Error("expected mockGitHub as githubLookup")
+	}
+	if service.cache == nil {
+		t.Error("expected non-nil cache")
+	}
+}
+
+// Test SetSlackClient
+func TestSetSlackClient(t *testing.T) {
+	service := &Service{
+		cache: make(map[string]*UserMapping),
+	}
+
+	mockSlack := &MockSlackAPI{}
+	service.SetSlackClient(mockSlack)
+
+	if service.slackClient != mockSlack {
+		t.Error("expected slackClient to be set to mockSlack")
+	}
+}
+
+// Test SetGitHubLookup
+func TestSetGitHubLookup(t *testing.T) {
+	service := &Service{
+		cache: make(map[string]*UserMapping),
+	}
+
+	mockGitHub := &MockGitHubLookup{}
+	service.SetGitHubLookup(mockGitHub)
+
+	if service.githubLookup != mockGitHub {
+		t.Error("expected githubLookup to be set to mockGitHub")
+	}
+}
+
+// Test SlackHandle with guessing
+func TestService_SlackHandle_WithGuessing(t *testing.T) {
+	ctx := context.Background()
+	githubUser := "testuser"
+	organization := "testorg"
+	domain := "example.com"
+	guessedEmail := "testuser@example.com"
+
+	mockGitHub := &MockGitHubLookup{
+		lookupFunc: func(ctx context.Context, username, organization string) (*ghmailto.Result, error) {
+			return &ghmailto.Result{
+				Username:  githubUser,
+				Addresses: []ghmailto.Address{},
+			}, nil
+		},
+		guessFunc: func(ctx context.Context, username, organization string, opts ghmailto.GuessOptions) (*ghmailto.GuessResult, error) {
+			return &ghmailto.GuessResult{
+				Username:       githubUser,
+				FoundAddresses: []ghmailto.Address{},
+				Guesses: []ghmailto.Address{
+					{Email: guessedEmail, Name: "Guess", Methods: []string{"guess"}, Verified: false},
+				},
+			}, nil
+		},
+	}
+
+	mockSlack := &MockSlackAPI{
+		getUserByEmailFunc: func(ctx context.Context, email string) (*slack.User, error) {
+			if email == guessedEmail {
+				return &slack.User{
+					ID:      "U789",
+					Name:    "testuser",
+					Profile: slack.UserProfile{Email: guessedEmail},
+				}, nil
+			}
+			return nil, errMockNotFound
+		},
+	}
+
+	service := &Service{
+		slackClient:  mockSlack,
+		githubLookup: mockGitHub,
+		cache:        make(map[string]*UserMapping),
+		lookupSem:    make(chan struct{}, 5),
+	}
+
+	result, err := service.SlackHandle(ctx, githubUser, organization, domain)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "U789" {
+		t.Errorf("expected 'U789', got %q", result)
+	}
+}
+
+// Test SlackHandles for batch operations
+func TestService_SlackHandles(t *testing.T) {
+	ctx := context.Background()
+	organization := "testorg"
+	domain := "example.com"
+
+	mockGitHub := &MockGitHubLookup{
+		lookupFunc: func(ctx context.Context, username, organization string) (*ghmailto.Result, error) {
+			return &ghmailto.Result{
+				Username: username,
+				Addresses: []ghmailto.Address{
+					{Email: username + "@example.com", Verified: true, Methods: []string{"test"}},
+				},
+			}, nil
+		},
+	}
+
+	mockSlack := &MockSlackAPI{
+		getUserByEmailFunc: func(ctx context.Context, email string) (*slack.User, error) {
+			if len(email) > 0 && strings.Contains(email, "@example.com") {
+				username := strings.Split(email, "@")[0]
+				return &slack.User{
+					ID:      "U" + strings.ToUpper(username[:min(1, len(username))]),
+					Name:    username,
+					Profile: slack.UserProfile{Email: email},
+				}, nil
+			}
+			return nil, errMockNotFound
+		},
+	}
+
+	service := &Service{
+		slackClient:  mockSlack,
+		githubLookup: mockGitHub,
+		cache:        make(map[string]*UserMapping),
+		lookupSem:    make(chan struct{}, 5),
+	}
+
+	users := []string{"user1", "user2", "user3"}
+	results, err := service.SlackHandles(ctx, users, organization, domain)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(results) != 3 {
+		t.Errorf("expected 3 results, got %d", len(results))
+	}
+
+	// Verify we got valid user IDs
+	for user, slackID := range results {
+		if !strings.HasPrefix(slackID, "U") {
+			t.Errorf("expected Slack ID for %s to start with 'U', got %q", user, slackID)
+		}
+	}
+}
+
+// Test selectBestMatch with various scenarios
+func TestSelectBestMatch(t *testing.T) {
+	service := &Service{}
+
+	tests := []struct {
+		name     string
+		matches  []*UserMapping
+		expected string
+	}{
+		{
+			name: "single match",
+			matches: []*UserMapping{
+				{SlackUserID: "U1", GitHubUsername: "test", Confidence: 80},
+			},
+			expected: "U1",
+		},
+		{
+			name: "highest confidence wins",
+			matches: []*UserMapping{
+				{SlackUserID: "U1", GitHubUsername: "test1", Confidence: 60},
+				{SlackUserID: "U2", GitHubUsername: "test2", Confidence: 90},
+				{SlackUserID: "U3", GitHubUsername: "test3", Confidence: 70},
+			},
+			expected: "U2",
+		},
+		{
+			name:     "no matches",
+			matches:  []*UserMapping{},
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := service.selectBestMatch(tt.matches)
+			if result == nil && tt.expected != "" {
+				t.Errorf("expected match with ID %q, got nil", tt.expected)
+			} else if result != nil && result.SlackUserID != tt.expected {
+				t.Errorf("expected ID %q, got %q", tt.expected, result.SlackUserID)
+			}
+		})
+	}
+}
+

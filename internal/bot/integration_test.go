@@ -231,7 +231,7 @@ func TestDMDelayLogicIntegration(t *testing.T) {
 		dmDelay: 65, // 65 minute delay
 	}
 
-	notifier := notify.New(slackManager, configMgr)
+	notifier := notify.New(notify.WrapSlackManager(slackManager), configMgr)
 
 	prInfo := notify.PRInfo{
 		Owner:         "test",
@@ -291,7 +291,7 @@ func TestDMDelayLogicIntegration(t *testing.T) {
 			// Create fresh tracker with initialized maps
 			notifier.Tracker = &notify.NotificationTracker{}
 			// Initialize the tracker by creating a new notifier
-			notifier = notify.New(slackManager, configMgr)
+			notifier = notify.New(notify.WrapSlackManager(slackManager), configMgr)
 
 			// Setup test scenario
 			if tt.setupFunc != nil {

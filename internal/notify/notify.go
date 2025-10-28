@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/codeGROOVE-dev/slacker/internal/slack"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
 
@@ -200,20 +199,13 @@ func formatNextActionsInternal(ctx context.Context, nextActions map[string]turn.
 
 // Manager handles user notifications across multiple workspaces.
 type Manager struct {
-	slackManager  *slack.Manager
+	slackManager  SlackManager
 	Tracker       *NotificationTracker
-	configManager interface {
-		DailyRemindersEnabled(org string) bool
-		ReminderDMDelay(org, channel string) int
-	}
+	configManager ConfigManager
 }
 
 // New creates a new notification manager.
-func New(slackManager *slack.Manager, configManager interface {
-	DailyRemindersEnabled(org string) bool
-	ReminderDMDelay(org, channel string) int
-},
-) *Manager {
+func New(slackManager SlackManager, configManager ConfigManager) *Manager {
 	return &Manager{
 		slackManager: slackManager,
 		Tracker: &NotificationTracker{

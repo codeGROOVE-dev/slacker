@@ -256,7 +256,7 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	slog.Info("configured Slack manager with state store for DM tracking")
 
 	// Initialize notification manager for multi-workspace notifications.
-	notifier := notify.New(slackManager, configManager)
+	notifier := notify.New(notify.WrapSlackManager(slackManager), configManager)
 
 	// Initialize event router for multi-workspace event handling.
 	eventRouter := slack.NewEventRouter(slackManager)
@@ -711,7 +711,7 @@ func runBotCoordinators(
 	}
 
 	// Initialize daily digest scheduler
-	dailyDigest := notify.NewDailyDigestScheduler(notifier, githubManager, configManager, stateStore, slackManager)
+	dailyDigest := notify.NewDailyDigestScheduler(notifier, github.WrapManager(githubManager), configManager, stateStore, notify.WrapSlackManager(slackManager))
 
 	// Start initial coordinators
 	cm.startCoordinators(ctx)

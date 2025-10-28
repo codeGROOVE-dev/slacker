@@ -8,48 +8,47 @@ import (
 	"strings"
 	"time"
 
-	"github.com/codeGROOVE-dev/retry"
-	"github.com/codeGROOVE-dev/slacker/internal/config"
 	"github.com/codeGROOVE-dev/slacker/internal/github"
-	slackpkg "github.com/codeGROOVE-dev/slacker/internal/slack"
 	"github.com/codeGROOVE-dev/slacker/internal/usermapping"
 	"github.com/codeGROOVE-dev/slacker/pkg/home"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
-	gh "github.com/google/go-github/v50/github"
 )
 
-// ConfigProvider provides configuration for daily digests.
-type ConfigProvider interface {
-	DailyRemindersEnabled(org string) bool
-	Domain(org string) string
-	Config(org string) (*config.RepoConfig, bool)
+// DigestUserMapper provides GitHub to Slack user mapping for daily digests.
+// This interface enables testing of daily digest logic.
+type DigestUserMapper interface {
+	SlackHandle(ctx context.Context, githubUser, org, domain string) (string, error)
 }
 
-// StateProvider provides state storage for daily digests.
-type StateProvider interface {
-	LastDigest(userID, date string) (time.Time, bool)
-	RecordDigest(userID, date string, sentAt time.Time) error
-	LastDM(userID, prURL string) (time.Time, bool)
+// TurnClient provides PR analysis functionality.
+// This interface wraps turnclient for testing.
+type TurnClient interface {
+	Check(ctx context.Context, prURL, author string, updatedAt time.Time) (*turn.CheckResponse, error)
 }
 
-// SlackManager provides Slack client operations across workspaces.
-type SlackManager interface {
-	Client(ctx context.Context, teamID string) (*slackpkg.Client, error)
+// defaultTurnClient implements TurnClient using the real turnclient.
+type defaultTurnClient struct {
+	client *turn.Client
+}
+
+func (d *defaultTurnClient) Check(ctx context.Context, prURL, author string, updatedAt time.Time) (*turn.CheckResponse, error) {
+	return d.client.Check(ctx, prURL, author, updatedAt)
 }
 
 // DailyDigestScheduler handles sending daily digest DMs to users blocking PRs.
 type DailyDigestScheduler struct {
-	notifier      *Manager
-	githubManager *github.Manager
-	configManager ConfigProvider
-	stateStore    StateProvider
-	slackManager  SlackManager
+	notifier         *Manager
+	githubManager    github.ManagerInterface
+	configManager    ConfigProvider
+	stateStore       StateProvider
+	slackManager     SlackManager
+	turnClientFactory func(authToken string) (TurnClient, error) // Factory for creating TurnClient
 }
 
 // NewDailyDigestScheduler creates a new daily digest scheduler.
 func NewDailyDigestScheduler(
 	notifier *Manager,
-	githubManager *github.Manager,
+	githubManager github.ManagerInterface,
 	configManager ConfigProvider,
 	stateStore StateProvider,
 	slackManager SlackManager,
@@ -60,6 +59,14 @@ func NewDailyDigestScheduler(
 		configManager: configManager,
 		stateStore:    stateStore,
 		slackManager:  slackManager,
+		turnClientFactory: func(authToken string) (TurnClient, error) {
+			client, err := turn.NewDefaultClient()
+			if err != nil {
+				return nil, err
+			}
+			client.SetAuthToken(authToken)
+			return &defaultTurnClient{client: client}, nil
+		},
 	}
 }
 
@@ -126,11 +133,28 @@ func (d *DailyDigestScheduler) processOrgDigests(ctx context.Context, org string
 	// Create user mapper for this org
 	userMapper := usermapping.New(slackClient.API(), githubClient.InstallationToken(ctx))
 
-	// Get all open PRs for this org
-	prs, err := d.fetchOrgPRs(ctx, githubClient, org)
+	// Create GraphQL client to fetch PRs (reuses existing shared implementation)
+	token := githubClient.InstallationToken(ctx)
+	gqlClient := github.NewGraphQLClient(ctx, token)
+
+	// Get all open PRs for this org (using shared GraphQL query)
+	snapshots, err := gqlClient.ListOpenPRs(ctx, org, 24)
 	if err != nil {
 		slog.Error("failed to fetch PRs for org", "org", org, "error", err)
 		return 0, 1
+	}
+
+	// Convert PRSnapshot to home.PR format
+	prs := make([]home.PR, 0, len(snapshots))
+	for _, snap := range snapshots {
+		prs = append(prs, home.PR{
+			Number:     snap.Number,
+			Title:      snap.Title,
+			Author:     snap.Author,
+			Repository: fmt.Sprintf("%s/%s", snap.Owner, snap.Repo),
+			URL:        snap.URL,
+			UpdatedAt:  snap.UpdatedAt,
+		})
 	}
 
 	if len(prs) == 0 {
@@ -197,108 +221,19 @@ func (d *DailyDigestScheduler) processOrgDigests(ctx context.Context, org string
 	return sent, errors
 }
 
-// fetchOrgPRs fetches all open PRs for an organization.
-func (*DailyDigestScheduler) fetchOrgPRs(ctx context.Context, githubClient *github.Client, org string) ([]home.PR, error) {
-	client := githubClient.Client()
-
-	// Search for all open PRs in this org
-	query := fmt.Sprintf("is:pr is:open org:%s", org)
-	opts := &gh.SearchOptions{
-		ListOptions: gh.ListOptions{PerPage: 100},
-	}
-
-	var allPRs []home.PR
-
-	for {
-		var result *gh.IssuesSearchResult
-		var resp *gh.Response
-
-		// Retry GitHub API call with exponential backoff
-		err := retry.Do(
-			func() error {
-				var searchErr error
-				result, resp, searchErr = client.Search.Issues(ctx, query, opts)
-				return searchErr
-			},
-			retry.Attempts(5),
-			retry.Delay(time.Second),
-			retry.MaxDelay(2*time.Minute),
-			retry.DelayType(retry.BackOffDelay),
-			retry.OnRetry(func(n uint, err error) {
-				slog.Warn("retrying GitHub search after failure",
-					"org", org,
-					"attempt", n+1,
-					"error", err)
-			}),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to search PRs after retries: %w", err)
-		}
-
-		for _, issue := range result.Issues {
-			if issue.PullRequestLinks == nil {
-				continue // Skip non-PRs
-			}
-
-			// Extract repo from URL
-			parts := strings.Split(*issue.RepositoryURL, "/")
-			if len(parts) < 2 {
-				continue
-			}
-			repo := parts[len(parts)-1]
-
-			allPRs = append(allPRs, home.PR{
-				Number:     *issue.Number,
-				Title:      *issue.Title,
-				Author:     *issue.User.Login,
-				Repository: fmt.Sprintf("%s/%s", org, repo),
-				URL:        *issue.HTMLURL,
-				UpdatedAt:  issue.UpdatedAt.Time,
-			})
-		}
-
-		if resp.NextPage == 0 {
-			break
-		}
-		opts.Page = resp.NextPage
-	}
-
-	return allPRs, nil
-}
-
 // analyzePR analyzes a PR with turnclient.
-func (*DailyDigestScheduler) analyzePR(ctx context.Context, githubClient *github.Client, _ string, pr home.PR) (*turn.CheckResponse, error) {
-	turnClient, err := turn.NewDefaultClient()
+func (d *DailyDigestScheduler) analyzePR(ctx context.Context, githubClient github.ClientInterface, _ string, pr home.PR) (*turn.CheckResponse, error) {
+	turnClient, err := d.turnClientFactory(githubClient.InstallationToken(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create turn client: %w", err)
 	}
 
-	turnClient.SetAuthToken(githubClient.InstallationToken(ctx))
-
 	checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	// Retry turnclient call with exponential backoff
-	var result *turn.CheckResponse
-	err = retry.Do(
-		func() error {
-			var checkErr error
-			result, checkErr = turnClient.Check(checkCtx, pr.URL, pr.Author, pr.UpdatedAt)
-			return checkErr
-		},
-		retry.Attempts(5),
-		retry.Delay(time.Second),
-		retry.MaxDelay(2*time.Minute),
-		retry.DelayType(retry.BackOffDelay),
-		retry.OnRetry(func(n uint, err error) {
-			slog.Warn("retrying turnclient check after failure",
-				"pr", pr.URL,
-				"attempt", n+1,
-				"error", err)
-		}),
-	)
+	result, err := turnClient.Check(checkCtx, pr.URL, pr.Author, pr.UpdatedAt)
 	if err != nil {
-		return nil, fmt.Errorf("failed to check PR after retries: %w", err)
+		return nil, fmt.Errorf("failed to check PR: %w", err)
 	}
 
 	return result, nil
@@ -316,7 +251,7 @@ func (*DailyDigestScheduler) enrichPR(pr home.PR, _ *turn.CheckResponse, _ strin
 
 // shouldSendDigest determines if a digest should be sent to a user now.
 func (d *DailyDigestScheduler) shouldSendDigest(
-	ctx context.Context, userMapper *usermapping.Service, slackClient *slackpkg.Client,
+	ctx context.Context, userMapper DigestUserMapper, slackClient SlackClient,
 	githubUser, org, domain string, _ []home.PR,
 ) bool {
 	// Map to Slack user
@@ -372,7 +307,7 @@ func (d *DailyDigestScheduler) shouldSendDigest(
 
 // sendDigest sends a daily digest to a user.
 func (d *DailyDigestScheduler) sendDigest(
-	ctx context.Context, userMapper *usermapping.Service, slackClient *slackpkg.Client,
+	ctx context.Context, userMapper DigestUserMapper, slackClient SlackClient,
 	githubUser, org, domain string, prs []home.PR,
 ) error {
 	// Map to Slack user

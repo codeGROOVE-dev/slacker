@@ -1,8 +1,15 @@
 package config
 
 import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/google/go-github/v50/github"
 )
 
 // Test pure functions that don't require external dependencies.
@@ -648,5 +655,447 @@ func TestManager_InvalidateAllConfigs(t *testing.T) {
 
 	if found1 || found2 {
 		t.Error("expected all configs to be invalidated")
+	}
+}
+
+func TestManager_SetGitHubClientAndConfig(t *testing.T) {
+	m := New()
+
+	// Test Config with no config loaded
+	cfg, exists := m.Config("test-org")
+	if exists {
+		t.Error("expected config not to exist for unknown org")
+	}
+	if cfg != nil {
+		t.Error("expected nil config for unknown org")
+	}
+
+	// Manually set a config
+	testConfig := createDefaultConfig()
+	testConfig.Global.TeamID = "T123"
+
+	m.mu.Lock()
+	m.configs["test-org"] = testConfig
+	m.mu.Unlock()
+
+	// Test Config returns the config
+	cfg, exists = m.Config("test-org")
+	if !exists {
+		t.Fatal("expected config to exist after setting")
+	}
+	if cfg == nil {
+		t.Fatal("expected non-nil config")
+	}
+	if cfg.Global.TeamID != "T123" {
+		t.Errorf("expected TeamID T123, got %q", cfg.Global.TeamID)
+	}
+
+	// Test SetGitHubClient (coverage only - behavior tested in LoadConfig tests)
+	mockClient := &github.Client{}
+	m.SetGitHubClient("test-org", mockClient)
+
+	// Verify client was set
+	m.mu.RLock()
+	client := m.clients["test-org"]
+	m.mu.RUnlock()
+
+	if client != mockClient {
+		t.Error("expected SetGitHubClient to store the client")
+	}
+}
+
+func TestManager_WorkspaceNameEdgeCases(t *testing.T) {
+	m := New()
+
+	// Test WorkspaceName with config that has empty TeamID
+	emptyConfig := createDefaultConfig()
+	emptyConfig.Global.TeamID = ""
+
+	m.mu.Lock()
+	m.configs["test-org"] = emptyConfig
+	m.mu.Unlock()
+
+	workspaceName := m.WorkspaceName("test-org")
+	if workspaceName != "" {
+		t.Errorf("expected empty workspace name, got %q", workspaceName)
+	}
+}
+
+func TestManager_IsChannelMutedCaseInsensitive(t *testing.T) {
+	m := New()
+
+	testConfig := &RepoConfig{
+		Channels: map[string]struct {
+			ReminderDMDelay *int     `yaml:"reminder_dm_delay"`
+			Repos           []string `yaml:"repos"`
+			Mute            bool     `yaml:"mute"`
+		}{
+			"TestChannel": { // Mixed case in config
+				Mute: true,
+			},
+		},
+	}
+
+	m.mu.Lock()
+	m.configs["test-org"] = testConfig
+	m.mu.Unlock()
+
+	// Exact match (case-sensitive lookup)
+	muted := m.IsChannelMuted("test-org", "TestChannel")
+	if !muted {
+		t.Error("expected TestChannel to be muted")
+	}
+
+	// Different case - won't match (IsChannelMuted is case-sensitive)
+	notMuted := m.IsChannelMuted("test-org", "testchannel")
+	if notMuted {
+		t.Error("expected case-sensitive lookup to not match")
+	}
+}
+
+func TestManager_ReminderDMDelayZeroGlobal(t *testing.T) {
+	m := New()
+
+	testConfig := &RepoConfig{
+		Channels: map[string]struct {
+			ReminderDMDelay *int     `yaml:"reminder_dm_delay"`
+			Repos           []string `yaml:"repos"`
+			Mute            bool     `yaml:"mute"`
+		}{},
+		Global: struct {
+			TeamID          string `yaml:"team_id"`
+			EmailDomain     string `yaml:"email_domain"`
+			ReminderDMDelay int    `yaml:"reminder_dm_delay"`
+			DailyReminders  bool   `yaml:"daily_reminders"`
+		}{
+			ReminderDMDelay: 0, // Explicitly disabled
+		},
+	}
+
+	m.mu.Lock()
+	m.configs["test-org"] = testConfig
+	m.mu.Unlock()
+
+	// Should fall back to default when global is 0
+	delay := m.ReminderDMDelay("test-org", "any-channel")
+	if delay != defaultReminderDMDelayMinutes {
+		t.Errorf("expected default delay %d when global is 0, got %d", defaultReminderDMDelayMinutes, delay)
+	}
+}
+
+func TestManager_ReminderDMDelayChannelZero(t *testing.T) {
+	m := New()
+
+	zeroDelay := 0
+	testConfig := &RepoConfig{
+		Channels: map[string]struct {
+			ReminderDMDelay *int     `yaml:"reminder_dm_delay"`
+			Repos           []string `yaml:"repos"`
+			Mute            bool     `yaml:"mute"`
+		}{
+			"urgent": {
+				ReminderDMDelay: &zeroDelay, // Explicitly disabled for this channel
+			},
+		},
+		Global: struct {
+			TeamID          string `yaml:"team_id"`
+			EmailDomain     string `yaml:"email_domain"`
+			ReminderDMDelay int    `yaml:"reminder_dm_delay"`
+			DailyReminders  bool   `yaml:"daily_reminders"`
+		}{
+			ReminderDMDelay: 60,
+		},
+	}
+
+	m.mu.Lock()
+	m.configs["test-org"] = testConfig
+	m.mu.Unlock()
+
+	// Channel-specific 0 should be returned (not default)
+	delay := m.ReminderDMDelay("test-org", "urgent")
+	if delay != 0 {
+		t.Errorf("expected channel delay 0 (disabled), got %d", delay)
+	}
+}
+
+func TestManager_ChannelsForRepoNoConfig(t *testing.T) {
+	m := New()
+
+	// No config loaded - should auto-discover
+	channels := m.ChannelsForRepo("test-org", "goose")
+	if len(channels) != 1 {
+		t.Fatalf("expected 1 auto-discovered channel, got %d", len(channels))
+	}
+	if channels[0] != "goose" {
+		t.Errorf("expected auto-discovered channel 'goose', got %q", channels[0])
+	}
+}
+
+func TestManager_LoadConfigNoClient(t *testing.T) {
+	m := New()
+	ctx := context.Background()
+
+	// LoadConfig should fail if no GitHub client is set
+	err := m.LoadConfig(ctx, "test-org")
+	if err == nil {
+		t.Error("expected error when GitHub client not set")
+	}
+	if err != nil && !contains(err.Error(), "github client not initialized") {
+		t.Errorf("expected 'github client not initialized' error, got %v", err)
+	}
+}
+
+func TestManager_LoadConfigFromCache(t *testing.T) {
+	m := New()
+	ctx := context.Background()
+
+	// Pre-populate cache
+	cachedConfig := createDefaultConfig()
+	cachedConfig.Global.TeamID = "T999"
+	m.cache.set("test-org", cachedConfig)
+
+	// LoadConfig should use cached config (no GitHub client needed)
+	err := m.LoadConfig(ctx, "test-org")
+	if err != nil {
+		t.Fatalf("unexpected error loading from cache: %v", err)
+	}
+
+	// Verify config was loaded from cache
+	cfg, exists := m.Config("test-org")
+	if !exists {
+		t.Fatal("expected config to exist")
+	}
+	if cfg.Global.TeamID != "T999" {
+		t.Errorf("expected cached TeamID T999, got %q", cfg.Global.TeamID)
+	}
+
+	// Verify cache stats show a hit
+	hits, _ := m.CacheStats()
+	if hits < 1 {
+		t.Error("expected at least 1 cache hit")
+	}
+}
+
+func TestManager_ReloadConfig(t *testing.T) {
+	m := New()
+	ctx := context.Background()
+
+	// Pre-populate cache
+	oldConfig := createDefaultConfig()
+	oldConfig.Global.TeamID = "T111"
+	m.cache.set("test-org", oldConfig)
+
+	// Verify config is in cache
+	_, found := m.cache.get("test-org")
+	if !found {
+		t.Fatal("expected config to be in cache")
+	}
+
+	// ReloadConfig should invalidate cache and call LoadConfig
+	// Since we don't have a GitHub client, this will fail
+	err := m.ReloadConfig(ctx, "test-org")
+	if err == nil {
+		t.Error("expected error when reloading without GitHub client")
+	}
+
+	// Verify cache was invalidated (will be a cache miss now)
+	cfg, found := m.cache.get("test-org")
+	if found && cfg != nil && cfg.Global.TeamID == "T111" {
+		t.Error("expected cache to be invalidated by ReloadConfig")
+	}
+}
+
+// Helper function to check if a string contains a substring.
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && len(substr) > 0 && indexOf(s, substr) >= 0))
+}
+
+func indexOf(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
+}
+
+// createTestGitHubClient creates a GitHub client with a mock HTTP server.
+func createTestGitHubClient(handler http.HandlerFunc) (*github.Client, *httptest.Server) {
+	server := httptest.NewServer(handler)
+	client := github.NewClient(nil)
+	client.BaseURL = must(client.BaseURL.Parse(server.URL + "/"))
+	return client, server
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+func TestManager_LoadConfigValidYAML(t *testing.T) {
+	validYAML := `
+global:
+  team_id: T123456
+  email_domain: example.com
+  reminder_dm_delay: 30
+  daily_reminders: true
+channels:
+  dev:
+    repos:
+      - goose
+      - slacker
+  all:
+    repos:
+      - "*"
+`
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repos/test-org/.codeGROOVE/contents/slack.yaml" {
+			content := base64.StdEncoding.EncodeToString([]byte(validYAML))
+			encoding := "base64"
+			response := github.RepositoryContent{
+				Type:     github.String("file"),
+				Content:  &content,
+				Encoding: &encoding,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+		http.NotFound(w, r)
+	}
+
+	client, server := createTestGitHubClient(handler)
+	defer server.Close()
+
+	m := New()
+	m.SetGitHubClient("test-org", client)
+
+	ctx := context.Background()
+	err := m.LoadConfig(ctx, "test-org")
+	if err != nil {
+		t.Fatalf("unexpected error loading valid config: %v", err)
+	}
+
+	// Verify config was loaded
+	cfg, exists := m.Config("test-org")
+	if !exists {
+		t.Fatal("expected config to exist after loading")
+	}
+	if cfg.Global.TeamID != "T123456" {
+		t.Errorf("expected TeamID T123456, got %q", cfg.Global.TeamID)
+	}
+	if cfg.Global.EmailDomain != "example.com" {
+		t.Errorf("expected email domain example.com, got %q", cfg.Global.EmailDomain)
+	}
+	if cfg.Global.ReminderDMDelay != 30 {
+		t.Errorf("expected reminder delay 30, got %d", cfg.Global.ReminderDMDelay)
+	}
+	if len(cfg.Channels) != 2 {
+		t.Errorf("expected 2 channels, got %d", len(cfg.Channels))
+	}
+}
+
+func TestManager_LoadConfig404NotFound(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}
+
+	client, server := createTestGitHubClient(handler)
+	defer server.Close()
+
+	m := New()
+	m.SetGitHubClient("test-org", client)
+
+	ctx := context.Background()
+	err := m.LoadConfig(ctx, "test-org")
+	if err != nil {
+		t.Fatalf("expected graceful degradation on 404, got error: %v", err)
+	}
+
+	// Should have default config
+	cfg, exists := m.Config("test-org")
+	if !exists {
+		t.Fatal("expected default config to exist")
+	}
+	if cfg.Global.ReminderDMDelay != defaultReminderDMDelayMinutes {
+		t.Errorf("expected default delay, got %d", cfg.Global.ReminderDMDelay)
+	}
+	if !cfg.Global.DailyReminders {
+		t.Error("expected daily reminders enabled by default")
+	}
+}
+
+func TestManager_LoadConfigInvalidYAML(t *testing.T) {
+	invalidYAML := `
+global:
+  - this is not valid yaml
+  - it should be a map
+channels: [1, 2, 3]
+`
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		content := base64.StdEncoding.EncodeToString([]byte(invalidYAML))
+		encoding := "base64"
+		response := github.RepositoryContent{
+			Type:     github.String("file"),
+			Content:  &content,
+			Encoding: &encoding,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}
+
+	client, server := createTestGitHubClient(handler)
+	defer server.Close()
+
+	m := New()
+	m.SetGitHubClient("test-org", client)
+
+	ctx := context.Background()
+	err := m.LoadConfig(ctx, "test-org")
+	if err != nil {
+		t.Fatalf("expected graceful degradation on invalid YAML, got error: %v", err)
+	}
+
+	// Should fall back to default config
+	cfg, exists := m.Config("test-org")
+	if !exists {
+		t.Fatal("expected default config to exist")
+	}
+	if cfg.Global.ReminderDMDelay != defaultReminderDMDelayMinutes {
+		t.Errorf("expected default delay, got %d", cfg.Global.ReminderDMDelay)
+	}
+}
+
+func TestManager_LoadConfigEmptyContent(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		// Return a response with nil Content
+		response := github.RepositoryContent{
+			Type: github.String("file"),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}
+
+	client, server := createTestGitHubClient(handler)
+	defer server.Close()
+
+	m := New()
+	m.SetGitHubClient("test-org", client)
+
+	ctx := context.Background()
+	err := m.LoadConfig(ctx, "test-org")
+	if err != nil {
+		t.Fatalf("expected graceful degradation on empty content, got error: %v", err)
+	}
+
+	// Should use default config
+	_, exists := m.Config("test-org")
+	if !exists {
+		t.Fatal("expected default config to exist")
 	}
 }

@@ -66,7 +66,7 @@ type Client struct {
 	signingSecret     string
 	teamID            string     // Workspace team ID
 	stateStore        StateStore // State store for DM message tracking
-	api               *slack.Client
+	api               SlackAPI   // Slack API interface for testability
 	cache             *apiCache
 	breaker           *circuitBreaker
 	manager           *Manager                                               // Reference to manager for cache invalidation
@@ -187,7 +187,7 @@ func (cb *circuitBreaker) recordFailure() {
 // New creates a new Slack client with caching.
 func New(token, signingSecret string) *Client {
 	return &Client{
-		api:           slack.New(token),
+		api:           newSlackAPIWrapper(slack.New(token)),
 		signingSecret: signingSecret,
 		cache: &apiCache{
 			entries: make(map[string]cacheEntry),
@@ -1361,9 +1361,17 @@ func (c *Client) SearchMessages(ctx context.Context, query string, params *slack
 	return result, err
 }
 
-// API returns the underlying Slack API client.
+// API returns the underlying Slack API client for compatibility.
+// This unwraps the SlackAPI interface to return the raw *slack.Client.
+// Only use this when integrating with code that hasn't been refactored
+// to use the SlackAPI interface yet.
 func (c *Client) API() *slack.Client {
-	return c.api
+	if wrapper, ok := c.api.(*slackAPIWrapper); ok {
+		return wrapper.RawClient()
+	}
+	// If it's a mock or other implementation, return nil
+	// Callers should handle this gracefully
+	return nil
 }
 
 // ChannelHistory retrieves channel message history with optional time filtering.
