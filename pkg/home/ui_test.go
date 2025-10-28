@@ -11,10 +11,10 @@ import (
 // TestBuildBlocks verifies home dashboard block generation.
 func TestBuildBlocks(t *testing.T) {
 	tests := []struct {
-		name      string
-		dashboard *Dashboard
+		name       string
+		dashboard  *Dashboard
 		primaryOrg string
-		validate  func(t *testing.T, blocks []slack.Block)
+		validate   func(t *testing.T, blocks []slack.Block)
 	}{
 		{
 			name: "empty dashboard",
@@ -392,11 +392,11 @@ func TestFormatEnhancedPRBlock(t *testing.T) {
 		{
 			name: "long title truncation",
 			pr: &PR{
-				Number:      111,
-				Title:       strings.Repeat("a", 150),
-				Repository:  "org/repo",
-				URL:         "https://github.com/org/repo/pull/111",
-				UpdatedAt:   now,
+				Number:     111,
+				Title:      strings.Repeat("a", 150),
+				Repository: "org/repo",
+				URL:        "https://github.com/org/repo/pull/111",
+				UpdatedAt:  now,
 			},
 			validate: func(t *testing.T, block slack.Block) {
 				sb := block.(*slack.SectionBlock)

@@ -1375,37 +1375,19 @@ func (c *Coordinator) processPRForChannel(
 	// Build what the message SHOULD be based on current PR state
 	// Then compare to what it IS - update if different
 	if !wasNewlyCreated {
-		// Determine expected prefix based on workflow state and next actions
-		var expectedPrefix string
-		if checkResult != nil {
-			slog.Info("determining message update emoji from analysis",
-				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
-				"workflow_state", checkResult.Analysis.WorkflowState,
-				"next_action_count", len(checkResult.Analysis.NextAction),
-				"pr_state_fallback", prState)
-			expectedPrefix = notify.PrefixForAnalysis(checkResult.Analysis.WorkflowState, checkResult.Analysis.NextAction)
-		} else {
-			slog.Info("no analysis available - using state-based emoji fallback for message update",
-				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
-				"pr_state", prState)
-			expectedPrefix = notify.PrefixForState(prState)
-		}
 		domain := c.configManager.Domain(owner)
-		urlWithState := event.PullRequest.HTMLURL + c.getStateQueryParam(prState)
-
-		expectedText := fmt.Sprintf("%s %s <%s|%s#%d> · %s",
-			expectedPrefix,
-			event.PullRequest.Title,
-			urlWithState,
-			repo,
-			prNumber,
-			event.PullRequest.User.Login,
-		)
-
-		nextActions := c.formatNextActions(ctx, checkResult, owner, domain)
-		if nextActions != "" {
-			expectedText += fmt.Sprintf(" → %s", nextActions)
+		params := notify.MessageParams{
+			CheckResult: checkResult,
+			Owner:       owner,
+			Repo:        repo,
+			PRNumber:    prNumber,
+			Title:       event.PullRequest.Title,
+			Author:      event.PullRequest.User.Login,
+			HTMLURL:     event.PullRequest.HTMLURL,
+			Domain:      domain,
+			UserMapper:  c.userMapper,
 		}
+		expectedText := notify.FormatChannelMessageBase(ctx, params) + notify.FormatNextActionsSuffix(ctx, params)
 
 		// Compare expected vs actual - update if different
 		if currentText != expectedText {
@@ -1629,36 +1611,21 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 	Number  int    `json:"number"`
 }, checkResult *turn.CheckResponse,
 ) (threadTS string, messageText string, err error) {
-	// Get emoji prefix based on workflow state and next actions
-	var prefix string
-	if checkResult != nil {
-		slog.Info("determining new thread emoji from analysis",
-			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, number),
-			"workflow_state", checkResult.Analysis.WorkflowState,
-			"next_action_count", len(checkResult.Analysis.NextAction),
-			"pr_state_fallback", prState)
-		prefix = notify.PrefixForAnalysis(checkResult.Analysis.WorkflowState, checkResult.Analysis.NextAction)
-	} else {
-		// Fallback to state-based prefix if no checkResult available
-		slog.Info("no analysis available - using state-based emoji fallback for new thread",
-			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, number),
-			"pr_state", prState)
-		prefix = notify.PrefixForState(prState)
-	}
-
-	// Add state query param to URL for debugging
-	urlWithState := pr.HTMLURL + c.getStateQueryParam(prState)
-
 	// Format initial message WITHOUT user mentions (fast path)
 	// Format: :emoji: Title repo#123 · author
-	initialText := fmt.Sprintf("%s %s <%s|%s#%d> · %s",
-		prefix,
-		pr.Title,
-		urlWithState,
-		repo,
-		number,
-		pr.User.Login,
-	)
+	domain := c.configManager.Domain(owner)
+	params := notify.MessageParams{
+		CheckResult: checkResult,
+		Owner:       owner,
+		Repo:        repo,
+		PRNumber:    number,
+		Title:       pr.Title,
+		Author:      pr.User.Login,
+		HTMLURL:     pr.HTMLURL,
+		Domain:      domain,
+		UserMapper:  c.userMapper,
+	}
+	initialText := notify.FormatChannelMessageBase(ctx, params)
 
 	// Resolve channel name to ID for consistent API calls
 	resolvedChannel := c.slack.ResolveChannelID(ctx, channel)
@@ -1694,7 +1661,6 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 
 	// Asynchronously add user mentions once email lookups complete
 	// This avoids blocking thread creation on slow email lookups (13-20 seconds each)
-	domain := c.configManager.Domain(owner)
 	if checkResult != nil && len(checkResult.Analysis.NextAction) > 0 {
 		// SECURITY NOTE: Use detached context to complete message enrichment even during shutdown.
 		// Operations bounded by 60-second timeout, allowing time for:
@@ -1710,14 +1676,15 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 		capturedNumber := number
 		capturedChannel := resolvedChannel
 		capturedInitialText := initialText
+		capturedParams := params
 		go func() {
 			defer enrichCancel()
 
 			// Perform email lookups in background
-			nextActions := c.formatNextActions(enrichCtx, checkResult, capturedOwner, domain)
-			if nextActions != "" {
+			nextActionsSuffix := notify.FormatNextActionsSuffix(enrichCtx, capturedParams)
+			if nextActionsSuffix != "" {
 				// Update message with user mentions
-				enrichedText := capturedInitialText + fmt.Sprintf(" → %s", nextActions)
+				enrichedText := capturedInitialText + nextActionsSuffix
 				if err := c.slack.UpdateMessage(enrichCtx, capturedChannel, capturedThreadTS, enrichedText); err != nil {
 					slog.Warn("failed to update thread with user mentions (async enrichment)",
 						logFieldPR, fmt.Sprintf(prFormatString, capturedOwner, capturedRepo, capturedNumber),
@@ -1729,7 +1696,7 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 						logFieldPR, fmt.Sprintf(prFormatString, capturedOwner, capturedRepo, capturedNumber),
 						logFieldChannel, capturedChannel,
 						"thread_ts", capturedThreadTS,
-						"next_actions", nextActions)
+						"next_actions_suffix", nextActionsSuffix)
 				}
 			}
 		}()

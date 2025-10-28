@@ -291,13 +291,13 @@ func TestNotificationTracker_KeyFormats(t *testing.T) {
 
 	// Test that various special characters in keys work correctly
 	tests := []struct {
-		name       string
-		workspace  string
-		user       string
-		owner      string
-		repo       string
-		prNumber   int
-		channelID  string
+		name      string
+		workspace string
+		user      string
+		owner     string
+		repo      string
+		prNumber  int
+		channelID string
 	}{
 		{
 			name:      "simple keys",
