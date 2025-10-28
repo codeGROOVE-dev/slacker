@@ -654,7 +654,7 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 		dmCtx, dmCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		go func() {
 			defer dmCancel()
-			c.sendDMNotifications(dmCtx, workspaceID, owner, repo, prNumber, uniqueUsers, event, prState)
+			c.sendDMNotifications(dmCtx, workspaceID, owner, repo, prNumber, uniqueUsers, event, prState, checkResult)
 		}()
 	} else {
 		slog.Info("no users blocking PR - no notifications needed",
@@ -682,6 +682,7 @@ func (c *Coordinator) sendDMNotifications(
 		Number int `json:"number"`
 	},
 	prState string,
+	checkResult *turn.CheckResponse,
 ) {
 	slog.Info("starting DM notification batch",
 		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
@@ -725,6 +726,11 @@ func (c *Coordinator) sendDMNotifications(
 			Author:  event.PullRequest.User.Login,
 			State:   prState,
 			HTMLURL: event.PullRequest.HTMLURL,
+		}
+		// Add workflow state and next actions if available
+		if checkResult != nil {
+			prInfo.WorkflowState = checkResult.Analysis.WorkflowState
+			prInfo.NextAction = checkResult.Analysis.NextAction
 		}
 
 		err = c.notifier.NotifyUser(ctx, workspaceID, slackUserID, tagInfo.ChannelID, channelName, prInfo)
@@ -895,7 +901,13 @@ func (c *Coordinator) updateDMMessagesForPR(ctx context.Context, pr prUpdateInfo
 	}
 
 	// Format the DM message (same format as initial send)
-	prefix := notify.PrefixForState(prState)
+	// Determine prefix based on workflow state and next actions
+	var prefix string
+	if checkResult != nil {
+		prefix = notify.PrefixForAnalysis(checkResult.Analysis.WorkflowState, checkResult.Analysis.NextAction)
+	} else {
+		prefix = notify.PrefixForState(prState)
+	}
 	var action string
 	switch prState {
 	case "newly_published":
@@ -1232,7 +1244,13 @@ func (c *Coordinator) processPRForChannel(
 	// Build what the message SHOULD be based on current PR state
 	// Then compare to what it IS - update if different
 	if !wasNewlyCreated {
-		expectedPrefix := notify.PrefixForState(prState)
+		// Determine expected prefix based on workflow state and next actions
+		var expectedPrefix string
+		if checkResult != nil {
+			expectedPrefix = notify.PrefixForAnalysis(checkResult.Analysis.WorkflowState, checkResult.Analysis.NextAction)
+		} else {
+			expectedPrefix = notify.PrefixForState(prState)
+		}
 		domain := c.configManager.Domain(owner)
 		urlWithState := event.PullRequest.HTMLURL + c.getStateQueryParam(prState)
 
@@ -1469,8 +1487,14 @@ func (c *Coordinator) createPRThread(ctx context.Context, channel, owner, repo s
 	Number  int    `json:"number"`
 }, checkResult *turn.CheckResponse,
 ) (threadTS string, messageText string, err error) {
-	// Get state-based prefix
-	prefix := notify.PrefixForState(prState)
+	// Get emoji prefix based on workflow state and next actions
+	var prefix string
+	if checkResult != nil {
+		prefix = notify.PrefixForAnalysis(checkResult.Analysis.WorkflowState, checkResult.Analysis.NextAction)
+	} else {
+		// Fallback to state-based prefix if no checkResult available
+		prefix = notify.PrefixForState(prState)
+	}
 
 	// Add state query param to URL for debugging
 	urlWithState := pr.HTMLURL + c.getStateQueryParam(prState)
