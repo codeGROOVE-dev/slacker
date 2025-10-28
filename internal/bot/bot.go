@@ -647,11 +647,15 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 		// Send DMs asynchronously to avoid blocking event processing
 		// SECURITY NOTE: Use detached context to allow graceful completion of DM notifications
 		// even if parent context is cancelled during shutdown. Operations are still bounded by
-		// explicit 15-second timeout, ensuring reasonably fast shutdown while handling slow API calls.
-		// This pattern prevents incomplete DM delivery while maintaining shutdown security.
+		// explicit 60-second timeout, allowing time for:
+		// - GitHub email lookup via gh-mailto (~5-10s with retries/timeouts)
+		// - Slack API user lookup for multiple guesses (~5-15s total)
+		// - DM delivery (~1s)
+		// This generous timeout prevents premature cancellation while still ensuring
+		// eventual completion during shutdown. Most requests complete in <10s.
 		// Note: No panic recovery - we want panics to propagate and restart the service (Cloud Run will handle it)
 		// A quiet failure is worse than a visible crash that triggers automatic recovery
-		dmCtx, dmCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		dmCtx, dmCancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
 		go func() {
 			defer dmCancel()
 			c.sendDMNotifications(dmCtx, workspaceID, owner, repo, prNumber, uniqueUsers, event, prState, checkResult)
