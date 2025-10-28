@@ -7,8 +7,8 @@ require (
 	github.com/codeGROOVE-dev/gh-mailto v0.0.0-20251024133418-149270eb16a9
 	github.com/codeGROOVE-dev/gsm v0.0.0-20251019065141-833fe2363d22
 	github.com/codeGROOVE-dev/retry v1.3.0
-	github.com/codeGROOVE-dev/sprinkler v0.0.0-20251027213037-05bb80a9db89
-	github.com/codeGROOVE-dev/turnclient v0.0.0-20251022064427-5a712e1e10e6
+	github.com/codeGROOVE-dev/sprinkler v0.0.0-20251028184624-4d8c8315a53a
+	github.com/codeGROOVE-dev/turnclient v0.0.0-20251028130307-1f85c9aa43c4
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/go-github/v50 v50.2.0
 	github.com/gorilla/mux v1.8.1
@@ -47,7 +47,7 @@ require (
 	golang.org/x/net v0.46.0 // indirect
 	golang.org/x/sys v0.37.0 // indirect
 	golang.org/x/text v0.30.0 // indirect
-	google.golang.org/api v0.253.0 // indirect
+	google.golang.org/api v0.254.0 // indirect
 	google.golang.org/genproto v0.0.0-20251022142026-3a174f9686a8 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20251022142026-3a174f9686a8 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251022142026-3a174f9686a8 // indirect

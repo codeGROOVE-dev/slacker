@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/codeGROOVE-dev/slacker/internal/slack"
@@ -15,6 +16,187 @@ import (
 const (
 	defaultReminderDMDelayMinutes = 65 // Default delay in minutes before sending DM if user tagged in channel
 )
+
+// UserMapper interface for formatting user mentions in messages.
+type UserMapper interface {
+	FormatUserMentions(ctx context.Context, githubUsers []string, owner, domain string) string
+}
+
+// MessageParams contains all parameters needed to format a channel message.
+type MessageParams struct {
+	CheckResult *turn.CheckResponse
+	Owner       string
+	Repo        string
+	PRNumber    int
+	Title       string
+	Author      string
+	HTMLURL     string
+	Domain      string
+	UserMapper  UserMapper
+}
+
+// FormatChannelMessageBase formats the base Slack channel message for a PR (without next actions).
+// This is the single source of truth for channel message formatting.
+// It handles emoji determination and base message assembly.
+// Use FormatNextActionsSuffix to add next actions when needed.
+func FormatChannelMessageBase(ctx context.Context, params MessageParams) string {
+	pr := params.CheckResult.PullRequest
+	a := params.CheckResult.Analysis
+	prID := fmt.Sprintf("%s/%s#%d", params.Owner, params.Repo, params.PRNumber)
+
+	// Log all decision factors for debugging
+	kinds := make([]string, 0, len(a.NextAction))
+	for user, action := range a.NextAction {
+		kinds = append(kinds, fmt.Sprintf("%s:%s", user, action.Kind))
+	}
+
+	slog.Info("formatting channel message",
+		"pr", prID,
+		"pr_state", pr.State,
+		"merged", pr.Merged,
+		"draft", pr.Draft,
+		"workflow_state", a.WorkflowState,
+		"next_action_count", len(a.NextAction),
+		"next_actions", kinds,
+		"checks_failing", a.Checks.Failing,
+		"checks_pending", a.Checks.Pending,
+		"checks_waiting", a.Checks.Waiting,
+		"approved", a.Approved,
+		"unresolved_comments", a.UnresolvedComments)
+
+	// Determine emoji and state parameter
+	var emoji, state string
+
+	// Handle merged/closed states first (most definitive)
+	if pr.Merged {
+		emoji, state = ":rocket:", "?st=merged"
+		slog.Info("using :rocket: emoji - PR is merged", "pr", prID, "merged_at", pr.MergedAt)
+	} else if pr.State == "closed" {
+		emoji, state = ":x:", "?st=closed"
+		slog.Info("using :x: emoji - PR is closed but not merged", "pr", prID)
+	} else if a.WorkflowState == "newly_published" {
+		emoji, state = ":new:", "?st=newly_published"
+		slog.Info("using :new: emoji - newly published PR", "pr", prID, "workflow_state", a.WorkflowState)
+	} else if len(a.NextAction) > 0 {
+		action := PrimaryAction(a.NextAction)
+		emoji = PrefixForAction(action)
+		state = stateParam(params.CheckResult)
+		slog.Info("using emoji from primary next_action", "pr", prID, "primary_action", action, "emoji", emoji, "state_param", state)
+	} else {
+		emoji, state = fallbackEmoji(params.CheckResult)
+		slog.Info("using fallback emoji - no workflow_state or next_actions", "pr", prID, "emoji", emoji, "state_param", state, "fallback_reason", "empty_workflow_state_and_next_actions")
+	}
+
+	return fmt.Sprintf("%s %s <%s|%s#%d> · %s",
+		emoji,
+		params.Title,
+		params.HTMLURL+state,
+		params.Repo,
+		params.PRNumber,
+		params.Author)
+}
+
+// FormatNextActionsSuffix formats the next actions suffix for a channel message.
+// Returns empty string if no next actions are present.
+// Call this after FormatChannelMessageBase to build a complete message with user mentions.
+func FormatNextActionsSuffix(ctx context.Context, params MessageParams) string {
+	if params.CheckResult == nil || len(params.CheckResult.Analysis.NextAction) == 0 {
+		return ""
+	}
+
+	actions := formatNextActionsInternal(ctx, params.CheckResult.Analysis.NextAction, params.Owner, params.Domain, params.UserMapper)
+	if actions != "" {
+		return fmt.Sprintf(" → %s", actions)
+	}
+	return ""
+}
+
+// stateParam returns the URL state parameter based on PR analysis.
+func stateParam(r *turn.CheckResponse) string {
+	pr := r.PullRequest
+	a := r.Analysis
+
+	if pr.Draft {
+		return "?st=tests_running"
+	}
+	if a.Checks.Failing > 0 {
+		return "?st=tests_broken"
+	}
+	if a.Checks.Pending > 0 || a.Checks.Waiting > 0 {
+		return "?st=tests_running"
+	}
+	if a.Approved {
+		if a.UnresolvedComments > 0 {
+			return "?st=changes_requested"
+		}
+		return "?st=approved"
+	}
+	return "?st=awaiting_review"
+}
+
+// fallbackEmoji determines emoji when no workflow_state or next_actions are available.
+func fallbackEmoji(r *turn.CheckResponse) (emoji, state string) {
+	pr := r.PullRequest
+	a := r.Analysis
+
+	if pr.Draft {
+		return ":test_tube:", "?st=tests_running"
+	}
+	if a.Checks.Failing > 0 {
+		return ":cockroach:", "?st=tests_broken"
+	}
+	if a.Checks.Pending > 0 || a.Checks.Waiting > 0 {
+		return ":test_tube:", "?st=tests_running"
+	}
+	if a.Approved {
+		if a.UnresolvedComments > 0 {
+			return ":carpentry_saw:", "?st=changes_requested"
+		}
+		return ":white_check_mark:", "?st=approved"
+	}
+	return ":hourglass:", "?st=awaiting_review"
+}
+
+// formatNextActionsInternal formats next actions with user mentions (internal helper).
+func formatNextActionsInternal(ctx context.Context, nextActions map[string]turn.Action, owner, domain string, userMapper UserMapper) string {
+	if len(nextActions) == 0 {
+		return ""
+	}
+
+	// Group users by action kind, filtering out _system users
+	actionGroups := make(map[string][]string)
+	for user, action := range nextActions {
+		actionKind := string(action.Kind)
+		// Skip _system users but still track the action exists
+		if user != "_system" {
+			actionGroups[actionKind] = append(actionGroups[actionKind], user)
+		} else if _, exists := actionGroups[actionKind]; !exists {
+			// Action only has _system - create empty slice to track it exists
+			actionGroups[actionKind] = []string{}
+		}
+	}
+
+	// Format each action group
+	var parts []string
+	for actionKind, users := range actionGroups {
+		// Convert snake_case to space-separated words
+		actionName := strings.ReplaceAll(actionKind, "_", " ")
+
+		// Format user mentions (will be empty if only _system was assigned)
+		userMentions := userMapper.FormatUserMentions(ctx, users, owner, domain)
+
+		// If action has users, format as "action: users"
+		// If no users (was only _system), just show the action
+		if userMentions != "" {
+			parts = append(parts, fmt.Sprintf("%s: %s", actionName, userMentions))
+		} else {
+			parts = append(parts, actionName)
+		}
+	}
+
+	// Use semicolons to separate different actions (commas are used between users)
+	return strings.Join(parts, "; ")
+}
 
 // Manager handles user notifications across multiple workspaces.
 type Manager struct {
