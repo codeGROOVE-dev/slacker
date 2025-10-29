@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -254,6 +255,9 @@ func formatNextActionsInternal(ctx context.Context, nextActions map[string]turn.
 	for actionKind, users := range actionGroups {
 		// Convert snake_case to space-separated words
 		actionName := strings.ReplaceAll(actionKind, "_", " ")
+
+		// Sort users for deterministic output
+		sort.Strings(users)
 
 		// Format user mentions (will be empty if only _system was assigned)
 		userMentions := userMapper.FormatUserMentions(ctx, users, owner, domain)
