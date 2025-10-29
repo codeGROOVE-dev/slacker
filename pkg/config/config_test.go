@@ -1071,6 +1071,112 @@ channels: [1, 2, 3]
 	}
 }
 
+func TestManager_LoadConfigCodeGROOVEProdConfig(t *testing.T) {
+	// Test with actual production config from codeGROOVE-dev/.codeGROOVE/slack.yaml
+	prodYAML := `global:
+    team_id: T09CJ7X7T7Y
+    email_domain: codegroove.dev
+    reminder_dm_delay: 1
+
+channels:
+    goose:
+      mute: true
+
+    all-codegroove:
+      repos:
+        - "*"
+
+    social:
+      repos:
+        - goose
+        - sprinkler
+        - slacker
+`
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		content := base64.StdEncoding.EncodeToString([]byte(prodYAML))
+		encoding := "base64"
+		response := github.RepositoryContent{
+			Type:     github.String("file"),
+			Content:  &content,
+			Encoding: &encoding,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			t.Errorf("failed to encode response: %v", err)
+		}
+	}
+
+	client, server := createTestGitHubClient(handler)
+	defer server.Close()
+
+	m := New()
+	m.SetGitHubClient("codeGROOVE-dev", client)
+
+	ctx := context.Background()
+	err := m.LoadConfig(ctx, "codeGROOVE-dev")
+	if err != nil {
+		t.Fatalf("unexpected error loading production config: %v", err)
+	}
+
+	// Verify config was loaded correctly
+	cfg, exists := m.Config("codeGROOVE-dev")
+	if !exists {
+		t.Fatal("expected config to exist after loading")
+	}
+	if cfg.Global.TeamID != "T09CJ7X7T7Y" {
+		t.Errorf("expected TeamID T09CJ7X7T7Y, got %q", cfg.Global.TeamID)
+	}
+	if cfg.Global.EmailDomain != "codegroove.dev" {
+		t.Errorf("expected email domain codegroove.dev, got %q", cfg.Global.EmailDomain)
+	}
+	if cfg.Global.ReminderDMDelay != 1 {
+		t.Errorf("expected reminder delay 1 minute, got %d", cfg.Global.ReminderDMDelay)
+	}
+	if len(cfg.Channels) != 3 {
+		t.Errorf("expected 3 channels, got %d", len(cfg.Channels))
+	}
+
+	// Verify goose channel is muted
+	gooseChannel, exists := cfg.Channels["goose"]
+	if !exists {
+		t.Error("expected goose channel to exist")
+	}
+	if !gooseChannel.Mute {
+		t.Error("expected goose channel to be muted")
+	}
+
+	// Verify all-codegroove has wildcard
+	allChannel, exists := cfg.Channels["all-codegroove"]
+	if !exists {
+		t.Error("expected all-codegroove channel to exist")
+	}
+	if len(allChannel.Repos) != 1 || allChannel.Repos[0] != "*" {
+		t.Errorf("expected all-codegroove to have wildcard repo, got %v", allChannel.Repos)
+	}
+
+	// Verify social channel repos
+	socialChannel, exists := cfg.Channels["social"]
+	if !exists {
+		t.Error("expected social channel to exist")
+	}
+	expectedRepos := []string{"goose", "sprinkler", "slacker"}
+	if len(socialChannel.Repos) != len(expectedRepos) {
+		t.Errorf("expected %d repos in social channel, got %d", len(expectedRepos), len(socialChannel.Repos))
+	}
+	for i, repo := range expectedRepos {
+		if i >= len(socialChannel.Repos) || socialChannel.Repos[i] != repo {
+			t.Errorf("expected repo %q at index %d in social channel, got %v", repo, i, socialChannel.Repos)
+		}
+	}
+
+	// Verify ReminderDMDelay returns correct value
+	delay := m.ReminderDMDelay("codeGROOVE-dev", "social")
+	if delay != 1 {
+		t.Errorf("expected ReminderDMDelay to return 1 minute, got %d", delay)
+	}
+}
+
 func TestManager_LoadConfigEmptyContent(t *testing.T) {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		// Return a response with nil Content

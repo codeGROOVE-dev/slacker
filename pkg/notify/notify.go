@@ -145,7 +145,15 @@ func emojiFromWorkflowState(workflowState string, nextActions map[string]turn.Ac
 		return ":test_tube:", "?st=tests_running"
 
 	case string(turn.StateTestedWaitingForAssignment):
-		// Waiting for reviewers to be assigned
+		// Check if tests are actually broken despite "TESTED" state
+		// This can happen if new commits pushed after tests passed
+		if len(nextActions) > 0 {
+			action := PrimaryAction(nextActions)
+			if action == string(turn.ActionFixTests) {
+				return ":cockroach:", "?st=tests_broken"
+			}
+		}
+		// Tests passed, waiting for reviewers to be assigned
 		return ":shrug:", "?st=awaiting_assignment"
 
 	case string(turn.StateAssignedWaitingForReview):

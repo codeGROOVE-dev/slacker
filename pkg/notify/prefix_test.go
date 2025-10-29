@@ -61,6 +61,14 @@ func TestPrefixForAnalysis(t *testing.T) {
 			expectedEmoji: ":shrug:",
 		},
 		{
+			name:          "TESTED_WAITING_FOR_ASSIGNMENT with broken tests shows :cockroach:",
+			workflowState: string(turn.StateTestedWaitingForAssignment),
+			nextAction: map[string]turn.Action{
+				"author": {Kind: turn.ActionFixTests},
+			},
+			expectedEmoji: ":cockroach:",
+		},
+		{
 			name:          "ASSIGNED_WAITING_FOR_REVIEW shows :hourglass:",
 			workflowState: string(turn.StateAssignedWaitingForReview),
 			nextAction: map[string]turn.Action{
