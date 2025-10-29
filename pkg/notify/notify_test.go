@@ -18,7 +18,7 @@ func TestNotifyManagerRun(t *testing.T) {
 	mockSlackMgr := &mockSlackManager{}
 	mockConfigMgr := &mockConfigManager{}
 
-	manager := New(mockSlackMgr, mockConfigMgr)
+	manager := New(mockSlackMgr, mockConfigMgr, &mockStore{})
 
 	// Create a context with short timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)

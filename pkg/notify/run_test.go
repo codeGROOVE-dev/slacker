@@ -4,7 +4,24 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/codeGROOVE-dev/slacker/pkg/state"
 )
+
+// mockStore implements Store interface for testing.
+type mockStore struct{}
+
+func (m *mockStore) QueuePendingDM(dm state.PendingDM) error {
+	return nil
+}
+
+func (m *mockStore) GetPendingDMs(before time.Time) ([]state.PendingDM, error) {
+	return nil, nil
+}
+
+func (m *mockStore) RemovePendingDM(id string) error {
+	return nil
+}
 
 // TestRun_CleanupTicker tests that Run calls Tracker.Cleanup periodically.
 func TestRun_CleanupTicker(t *testing.T) {
@@ -57,8 +74,9 @@ func TestRun_CleanupTicker(t *testing.T) {
 func TestRun_ContextCancellation(t *testing.T) {
 	mockSlackMgr := &mockSlackManager{}
 	mockConfigMgr := &mockConfigManager{}
+	mockSt := &mockStore{}
 
-	manager := New(mockSlackMgr, mockConfigMgr)
+	manager := New(mockSlackMgr, mockConfigMgr, mockSt)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -77,8 +95,9 @@ func TestRun_ContextCancellation(t *testing.T) {
 func TestRun_TickerFires(t *testing.T) {
 	mockSlackMgr := &mockSlackManager{}
 	mockConfigMgr := &mockConfigManager{}
+	mockSt := &mockStore{}
 
-	manager := New(mockSlackMgr, mockConfigMgr)
+	manager := New(mockSlackMgr, mockConfigMgr, mockSt)
 
 	// Run for a short time to allow ticker to fire
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)

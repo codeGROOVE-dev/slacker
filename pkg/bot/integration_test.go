@@ -10,6 +10,7 @@ import (
 	"github.com/codeGROOVE-dev/slacker/pkg/notify"
 	"github.com/codeGROOVE-dev/slacker/pkg/slack"
 	"github.com/codeGROOVE-dev/slacker/pkg/slacktest"
+	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 	slackapi "github.com/slack-go/slack"
@@ -231,7 +232,10 @@ func TestDMDelayLogicIntegration(t *testing.T) {
 		dmDelay: 65, // 65 minute delay
 	}
 
-	notifier := notify.New(notify.WrapSlackManager(slackManager), configMgr)
+	// Create in-memory store for pending DMs
+	store := state.NewMemoryStore()
+
+	notifier := notify.New(notify.WrapSlackManager(slackManager), configMgr, store)
 
 	prInfo := notify.PRInfo{
 		Owner:         "test",
@@ -291,7 +295,8 @@ func TestDMDelayLogicIntegration(t *testing.T) {
 			// Create fresh tracker with initialized maps
 			notifier.Tracker = &notify.NotificationTracker{}
 			// Initialize the tracker by creating a new notifier
-			notifier = notify.New(notify.WrapSlackManager(slackManager), configMgr)
+			store = state.NewMemoryStore() // Reset store as well
+			notifier = notify.New(notify.WrapSlackManager(slackManager), configMgr, store)
 
 			// Setup test scenario
 			if tt.setupFunc != nil {

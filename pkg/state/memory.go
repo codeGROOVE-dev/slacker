@@ -18,6 +18,7 @@ type MemoryStore struct {
 	digests       map[string]time.Time
 	events        map[string]time.Time
 	notifications map[string]time.Time
+	pendingDMs    map[string]PendingDM // Pending DMs to be sent
 }
 
 // NewMemoryStore creates a new in-memory-only state store.
@@ -29,6 +30,7 @@ func NewMemoryStore() *MemoryStore {
 		digests:       make(map[string]time.Time),
 		events:        make(map[string]time.Time),
 		notifications: make(map[string]time.Time),
+		pendingDMs:    make(map[string]PendingDM),
 	}
 }
 
@@ -200,6 +202,43 @@ func (s *MemoryStore) Cleanup() error {
 		}
 	}
 
+	// Clean up old pending DMs (>7 days or already past send time by >1 day)
+	for key, dm := range s.pendingDMs {
+		if now.Sub(dm.QueuedAt) > 7*24*time.Hour || now.Sub(dm.SendAfter) > 24*time.Hour {
+			delete(s.pendingDMs, key)
+		}
+	}
+
+	return nil
+}
+
+// QueuePendingDM adds a DM to the pending queue.
+func (s *MemoryStore) QueuePendingDM(dm PendingDM) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pendingDMs[dm.ID] = dm
+	return nil
+}
+
+// GetPendingDMs returns all pending DMs that should be sent (SendAfter <= before).
+func (s *MemoryStore) GetPendingDMs(before time.Time) ([]PendingDM, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var result []PendingDM
+	for _, dm := range s.pendingDMs {
+		if !dm.SendAfter.After(before) {
+			result = append(result, dm)
+		}
+	}
+	return result, nil
+}
+
+// RemovePendingDM removes a pending DM from the queue.
+func (s *MemoryStore) RemovePendingDM(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.pendingDMs, id)
 	return nil
 }
 

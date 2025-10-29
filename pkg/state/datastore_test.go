@@ -541,3 +541,264 @@ func TestDatastoreStore_MemoryFirstFallback(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	store.Close()
 }
+
+func TestDatastoreStore_PendingDMOperations(t *testing.T) {
+	client, cleanup := datastore.NewMockClient(t)
+	defer cleanup()
+
+	store := &DatastoreStore{
+		ds:       client,
+		memory:   NewMemoryStore(),
+		disabled: false,
+	}
+	defer store.Close()
+
+	// Test retrieval when no pending DMs exist
+	pending, err := store.GetPendingDMs(time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error getting pending DMs: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Errorf("expected 0 pending DMs, got %d", len(pending))
+	}
+
+	// Queue a DM that should be sent now
+	now := time.Now().Truncate(time.Millisecond)
+	dm1 := PendingDM{
+		ID:            "dm-001",
+		WorkspaceID:   "T123",
+		UserID:        "U001",
+		PROwner:       "test-org",
+		PRRepo:        "test-repo",
+		PRNumber:      123,
+		PRURL:         "https://github.com/test-org/test-repo/pull/123",
+		PRTitle:       "Test PR",
+		PRAuthor:      "author",
+		PRState:       "open",
+		WorkflowState: "awaiting_review",
+		NextActions:   `{"U001":{"kind":"review"}}`,
+		ChannelID:     "C123",
+		ChannelName:   "test-channel",
+		QueuedAt:      now.Add(-10 * time.Minute),
+		SendAfter:     now.Add(-5 * time.Minute), // 5 minutes ago - ready to send
+	}
+
+	err = store.QueuePendingDM(dm1)
+	if err != nil {
+		t.Fatalf("unexpected error queueing DM: %v", err)
+	}
+
+	// Queue a DM that should be sent in the future
+	dm2 := PendingDM{
+		ID:            "dm-002",
+		WorkspaceID:   "T123",
+		UserID:        "U002",
+		PROwner:       "test-org",
+		PRRepo:        "test-repo",
+		PRNumber:      456,
+		PRURL:         "https://github.com/test-org/test-repo/pull/456",
+		PRTitle:       "Another PR",
+		PRAuthor:      "author2",
+		PRState:       "open",
+		WorkflowState: "tests_broken",
+		NextActions:   `{"U002":{"kind":"fix"}}`,
+		ChannelID:     "C456",
+		ChannelName:   "another-channel",
+		QueuedAt:      now,
+		SendAfter:     now.Add(10 * time.Minute), // 10 minutes from now - not ready yet
+	}
+
+	err = store.QueuePendingDM(dm2)
+	if err != nil {
+		t.Fatalf("unexpected error queueing second DM: %v", err)
+	}
+
+	// Get pending DMs from memory cache (fast path)
+	pending, err = store.GetPendingDMs(now)
+	if err != nil {
+		t.Fatalf("unexpected error getting pending DMs: %v", err)
+	}
+
+	// Only dm1 should be returned (dm2 is in the future)
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending DM from memory, got %d", len(pending))
+	}
+
+	if pending[0].ID != "dm-001" {
+		t.Errorf("expected DM ID dm-001, got %s", pending[0].ID)
+	}
+
+	// Give async Datastore writes time to complete
+	time.Sleep(200 * time.Millisecond)
+
+	// Clear memory cache to test Datastore retrieval
+	store.memory = NewMemoryStore()
+
+	// Get pending DMs from Datastore
+	// Note: The mock Datastore may return all DMs regardless of filter
+	// In production, the filter would work correctly
+	future := now.Add(15 * time.Minute)
+	pending, err = store.GetPendingDMs(future)
+	if err != nil {
+		t.Fatalf("unexpected error getting pending DMs from Datastore: %v", err)
+	}
+
+	// Should get both DMs from Datastore
+	if len(pending) < 2 {
+		t.Fatalf("expected at least 2 pending DMs from Datastore, got %d", len(pending))
+	}
+
+	// Verify both DMs are present
+	dmIDs := make(map[string]bool)
+	for _, dm := range pending {
+		dmIDs[dm.ID] = true
+	}
+	if !dmIDs["dm-001"] {
+		t.Error("expected dm-001 to be in Datastore")
+	}
+	if !dmIDs["dm-002"] {
+		t.Error("expected dm-002 to be in Datastore")
+	}
+
+	// Remove dm-001
+	err = store.RemovePendingDM("dm-001")
+	if err != nil {
+		t.Fatalf("unexpected error removing DM: %v", err)
+	}
+
+	// Give async Datastore delete time to complete
+	time.Sleep(200 * time.Millisecond)
+
+	// Clear memory again to force Datastore query
+	store.memory = NewMemoryStore()
+
+	// Now only dm-002 should remain in Datastore (query in future to catch it)
+	futureLater := now.Add(15 * time.Minute)
+	pending, err = store.GetPendingDMs(futureLater)
+	if err != nil {
+		t.Fatalf("unexpected error getting pending DMs after removal: %v", err)
+	}
+
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending DM after removal, got %d", len(pending))
+	}
+
+	if pending[0].ID != "dm-002" {
+		t.Errorf("expected remaining DM to be dm-002, got %s", pending[0].ID)
+	}
+
+	// Remove non-existent DM should not error
+	err = store.RemovePendingDM("dm-999")
+	if err != nil {
+		t.Errorf("unexpected error removing non-existent DM: %v", err)
+	}
+}
+
+func TestDatastoreStore_PendingDMDisabledMode(t *testing.T) {
+	// Create store in disabled mode (no Datastore client)
+	store := &DatastoreStore{
+		ds:       nil,
+		memory:   NewMemoryStore(),
+		disabled: true,
+	}
+	defer store.Close()
+
+	now := time.Now()
+
+	// Queue DM in memory-only mode
+	dm := PendingDM{
+		ID:        "dm-001",
+		UserID:    "U001",
+		PRURL:     "https://github.com/test/repo/pull/123",
+		SendAfter: now.Add(-5 * time.Minute),
+	}
+
+	err := store.QueuePendingDM(dm)
+	if err != nil {
+		t.Fatalf("unexpected error queueing DM in disabled mode: %v", err)
+	}
+
+	// Get pending DMs from memory
+	pending, err := store.GetPendingDMs(now)
+	if err != nil {
+		t.Fatalf("unexpected error getting pending DMs in disabled mode: %v", err)
+	}
+
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending DM in disabled mode, got %d", len(pending))
+	}
+
+	// Remove DM
+	err = store.RemovePendingDM("dm-001")
+	if err != nil {
+		t.Fatalf("unexpected error removing DM in disabled mode: %v", err)
+	}
+
+	// Verify removed
+	pending, err = store.GetPendingDMs(now)
+	if err != nil {
+		t.Fatalf("unexpected error getting pending DMs after removal: %v", err)
+	}
+
+	if len(pending) != 0 {
+		t.Errorf("expected 0 pending DMs after removal, got %d", len(pending))
+	}
+}
+
+func TestDatastoreStore_PendingDMCleanup(t *testing.T) {
+	client, cleanup := datastore.NewMockClient(t)
+	defer cleanup()
+
+	store := &DatastoreStore{
+		ds:       client,
+		memory:   NewMemoryStore(),
+		disabled: false,
+	}
+	defer store.Close()
+
+	now := time.Now().Truncate(time.Millisecond)
+	oldTime := now.Add(-100 * 24 * time.Hour) // 100 days ago
+
+	// Add an old pending DM (>90 days)
+	oldDM := PendingDM{
+		ID:        "old-dm",
+		UserID:    "U001",
+		PRURL:     "https://github.com/test/repo/pull/1",
+		QueuedAt:  oldTime,
+		SendAfter: oldTime,
+	}
+	store.QueuePendingDM(oldDM)
+
+	// Add a recent pending DM
+	recentDM := PendingDM{
+		ID:        "recent-dm",
+		UserID:    "U002",
+		PRURL:     "https://github.com/test/repo/pull/2",
+		QueuedAt:  now,
+		SendAfter: now.Add(10 * time.Minute),
+	}
+	store.QueuePendingDM(recentDM)
+
+	// Give async writes time to complete
+	time.Sleep(200 * time.Millisecond)
+
+	// Run cleanup
+	err := store.Cleanup()
+	if err != nil {
+		t.Fatalf("unexpected error during cleanup: %v", err)
+	}
+
+	// Verify old DM was removed from memory
+	pending, err := store.GetPendingDMs(now.Add(24 * time.Hour))
+	if err != nil {
+		t.Fatalf("unexpected error getting pending DMs: %v", err)
+	}
+
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending DM after cleanup, got %d", len(pending))
+	}
+
+	if pending[0].ID != "recent-dm" {
+		t.Errorf("expected recent-dm to remain, got %s", pending[0].ID)
+	}
+}

@@ -3,12 +3,15 @@ package notify
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
+	"github.com/google/uuid"
 )
 
 // Constants for notification defaults.
@@ -260,24 +263,33 @@ func formatNextActionsInternal(ctx context.Context, nextActions map[string]turn.
 	return strings.Join(parts, "; ")
 }
 
+// Store interface for persistent DM queue management.
+type Store interface {
+	QueuePendingDM(dm state.PendingDM) error
+	GetPendingDMs(before time.Time) ([]state.PendingDM, error)
+	RemovePendingDM(id string) error
+}
+
 // Manager handles user notifications across multiple workspaces.
 type Manager struct {
 	slackManager  SlackManager
 	Tracker       *NotificationTracker
 	configManager ConfigManager
+	store         Store
 }
 
 // New creates a new notification manager.
-func New(slackManager SlackManager, configManager ConfigManager) *Manager {
+func New(slackManager SlackManager, configManager ConfigManager, store Store) *Manager {
 	return &Manager{
-		slackManager: slackManager,
+		slackManager:  slackManager,
+		configManager: configManager,
+		store:         store,
 		Tracker: &NotificationTracker{
 			lastDM:                  make(map[string]time.Time),
 			lastDaily:               make(map[string]time.Time),
 			lastChannelNotification: make(map[string]time.Time),
 			lastUserPRChannelTag:    make(map[string]TagInfo),
 		},
-		configManager: configManager,
 	}
 }
 
@@ -295,15 +307,10 @@ func (m *Manager) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			// Check if any users need notifications.
-			// This would iterate through workspaces and users.
-			// For now, we'll implement a simplified version.
-			slog.Debug("checking for pending notifications")
-			// In production, this would:
-			// 1. Iterate through all workspaces
-			// 2. For each workspace, check all users with pending PRs
-			// 3. Apply notification logic based on preferences
-			// 4. Send notifications as needed
+			// Check for pending DMs that should be sent now
+			if err := m.processPendingDMs(ctx); err != nil {
+				slog.Error("failed to process pending DMs", "error", err)
+			}
 		case <-cleanupTicker.C:
 			// Clean up entries older than 7 days
 			// This keeps recent data for rate limiting while preventing unbounded growth
@@ -311,6 +318,171 @@ func (m *Manager) Run(ctx context.Context) error {
 			slog.Debug("cleaned up old notification tracker entries")
 		}
 	}
+}
+
+// processPendingDMs checks for pending DMs that should be sent and sends them.
+func (m *Manager) processPendingDMs(ctx context.Context) error {
+	now := time.Now()
+	pendingDMs, err := m.store.GetPendingDMs(now)
+	if err != nil {
+		return fmt.Errorf("failed to get pending DMs: %w", err)
+	}
+
+	if len(pendingDMs) == 0 {
+		return nil
+	}
+
+	slog.Info("processing pending DMs", "count", len(pendingDMs))
+
+	for _, dm := range pendingDMs {
+		// Deserialize NextActions
+		var nextAction map[string]turn.Action
+		if err := json.Unmarshal([]byte(dm.NextActions), &nextAction); err != nil {
+			slog.Error("failed to deserialize next actions for pending DM",
+				"dm_id", dm.ID,
+				"user", dm.UserID,
+				"pr", fmt.Sprintf("%s/%s#%d", dm.PROwner, dm.PRRepo, dm.PRNumber),
+				"error", err)
+			nextAction = make(map[string]turn.Action)
+		}
+
+		// Reconstruct PRInfo from pending DM
+		prInfo := PRInfo{
+			Owner:         dm.PROwner,
+			Repo:          dm.PRRepo,
+			Title:         dm.PRTitle,
+			Author:        dm.PRAuthor,
+			State:         dm.PRState,
+			HTMLURL:       dm.PRURL,
+			Number:        dm.PRNumber,
+			WorkflowState: dm.WorkflowState,
+			NextAction:    nextAction,
+		}
+
+		// Send the DM (bypassing the deferral logic by not passing tagInfo)
+		// We call the actual DM sending logic directly
+		if err := m.sendDMNow(ctx, dm.WorkspaceID, dm.UserID, dm.ChannelID, dm.ChannelName, prInfo); err != nil {
+			slog.Error("failed to send pending DM",
+				"dm_id", dm.ID,
+				"user", dm.UserID,
+				"pr", fmt.Sprintf("%s/%s#%d", dm.PROwner, dm.PRRepo, dm.PRNumber),
+				"error", err)
+			// Continue processing other DMs even if one fails
+			continue
+		}
+
+		// Remove from queue after successful send
+		if err := m.store.RemovePendingDM(dm.ID); err != nil {
+			slog.Error("failed to remove pending DM from queue",
+				"dm_id", dm.ID,
+				"user", dm.UserID,
+				"pr", fmt.Sprintf("%s/%s#%d", dm.PROwner, dm.PRRepo, dm.PRNumber),
+				"error", err)
+			// Don't return error - the DM was sent successfully
+		} else {
+			slog.Info("sent and removed pending DM",
+				"dm_id", dm.ID,
+				"user", dm.UserID,
+				"pr", fmt.Sprintf("%s/%s#%d", dm.PROwner, dm.PRRepo, dm.PRNumber),
+				"queued_at", dm.QueuedAt,
+				"send_after", dm.SendAfter,
+				"delay", now.Sub(dm.QueuedAt))
+		}
+	}
+
+	return nil
+}
+
+// sendDMNow sends a DM immediately, bypassing deferral logic.
+// This is used by the scheduler to send queued DMs.
+func (m *Manager) sendDMNow(ctx context.Context, workspaceID, userID, channelID, channelName string, pr PRInfo) error {
+	// Get the Slack client for this workspace
+	slackClient, err := m.slackManager.Client(ctx, workspaceID)
+	if err != nil {
+		return fmt.Errorf("failed to get Slack client: %w", err)
+	}
+
+	// Check anti-spam protection
+	lastDM := m.Tracker.LastDMNotification(workspaceID, userID)
+	timeSinceLastDM := time.Since(lastDM)
+	antiSpamDelay := 1 * time.Minute
+
+	if timeSinceLastDM < antiSpamDelay {
+		slog.Info("skipping DM - anti-spam protection active",
+			"user", userID,
+			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+			"time_since_last_dm", timeSinceLastDM,
+			"time_until_next_allowed", antiSpamDelay-timeSinceLastDM)
+		return nil
+	}
+
+	// Check if user is active
+	isActive := slackClient.IsUserActive(ctx, userID)
+	if !isActive {
+		slog.Info("deferring DM - user not active on Slack",
+			"user", userID,
+			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number))
+		// Re-queue for later (add 10 minutes to send time)
+		// TODO: Implement re-queuing logic if needed
+		return nil
+	}
+
+	// Format notification message
+	var prefix string
+	if pr.WorkflowState != "" {
+		prefix = PrefixForAnalysis(pr.WorkflowState, pr.NextAction)
+	} else {
+		prefix = PrefixForState(pr.State)
+	}
+
+	// Format: :emoji: Title <url|repo#123> · author → action
+	var action string
+	switch pr.State {
+	case "newly_published":
+		action = "newly published"
+	case "tests_broken":
+		action = "fix tests"
+	case "awaiting_review":
+		action = "review"
+	case "changes_requested":
+		action = "address feedback"
+	case "approved":
+		action = "merge"
+	default:
+		// Derive action from NextAction if available
+		if len(pr.NextAction) > 0 {
+			action = strings.ReplaceAll(PrimaryAction(pr.NextAction), "_", " ")
+		}
+	}
+
+	message := fmt.Sprintf("%s %s <%s|%s/%s#%d>",
+		prefix,
+		pr.Title,
+		pr.HTMLURL,
+		pr.Owner,
+		pr.Repo,
+		pr.Number)
+
+	if action != "" {
+		message += fmt.Sprintf(" · %s → %s", pr.Author, action)
+	}
+
+	// Send DM
+	_, _, err = slackClient.SendDirectMessage(ctx, userID, message)
+	if err != nil {
+		return fmt.Errorf("failed to send DM: %w", err)
+	}
+
+	// Track that we sent this DM
+	m.Tracker.UpdateDMNotification(workspaceID, userID)
+
+	slog.Info("sent deferred DM",
+		"user", userID,
+		"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+		"channel_id", channelID,
+		"channel_name", channelName)
+
+	return nil
 }
 
 // PRInfo contains the minimal information needed to notify about a PR.
@@ -580,13 +752,55 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 			delayDuration := time.Duration(delayMins) * time.Minute
 
 			if timeSinceTag < delayDuration {
-				slog.Info("deferring DM - user was tagged in channel recently",
+				// Queue this DM to be sent later
+				sendAfter := tagInfo.Timestamp.Add(delayDuration)
+
+				// Serialize NextAction map to JSON
+				nextActionsJSON, err := json.Marshal(pr.NextAction)
+				if err != nil {
+					slog.Error("failed to serialize next actions for pending DM",
+						"user", userID,
+						"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+						"error", err)
+					nextActionsJSON = []byte("{}")
+				}
+
+				pendingDM := state.PendingDM{
+					ID:            uuid.New().String(),
+					WorkspaceID:   workspaceID,
+					UserID:        userID,
+					PROwner:       pr.Owner,
+					PRRepo:        pr.Repo,
+					PRNumber:      pr.Number,
+					PRURL:         pr.HTMLURL,
+					PRTitle:       pr.Title,
+					PRAuthor:      pr.Author,
+					PRState:       pr.State,
+					WorkflowState: pr.WorkflowState,
+					NextActions:   string(nextActionsJSON),
+					ChannelID:     taggedChannelID,
+					ChannelName:   channelName,
+					QueuedAt:      time.Now(),
+					SendAfter:     sendAfter,
+				}
+
+				if err := m.store.QueuePendingDM(pendingDM); err != nil {
+					slog.Error("failed to queue pending DM",
+						"user", userID,
+						"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+						"error", err)
+					return fmt.Errorf("failed to queue pending DM: %w", err)
+				}
+
+				slog.Info("queued DM for later delivery",
 					"user", userID,
 					"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
 					"channel_id", taggedChannelID,
 					"time_since_tag", timeSinceTag,
 					"configured_delay", delayDuration,
-					"time_until_dm", delayDuration-timeSinceTag)
+					"send_after", sendAfter,
+					"time_until_dm", delayDuration-timeSinceTag,
+					"dm_id", pendingDM.ID)
 				return nil
 			}
 
