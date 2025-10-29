@@ -1,0 +1,53 @@
+package bot
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/codeGROOVE-dev/slacker/pkg/config"
+)
+
+func TestHandlePullRequestFromSprinkler_NoToken(t *testing.T) {
+	ctx := context.Background()
+
+	mockGH := &mockGitHub{
+		org:   "testorg",
+		token: "", // No token
+	}
+
+	c := &Coordinator{
+		github:         mockGH,
+		slack:          &mockSlackClient{},
+		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
+		configManager:  config.New(),
+		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		eventSemaphore: make(chan struct{}, 10),
+	}
+
+	// Should return early without error (just logs)
+	c.handlePullRequestFromSprinkler(ctx, "testorg", "testrepo", 42, "https://github.com/testorg/testrepo/pull/42", time.Now())
+	// Test passes if it returns without panicking
+}
+
+func TestHandlePullRequestReviewFromSprinkler_NoToken(t *testing.T) {
+	ctx := context.Background()
+
+	mockGH := &mockGitHub{
+		org:   "testorg",
+		token: "", // No token
+	}
+
+	c := &Coordinator{
+		github:         mockGH,
+		slack:          &mockSlackClient{},
+		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
+		configManager:  config.New(),
+		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		eventSemaphore: make(chan struct{}, 10),
+	}
+
+	// Should delegate to handlePullRequestFromSprinkler
+	c.handlePullRequestReviewFromSprinkler(ctx, "testorg", "testrepo", 42, "https://github.com/testorg/testrepo/pull/42", time.Now())
+	// Test passes if it returns without panicking
+}

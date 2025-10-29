@@ -17,12 +17,12 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/gsm"
-	"github.com/codeGROOVE-dev/slacker/internal/bot"
-	"github.com/codeGROOVE-dev/slacker/internal/config"
-	"github.com/codeGROOVE-dev/slacker/internal/github"
-	"github.com/codeGROOVE-dev/slacker/internal/notify"
-	"github.com/codeGROOVE-dev/slacker/internal/slack"
-	"github.com/codeGROOVE-dev/slacker/internal/state"
+	"github.com/codeGROOVE-dev/slacker/pkg/bot"
+	"github.com/codeGROOVE-dev/slacker/pkg/config"
+	"github.com/codeGROOVE-dev/slacker/pkg/github"
+	"github.com/codeGROOVE-dev/slacker/pkg/notify"
+	"github.com/codeGROOVE-dev/slacker/pkg/slack"
+	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
 	"github.com/gorilla/mux"
 	"golang.org/x/sync/errgroup"
@@ -711,6 +711,7 @@ func runBotCoordinators(
 	}
 
 	// Initialize daily digest scheduler
+	//nolint:revive // line length acceptable for initialization
 	dailyDigest := notify.NewDailyDigestScheduler(notifier, github.WrapManager(githubManager), configManager, stateStore, notify.WrapSlackManager(slackManager))
 
 	// Start initial coordinators

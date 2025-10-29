@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/retry"
-	"github.com/codeGROOVE-dev/slacker/internal/state"
+	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 	"github.com/google/go-github/v50/github"
 )

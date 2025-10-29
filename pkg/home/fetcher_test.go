@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codeGROOVE-dev/slacker/internal/state"
+	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/google/go-github/v50/github"
 )
 
@@ -81,8 +81,8 @@ func TestSortPRs(t *testing.T) {
 			expected: []int{1, 3, 2}, // All blocked, so by recency
 		},
 		{
-			name: "empty list",
-			prs:  []PR{},
+			name:     "empty list",
+			prs:      []PR{},
 			expected: []int{},
 		},
 		{
@@ -274,9 +274,9 @@ func TestSearchPRs(t *testing.T) {
 				Total: github.Int(1),
 				Issues: []*github.Issue{
 					{
-						Number: github.Int(123),
-						Title:  github.String("Test PR"),
-						HTMLURL: github.String("https://github.com/test-org/test-repo/pull/123"),
+						Number:        github.Int(123),
+						Title:         github.String("Test PR"),
+						HTMLURL:       github.String("https://github.com/test-org/test-repo/pull/123"),
 						RepositoryURL: github.String("https://api.github.com/repos/test-org/test-repo"),
 						User: &github.User{
 							Login: github.String("testuser"),
@@ -351,12 +351,12 @@ func TestFetchDashboard(t *testing.T) {
 				// Outgoing PRs
 				issues = []*github.Issue{
 					{
-						Number: github.Int(456),
-						Title:  github.String("My PR"),
-						HTMLURL: github.String("https://github.com/org/repo/pull/456"),
+						Number:        github.Int(456),
+						Title:         github.String("My PR"),
+						HTMLURL:       github.String("https://github.com/org/repo/pull/456"),
 						RepositoryURL: github.String("https://api.github.com/repos/org/repo"),
-						User: &github.User{Login: github.String("testuser")},
-						UpdatedAt: &github.Timestamp{Time: time.Now().Add(-2 * time.Hour)},
+						User:          &github.User{Login: github.String("testuser")},
+						UpdatedAt:     &github.Timestamp{Time: time.Now().Add(-2 * time.Hour)},
 						PullRequestLinks: &github.PullRequestLinks{
 							URL: github.String("https://api.github.com/repos/org/repo/pulls/456"),
 						},
@@ -366,12 +366,12 @@ func TestFetchDashboard(t *testing.T) {
 				// Incoming PRs
 				issues = []*github.Issue{
 					{
-						Number: github.Int(789),
-						Title:  github.String("Review needed"),
-						HTMLURL: github.String("https://github.com/org/repo/pull/789"),
+						Number:        github.Int(789),
+						Title:         github.String("Review needed"),
+						HTMLURL:       github.String("https://github.com/org/repo/pull/789"),
 						RepositoryURL: github.String("https://api.github.com/repos/org/repo"),
-						User: &github.User{Login: github.String("otheruser")},
-						UpdatedAt: &github.Timestamp{Time: time.Now().Add(-1 * time.Hour)},
+						User:          &github.User{Login: github.String("otheruser")},
+						UpdatedAt:     &github.Timestamp{Time: time.Now().Add(-1 * time.Hour)},
 						PullRequestLinks: &github.PullRequestLinks{
 							URL: github.String("https://api.github.com/repos/org/repo/pulls/789"),
 						},
