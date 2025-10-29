@@ -17,12 +17,12 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/gsm"
-	"github.com/codeGROOVE-dev/slacker/internal/bot"
-	"github.com/codeGROOVE-dev/slacker/internal/config"
-	"github.com/codeGROOVE-dev/slacker/internal/github"
-	"github.com/codeGROOVE-dev/slacker/internal/notify"
-	"github.com/codeGROOVE-dev/slacker/internal/slack"
-	"github.com/codeGROOVE-dev/slacker/internal/state"
+	"github.com/codeGROOVE-dev/slacker/pkg/bot"
+	"github.com/codeGROOVE-dev/slacker/pkg/config"
+	"github.com/codeGROOVE-dev/slacker/pkg/github"
+	"github.com/codeGROOVE-dev/slacker/pkg/notify"
+	"github.com/codeGROOVE-dev/slacker/pkg/slack"
+	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
 	"github.com/gorilla/mux"
 	"golang.org/x/sync/errgroup"
@@ -256,7 +256,7 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	slog.Info("configured Slack manager with state store for DM tracking")
 
 	// Initialize notification manager for multi-workspace notifications.
-	notifier := notify.New(slackManager, configManager)
+	notifier := notify.New(notify.WrapSlackManager(slackManager), configManager)
 
 	// Initialize event router for multi-workspace event handling.
 	eventRouter := slack.NewEventRouter(slackManager)
@@ -711,7 +711,8 @@ func runBotCoordinators(
 	}
 
 	// Initialize daily digest scheduler
-	dailyDigest := notify.NewDailyDigestScheduler(notifier, githubManager, configManager, stateStore, slackManager)
+	//nolint:revive // line length acceptable for initialization
+	dailyDigest := notify.NewDailyDigestScheduler(notifier, github.WrapManager(githubManager), configManager, stateStore, notify.WrapSlackManager(slackManager))
 
 	// Start initial coordinators
 	cm.startCoordinators(ctx)

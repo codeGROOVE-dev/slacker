@@ -14,6 +14,16 @@ issues:
   # Maximum count of issues with the same text. Set to 0 to disable. Default is 3.
   max-same-issues: 0
 
+  exclude-rules:
+    # Exclude errcheck for test files - test code doesn't need to check every error
+    - linters:
+        - errcheck
+        - thelper
+        - usetesting
+        - dogsled
+        - dupl
+      path: _test\.go$
+
 formatters:
   enable:
     # - gci

@@ -1,0 +1,384 @@
+package slack
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/slack-go/slack"
+)
+
+func TestUpdateDMMessage(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("no_state_store", func(t *testing.T) {
+		client := &Client{
+			api: &mockSlackAPI{},
+		}
+
+		prURL := "https://github.com/test/repo/pull/123"
+		err := client.UpdateDMMessage(ctx, "U001", prURL, "New text")
+		// Should not error when state store is nil (graceful degradation)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestSearchMessages(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("success", func(t *testing.T) {
+		expectedResults := &slack.SearchMessages{
+			Matches: []slack.SearchMessage{
+				{
+					Timestamp: "1234567890.123456",
+					Text:      "test message",
+				},
+			},
+		}
+
+		api := &mockSlackAPI{
+			searchMessagesFunc: func(ctx context.Context, query string, params slack.SearchParameters) (*slack.SearchMessages, error) {
+				return expectedResults, nil
+			},
+		}
+
+		client := &Client{
+			api: api,
+		}
+
+		results, err := client.SearchMessages(ctx, "test query", &slack.SearchParameters{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(results.Matches) != 1 {
+			t.Errorf("expected 1 match, got %d", len(results.Matches))
+		}
+
+		if results.Matches[0].Text != "test message" {
+			t.Errorf("expected text 'test message', got %s", results.Matches[0].Text)
+		}
+	})
+
+	t.Run("error", func(t *testing.T) {
+		api := &mockSlackAPI{
+			searchMessagesFunc: func(ctx context.Context, query string, params slack.SearchParameters) (*slack.SearchMessages, error) {
+				return nil, errors.New("api error")
+			},
+		}
+
+		client := &Client{
+			api: api,
+		}
+
+		_, err := client.SearchMessages(ctx, "test query", &slack.SearchParameters{})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+}
+
+func TestAPI(t *testing.T) {
+	t.Run("wrapper_returns_raw_client", func(t *testing.T) {
+		rawClient := slack.New("test-token")
+		wrapper := newSlackAPIWrapper(rawClient)
+
+		client := &Client{
+			api: wrapper,
+		}
+
+		// API() should return the raw client when using a wrapper
+		if client.API() != rawClient {
+			t.Error("expected API() to return the raw Slack client")
+		}
+	})
+
+	t.Run("mock_returns_nil", func(t *testing.T) {
+		mockAPI := &mockSlackAPI{}
+
+		client := &Client{
+			api: mockAPI,
+		}
+
+		// API() should return nil when using a mock
+		if client.API() != nil {
+			t.Error("expected API() to return nil for mock client")
+		}
+	})
+}
+
+func TestResolveChannelID(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("cached_channel", func(t *testing.T) {
+		api := &mockSlackAPI{
+			getConversationsFunc: func(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
+				return []slack.Channel{
+					{
+						GroupConversation: slack.GroupConversation{
+							Conversation: slack.Conversation{
+								ID: "C123",
+							},
+							Name: "test-channel",
+						},
+					},
+				}, "", nil
+			},
+		}
+
+		client := &Client{
+			api: api,
+			cache: &apiCache{
+				entries: make(map[string]cacheEntry),
+			},
+		}
+
+		// First call
+		id1 := client.ResolveChannelID(ctx, "test-channel")
+		if id1 != "C123" {
+			t.Errorf("expected C123, got %s", id1)
+		}
+
+		// Second call should use cache (mock will not be called again)
+		id2 := client.ResolveChannelID(ctx, "test-channel")
+		if id2 != "C123" {
+			t.Errorf("expected C123 from cache, got %s", id2)
+		}
+	})
+
+	t.Run("channel_not_found", func(t *testing.T) {
+		api := &mockSlackAPI{
+			getConversationsFunc: func(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
+				return []slack.Channel{}, "", nil
+			},
+		}
+
+		client := &Client{
+			api: api,
+			cache: &apiCache{
+				entries: make(map[string]cacheEntry),
+			},
+		}
+
+		id := client.ResolveChannelID(ctx, "nonexistent")
+		// Returns the channel name itself as fallback when not found
+		if id != "nonexistent" {
+			t.Errorf("expected 'nonexistent' as fallback, got %s", id)
+		}
+	})
+
+	t.Run("api_error", func(t *testing.T) {
+		api := &mockSlackAPI{
+			getConversationsFunc: func(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
+				return nil, "", errors.New("api error")
+			},
+		}
+
+		client := &Client{
+			api: api,
+			cache: &apiCache{
+				entries: make(map[string]cacheEntry),
+			},
+		}
+
+		id := client.ResolveChannelID(ctx, "test-channel")
+		// Returns the channel name itself as fallback on error
+		if id != "test-channel" {
+			t.Errorf("expected 'test-channel' as fallback, got %s", id)
+		}
+	})
+}
+
+func TestIsUserInChannel(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("user_in_channel", func(t *testing.T) {
+		api := &mockSlackAPI{
+			getUsersInConversationFunc: func(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error) {
+				return []string{"U001", "U002", "U003"}, "", nil
+			},
+		}
+
+		client := &Client{
+			api: api,
+			cache: &apiCache{
+				entries: make(map[string]cacheEntry),
+			},
+		}
+
+		inChannel := client.IsUserInChannel(ctx, "C123", "U002")
+		if !inChannel {
+			t.Error("expected user to be in channel")
+		}
+	})
+
+	t.Run("user_not_in_channel", func(t *testing.T) {
+		api := &mockSlackAPI{
+			getUsersInConversationFunc: func(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error) {
+				return []string{"U001", "U002", "U003"}, "", nil
+			},
+		}
+
+		client := &Client{
+			api: api,
+			cache: &apiCache{
+				entries: make(map[string]cacheEntry),
+			},
+		}
+
+		inChannel := client.IsUserInChannel(ctx, "C123", "U999")
+		if inChannel {
+			t.Error("expected user to not be in channel")
+		}
+	})
+
+	t.Run("api_error", func(t *testing.T) {
+		api := &mockSlackAPI{
+			getUsersInConversationFunc: func(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error) {
+				return nil, "", errors.New("api error")
+			},
+		}
+
+		client := &Client{
+			api: api,
+			cache: &apiCache{
+				entries: make(map[string]cacheEntry),
+			},
+		}
+
+		inChannel := client.IsUserInChannel(ctx, "C123", "U001")
+		if inChannel {
+			t.Error("expected false on error")
+		}
+	})
+}
+
+func TestPublishHomeView(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("success", func(t *testing.T) {
+		api := &mockSlackAPI{
+			publishViewFunc: func(ctx context.Context, request slack.PublishViewContextRequest) (*slack.ViewResponse, error) {
+				return &slack.ViewResponse{}, nil
+			},
+		}
+
+		client := &Client{
+			api: api,
+		}
+
+		blocks := []slack.Block{
+			slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn", "Test block", false, false),
+				nil,
+				nil,
+			),
+		}
+
+		err := client.PublishHomeView(ctx, "U123", blocks)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("error", func(t *testing.T) {
+		api := &mockSlackAPI{
+			publishViewFunc: func(ctx context.Context, request slack.PublishViewContextRequest) (*slack.ViewResponse, error) {
+				return nil, errors.New("api error")
+			},
+		}
+
+		client := &Client{
+			api: api,
+		}
+
+		blocks := []slack.Block{}
+
+		err := client.PublishHomeView(ctx, "U123", blocks)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+}
+
+func TestChannelHistory(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("success", func(t *testing.T) {
+		api := &mockSlackAPI{
+			getConversationHistoryFunc: func(ctx context.Context, params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error) {
+				return &slack.GetConversationHistoryResponse{
+					Messages: []slack.Message{
+						{
+							Msg: slack.Msg{
+								Timestamp: "1234567890.123456",
+								Text:      "Test message",
+							},
+						},
+					},
+				}, nil
+			},
+		}
+
+		client := &Client{
+			api: api,
+		}
+
+		resp, err := client.ChannelHistory(ctx, "C123", "", "", 100)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(resp.Messages) != 1 {
+			t.Errorf("expected 1 message, got %d", len(resp.Messages))
+		}
+
+		if resp.Messages[0].Text != "Test message" {
+			t.Errorf("expected text 'Test message', got %s", resp.Messages[0].Text)
+		}
+	})
+
+	t.Run("with_timestamps", func(t *testing.T) {
+		api := &mockSlackAPI{
+			getConversationHistoryFunc: func(ctx context.Context, params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error) {
+				if params.Latest != "1234567890.123456" {
+					return nil, errors.New("unexpected latest timestamp")
+				}
+				if params.Oldest != "1234567890.000000" {
+					return nil, errors.New("unexpected oldest timestamp")
+				}
+				return &slack.GetConversationHistoryResponse{
+					Messages: []slack.Message{},
+				}, nil
+			},
+		}
+
+		client := &Client{
+			api: api,
+		}
+
+		_, err := client.ChannelHistory(ctx, "C123", "1234567890.000000", "1234567890.123456", 100)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("error", func(t *testing.T) {
+		api := &mockSlackAPI{
+			getConversationHistoryFunc: func(ctx context.Context, params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error) {
+				return nil, errors.New("api error")
+			},
+		}
+
+		client := &Client{
+			api: api,
+		}
+
+		_, err := client.ChannelHistory(ctx, "C123", "", "", 100)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+}
