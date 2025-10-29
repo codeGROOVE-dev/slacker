@@ -107,7 +107,7 @@ func TestTurnclientEmojiIntegration(t *testing.T) {
 	}{
 		{
 			name:          "newly published takes precedence",
-			workflowState: "newly_published",
+			workflowState: string(turn.StateNewlyPublished),
 			nextActions: map[string]turn.Action{
 				"author": {Kind: turn.ActionFixTests},
 			},
@@ -196,7 +196,7 @@ func TestTurnclientEmojiIntegration(t *testing.T) {
 
 			// Verify consistency: if there's a primary action, its emoji should match
 			// (except for newly_published and merged edge cases)
-			if tt.workflowState != "newly_published" && tt.workflowState != "merged" && tt.expectedAction != "" {
+			if tt.workflowState != string(turn.StateNewlyPublished) && tt.workflowState != "merged" && tt.expectedAction != "" {
 				actionEmoji := notify.PrefixForAction(tt.expectedAction)
 				if emoji != actionEmoji {
 					t.Errorf("%s: emoji mismatch - PrefixForAnalysis=%q but PrefixForAction(%q)=%q",

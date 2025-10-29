@@ -76,15 +76,18 @@ func FormatChannelMessageBase(ctx context.Context, params MessageParams) string 
 	} else if pr.State == "closed" {
 		emoji, state = ":x:", "?st=closed"
 		slog.Info("using :x: emoji - PR is closed but not merged", "pr", prID)
-	} else if a.WorkflowState == "newly_published" {
-		emoji, state = ":new:", "?st=newly_published"
-		slog.Info("using :new: emoji - newly published PR", "pr", prID, "workflow_state", a.WorkflowState)
+	} else if a.WorkflowState != "" {
+		// Use WorkflowState as primary signal (most reliable source of truth)
+		emoji, state = emojiFromWorkflowState(a.WorkflowState, a.NextAction)
+		slog.Info("using emoji from workflow_state", "pr", prID, "workflow_state", a.WorkflowState, "emoji", emoji, "state_param", state)
 	} else if len(a.NextAction) > 0 {
+		// Fallback to NextAction if no WorkflowState (shouldn't normally happen)
 		action := PrimaryAction(a.NextAction)
 		emoji = PrefixForAction(action)
 		state = stateParam(params.CheckResult)
-		slog.Info("using emoji from primary next_action", "pr", prID, "primary_action", action, "emoji", emoji, "state_param", state)
+		slog.Info("using emoji from primary next_action (no workflow_state)", "pr", prID, "primary_action", action, "emoji", emoji, "state_param", state)
 	} else {
+		// Final fallback based on PR properties
 		emoji, state = fallbackEmoji(params.CheckResult)
 		//nolint:revive // line length acceptable for structured logging
 		slog.Info("using fallback emoji - no workflow_state or next_actions", "pr", prID, "emoji", emoji, "state_param", state, "fallback_reason", "empty_workflow_state_and_next_actions")
@@ -112,6 +115,62 @@ func FormatNextActionsSuffix(ctx context.Context, params MessageParams) string {
 		return fmt.Sprintf(" → %s", actions)
 	}
 	return ""
+}
+
+// emojiFromWorkflowState determines emoji based on WorkflowState as the primary signal.
+// Uses NextAction for additional granularity in specific states (e.g., test failures).
+func emojiFromWorkflowState(workflowState string, nextActions map[string]turn.Action) (emoji, state string) {
+	switch workflowState {
+	case string(turn.StateNewlyPublished):
+		return ":new:", "?st=newly_published"
+
+	case string(turn.StateInDraft):
+		return ":construction:", "?st=draft"
+
+	case string(turn.StatePublishedWaitingForTests):
+		// Use NextAction to distinguish between broken tests vs pending tests
+		if len(nextActions) > 0 {
+			action := PrimaryAction(nextActions)
+			if action == string(turn.ActionFixTests) {
+				return ":cockroach:", "?st=tests_broken"
+			}
+			if action == string(turn.ActionTestsPending) {
+				return ":test_tube:", "?st=tests_running"
+			}
+		}
+		// Default to tests running
+		return ":test_tube:", "?st=tests_running"
+
+	case string(turn.StateTestedWaitingForAssignment):
+		// Waiting for reviewers to be assigned
+		return ":shrug:", "?st=awaiting_assignment"
+
+	case string(turn.StateAssignedWaitingForReview):
+		// Waiting for assigned reviewers to review
+		return ":hourglass:", "?st=awaiting_review"
+
+	case string(turn.StateReviewedNeedsRefinement):
+		// Author needs to address feedback/comments
+		return ":carpentry_saw:", "?st=changes_requested"
+
+	case string(turn.StateRefinedWaitingForApproval):
+		// Waiting for final approval after refinements
+		return ":hourglass:", "?st=awaiting_approval"
+
+	case string(turn.StateApprovedWaitingForMerge):
+		// Approved and ready to merge
+		return ":white_check_mark:", "?st=approved"
+
+	default:
+		// Unknown workflow state - fall back to NextAction
+		slog.Warn("unknown workflow state, falling back to NextAction",
+			"workflow_state", workflowState)
+		if len(nextActions) > 0 {
+			action := PrimaryAction(nextActions)
+			return PrefixForAction(action), "?st=unknown"
+		}
+		return ":postal_horn:", "?st=unknown"
+	}
 }
 
 // stateParam returns the URL state parameter based on PR analysis.
@@ -376,8 +435,8 @@ func PrimaryAction(nextActions map[string]turn.Action) string {
 
 // PrefixForAnalysis returns the emoji prefix based on workflow state and next actions.
 // This is the primary function for determining PR emoji - it handles the logic:
-// 1. If workflow_state == "newly_published" → ":new:".
-// 2. Otherwise → emoji based on primary next_action.
+// 1. Use WorkflowState as primary signal (most reliable)
+// 2. Fall back to NextAction if no WorkflowState
 func PrefixForAnalysis(workflowState string, nextActions map[string]turn.Action) string {
 	// Log input for debugging emoji selection
 	actionKinds := make([]string, 0, len(nextActions))
@@ -389,25 +448,27 @@ func PrefixForAnalysis(workflowState string, nextActions map[string]turn.Action)
 		"next_actions_count", len(nextActions),
 		"next_actions", actionKinds)
 
-	// Special case: newly published PRs always show :new:
-	if workflowState == "newly_published" {
-		slog.Debug("using :new: emoji for newly published PR")
-		return ":new:"
+	// Use WorkflowState as primary signal
+	if workflowState != "" {
+		emoji, _ := emojiFromWorkflowState(workflowState, nextActions)
+		slog.Debug("determined emoji from workflow_state",
+			"workflow_state", workflowState,
+			"emoji", emoji)
+		return emoji
 	}
 
-	// Determine primary action and return corresponding emoji
+	// Fallback to NextAction if no WorkflowState
 	primaryAction := PrimaryAction(nextActions)
 	if primaryAction != "" {
 		emoji := PrefixForAction(primaryAction)
-		slog.Debug("determined emoji from primary action",
+		slog.Debug("determined emoji from primary action (no workflow_state)",
 			"primary_action", primaryAction,
 			"emoji", emoji)
 		return emoji
 	}
 
-	// Fallback if no actions
-	slog.Info("no primary action found - using fallback emoji",
-		"workflow_state", workflowState,
+	// Final fallback if no workflow state or actions
+	slog.Info("no workflow_state or primary action - using fallback emoji",
 		"next_actions_count", len(nextActions),
 		"fallback_emoji", ":postal_horn:")
 	return ":postal_horn:"
