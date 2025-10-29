@@ -13,91 +13,113 @@ func TestPrefixForAnalysis(t *testing.T) {
 		nextAction    map[string]turn.Action
 		expectedEmoji string
 	}{
+		// Test all WorkflowState constants
 		{
-			name:          "newly published always shows :new:",
-			workflowState: "newly_published",
+			name:          "NEWLY_PUBLISHED shows :new:",
+			workflowState: string(turn.StateNewlyPublished),
 			nextAction: map[string]turn.Action{
-				"author": {Kind: turn.ActionFixTests},
+				"author": {Kind: turn.ActionRequestReviewers},
 			},
 			expectedEmoji: ":new:",
 		},
 		{
-			name:          "publish_draft shows :construction:",
-			workflowState: "awaiting_action",
+			name:          "IN_DRAFT shows :construction:",
+			workflowState: string(turn.StateInDraft),
 			nextAction: map[string]turn.Action{
 				"author": {Kind: turn.ActionPublishDraft},
 			},
 			expectedEmoji: ":construction:",
 		},
 		{
-			name:          "fix_tests shows :cockroach:",
-			workflowState: "blocked",
+			name:          "PUBLISHED_WAITING_FOR_TESTS with broken tests shows :cockroach:",
+			workflowState: string(turn.StatePublishedWaitingForTests),
 			nextAction: map[string]turn.Action{
 				"author": {Kind: turn.ActionFixTests},
 			},
 			expectedEmoji: ":cockroach:",
 		},
 		{
-			name:          "tests_pending shows :test_tube:",
-			workflowState: "blocked",
+			name:          "PUBLISHED_WAITING_FOR_TESTS with pending tests shows :test_tube:",
+			workflowState: string(turn.StatePublishedWaitingForTests),
 			nextAction: map[string]turn.Action{
 				"author": {Kind: turn.ActionTestsPending},
 			},
 			expectedEmoji: ":test_tube:",
 		},
 		{
-			name:          "review shows :hourglass:",
-			workflowState: "awaiting_review",
+			name:          "PUBLISHED_WAITING_FOR_TESTS defaults to :test_tube:",
+			workflowState: string(turn.StatePublishedWaitingForTests),
+			nextAction:    map[string]turn.Action{},
+			expectedEmoji: ":test_tube:",
+		},
+		{
+			name:          "TESTED_WAITING_FOR_ASSIGNMENT shows :shrug:",
+			workflowState: string(turn.StateTestedWaitingForAssignment),
+			nextAction: map[string]turn.Action{
+				"author": {Kind: turn.ActionRequestReviewers},
+			},
+			expectedEmoji: ":shrug:",
+		},
+		{
+			name:          "ASSIGNED_WAITING_FOR_REVIEW shows :hourglass:",
+			workflowState: string(turn.StateAssignedWaitingForReview),
 			nextAction: map[string]turn.Action{
 				"reviewer": {Kind: turn.ActionReview},
 			},
 			expectedEmoji: ":hourglass:",
 		},
 		{
-			name:          "resolve_comments shows :carpentry_saw:",
-			workflowState: "changes_requested",
+			name:          "REVIEWED_NEEDS_REFINEMENT shows :carpentry_saw:",
+			workflowState: string(turn.StateReviewedNeedsRefinement),
 			nextAction: map[string]turn.Action{
 				"author": {Kind: turn.ActionResolveComments},
 			},
 			expectedEmoji: ":carpentry_saw:",
 		},
 		{
-			name:          "approve shows :white_check_mark:",
-			workflowState: "approved",
+			name:          "REFINED_WAITING_FOR_APPROVAL shows :hourglass:",
+			workflowState: string(turn.StateRefinedWaitingForApproval),
 			nextAction: map[string]turn.Action{
-				"maintainer": {Kind: turn.ActionApprove},
+				"reviewer": {Kind: turn.ActionApprove},
 			},
-			expectedEmoji: ":white_check_mark:",
+			expectedEmoji: ":hourglass:",
 		},
 		{
-			name:          "merge shows :rocket:",
-			workflowState: "approved",
+			name:          "APPROVED_WAITING_FOR_MERGE shows :white_check_mark:",
+			workflowState: string(turn.StateApprovedWaitingForMerge),
 			nextAction: map[string]turn.Action{
 				"author": {Kind: turn.ActionMerge},
 			},
-			expectedEmoji: ":rocket:",
+			expectedEmoji: ":white_check_mark:",
 		},
+		// Test NextAction fallback when no WorkflowState
 		{
-			name:          "publish_draft has highest priority over fix_tests",
-			workflowState: "blocked",
+			name:          "no workflow_state but publish_draft action shows :construction:",
+			workflowState: "",
 			nextAction: map[string]turn.Action{
-				"author":   {Kind: turn.ActionPublishDraft},
-				"reviewer": {Kind: turn.ActionFixTests},
+				"author": {Kind: turn.ActionPublishDraft},
 			},
 			expectedEmoji: ":construction:",
 		},
 		{
-			name:          "fix_tests has higher priority than review",
-			workflowState: "blocked",
+			name:          "no workflow_state but fix_tests action shows :cockroach:",
+			workflowState: "",
 			nextAction: map[string]turn.Action{
-				"author":   {Kind: turn.ActionFixTests},
-				"reviewer": {Kind: turn.ActionReview},
+				"author": {Kind: turn.ActionFixTests},
 			},
 			expectedEmoji: ":cockroach:",
 		},
 		{
-			name:          "empty next_action shows fallback",
-			workflowState: "unknown",
+			name:          "unknown workflow_state falls back to next_action",
+			workflowState: "UNKNOWN_STATE",
+			nextAction: map[string]turn.Action{
+				"author": {Kind: turn.ActionFixTests},
+			},
+			expectedEmoji: ":cockroach:",
+		},
+		{
+			name:          "no workflow_state and no next_action shows :postal_horn:",
+			workflowState: "",
 			nextAction:    map[string]turn.Action{},
 			expectedEmoji: ":postal_horn:",
 		},

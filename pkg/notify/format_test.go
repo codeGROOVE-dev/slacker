@@ -382,7 +382,7 @@ func TestFormatChannelMessageBase(t *testing.T) {
 				CheckResult: &turn.CheckResponse{
 					PullRequest: prx.PullRequest{},
 					Analysis: turn.Analysis{
-						WorkflowState: "newly_published",
+						WorkflowState: string(turn.StateNewlyPublished),
 					},
 				},
 				Owner:    "test-owner",
@@ -395,24 +395,154 @@ func TestFormatChannelMessageBase(t *testing.T) {
 			contains: []string{":new:", "New PR", "test-repo#44", "testuser", "?st=newly_published"},
 		},
 		{
-			name: "with next actions",
+			name: "IN_DRAFT",
 			params: MessageParams{
 				CheckResult: &turn.CheckResponse{
 					PullRequest: prx.PullRequest{},
 					Analysis: turn.Analysis{
-						NextAction: map[string]turn.Action{
-							"user1": {Kind: turn.ActionReview},
-						},
+						WorkflowState: string(turn.StateInDraft),
 					},
 				},
 				Owner:    "test-owner",
 				Repo:     "test-repo",
 				PRNumber: 45,
-				Title:    "PR needs review",
+				Title:    "Draft PR",
 				Author:   "testuser",
 				HTMLURL:  "https://github.com/test-owner/test-repo/pull/45",
 			},
-			contains: []string{":hourglass:", "PR needs review", "test-repo#45", "testuser"},
+			contains: []string{":construction:", "Draft PR", "test-repo#45", "testuser", "?st=draft"},
+		},
+		{
+			name: "PUBLISHED_WAITING_FOR_TESTS with broken tests",
+			params: MessageParams{
+				CheckResult: &turn.CheckResponse{
+					PullRequest: prx.PullRequest{},
+					Analysis: turn.Analysis{
+						WorkflowState: string(turn.StatePublishedWaitingForTests),
+						NextAction: map[string]turn.Action{
+							"author": {Kind: turn.ActionFixTests},
+						},
+					},
+				},
+				Owner:    "test-owner",
+				Repo:     "test-repo",
+				PRNumber: 46,
+				Title:    "PR with broken tests",
+				Author:   "testuser",
+				HTMLURL:  "https://github.com/test-owner/test-repo/pull/46",
+			},
+			contains: []string{":cockroach:", "PR with broken tests", "test-repo#46", "testuser", "?st=tests_broken"},
+		},
+		{
+			name: "PUBLISHED_WAITING_FOR_TESTS with pending tests",
+			params: MessageParams{
+				CheckResult: &turn.CheckResponse{
+					PullRequest: prx.PullRequest{},
+					Analysis: turn.Analysis{
+						WorkflowState: string(turn.StatePublishedWaitingForTests),
+						NextAction: map[string]turn.Action{
+							"author": {Kind: turn.ActionTestsPending},
+						},
+					},
+				},
+				Owner:    "test-owner",
+				Repo:     "test-repo",
+				PRNumber: 47,
+				Title:    "PR with tests running",
+				Author:   "testuser",
+				HTMLURL:  "https://github.com/test-owner/test-repo/pull/47",
+			},
+			contains: []string{":test_tube:", "PR with tests running", "test-repo#47", "testuser", "?st=tests_running"},
+		},
+		{
+			name: "TESTED_WAITING_FOR_ASSIGNMENT",
+			params: MessageParams{
+				CheckResult: &turn.CheckResponse{
+					PullRequest: prx.PullRequest{},
+					Analysis: turn.Analysis{
+						WorkflowState: string(turn.StateTestedWaitingForAssignment),
+					},
+				},
+				Owner:    "test-owner",
+				Repo:     "test-repo",
+				PRNumber: 48,
+				Title:    "PR needs reviewer assignment",
+				Author:   "testuser",
+				HTMLURL:  "https://github.com/test-owner/test-repo/pull/48",
+			},
+			contains: []string{":shrug:", "PR needs reviewer assignment", "test-repo#48", "testuser", "?st=awaiting_assignment"},
+		},
+		{
+			name: "ASSIGNED_WAITING_FOR_REVIEW",
+			params: MessageParams{
+				CheckResult: &turn.CheckResponse{
+					PullRequest: prx.PullRequest{},
+					Analysis: turn.Analysis{
+						WorkflowState: string(turn.StateAssignedWaitingForReview),
+					},
+				},
+				Owner:    "test-owner",
+				Repo:     "test-repo",
+				PRNumber: 49,
+				Title:    "PR awaiting review",
+				Author:   "testuser",
+				HTMLURL:  "https://github.com/test-owner/test-repo/pull/49",
+			},
+			contains: []string{":hourglass:", "PR awaiting review", "test-repo#49", "testuser", "?st=awaiting_review"},
+		},
+		{
+			name: "REVIEWED_NEEDS_REFINEMENT",
+			params: MessageParams{
+				CheckResult: &turn.CheckResponse{
+					PullRequest: prx.PullRequest{},
+					Analysis: turn.Analysis{
+						WorkflowState: string(turn.StateReviewedNeedsRefinement),
+					},
+				},
+				Owner:    "test-owner",
+				Repo:     "test-repo",
+				PRNumber: 50,
+				Title:    "PR needs changes",
+				Author:   "testuser",
+				HTMLURL:  "https://github.com/test-owner/test-repo/pull/50",
+			},
+			contains: []string{":carpentry_saw:", "PR needs changes", "test-repo#50", "testuser", "?st=changes_requested"},
+		},
+		{
+			name: "REFINED_WAITING_FOR_APPROVAL",
+			params: MessageParams{
+				CheckResult: &turn.CheckResponse{
+					PullRequest: prx.PullRequest{},
+					Analysis: turn.Analysis{
+						WorkflowState: string(turn.StateRefinedWaitingForApproval),
+					},
+				},
+				Owner:    "test-owner",
+				Repo:     "test-repo",
+				PRNumber: 51,
+				Title:    "PR awaiting approval",
+				Author:   "testuser",
+				HTMLURL:  "https://github.com/test-owner/test-repo/pull/51",
+			},
+			contains: []string{":hourglass:", "PR awaiting approval", "test-repo#51", "testuser", "?st=awaiting_approval"},
+		},
+		{
+			name: "APPROVED_WAITING_FOR_MERGE",
+			params: MessageParams{
+				CheckResult: &turn.CheckResponse{
+					PullRequest: prx.PullRequest{},
+					Analysis: turn.Analysis{
+						WorkflowState: string(turn.StateApprovedWaitingForMerge),
+					},
+				},
+				Owner:    "test-owner",
+				Repo:     "test-repo",
+				PRNumber: 52,
+				Title:    "PR approved and ready",
+				Author:   "testuser",
+				HTMLURL:  "https://github.com/test-owner/test-repo/pull/52",
+			},
+			contains: []string{":white_check_mark:", "PR approved and ready", "test-repo#52", "testuser", "?st=approved"},
 		},
 	}
 
