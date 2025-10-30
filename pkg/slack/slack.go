@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -22,6 +23,12 @@ import (
 	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
+)
+
+// Errors
+var (
+	// ErrNoDMToUpdate indicates no DM exists to update.
+	ErrNoDMToUpdate = errors.New("no DM found to update")
 )
 
 // Constants for input validation.
@@ -460,9 +467,14 @@ func (c *Client) SendDirectMessage(ctx context.Context, userID, text string) (dm
 
 	var msgTS string
 	// Then send message with retry
+	// Disable unfurling for GitHub links in DMs.
+	options := []slack.MsgOption{
+		slack.MsgOptionText(text, false),
+		slack.MsgOptionDisableLinkUnfurl(),
+	}
 	err = retry.Do(
 		func() error {
-			_, ts, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText(text, false))
+			_, ts, err := c.api.PostMessageContext(ctx, channelID, options...)
 			if err != nil {
 				if isRateLimitError(err) {
 					slog.Warn("rate limited sending DM, backing off", "user", userID)
@@ -522,6 +534,7 @@ func (c *Client) SaveDMMessageInfo(ctx context.Context, userID, prURL, channelID
 }
 
 // UpdateDMMessage updates a previously sent DM message.
+// Returns nil and logs debug if no DM exists, returns error if update fails.
 func (c *Client) UpdateDMMessage(ctx context.Context, userID, prURL, newText string) error {
 	c.stateStoreMu.RLock()
 	store := c.stateStore
@@ -529,7 +542,7 @@ func (c *Client) UpdateDMMessage(ctx context.Context, userID, prURL, newText str
 
 	if store == nil {
 		slog.Debug("no state store configured, cannot update DM", "user", userID, "pr_url", prURL)
-		return nil
+		return ErrNoDMToUpdate
 	}
 
 	// Get stored DM message info
@@ -539,7 +552,7 @@ func (c *Client) UpdateDMMessage(ctx context.Context, userID, prURL, newText str
 			"user", userID,
 			"pr_url", prURL,
 			"reason", "never sent or too old")
-		return nil
+		return ErrNoDMToUpdate
 	}
 
 	// Update the message using Slack API

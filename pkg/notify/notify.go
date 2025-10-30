@@ -4,12 +4,14 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/codeGROOVE-dev/slacker/pkg/slack"
 	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 	"github.com/google/uuid"
@@ -880,6 +882,33 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 		"pr_state", pr.State,
 		"action_required", action,
 		"message", message)
+
+	// Try to update existing DM first (if one exists in our state store)
+	// UpdateDMMessage returns ErrNoDMToUpdate if no DM exists
+	updateErr := slackClient.UpdateDMMessage(ctx, userID, pr.HTMLURL, message)
+	if updateErr == nil {
+		// Successfully updated existing DM
+		slog.Info("successfully updated existing DM with new PR state",
+			"user", userID,
+			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+			"pr_state", pr.State,
+			"action_required", action)
+		return nil
+	}
+
+	// Check if it's because no DM exists (expected case for first notification)
+	if !errors.Is(updateErr, slack.ErrNoDMToUpdate) {
+		// Actual error occurred during update - log warning but continue to send new DM
+		slog.Warn("failed to update existing DM, will send new one",
+			"user", userID,
+			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+			"error", updateErr)
+	}
+
+	slog.Debug("no existing DM to update, will check for recent DMs and potentially send new one",
+		"user", userID,
+		"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+		"reason", "DM not in state store or too old")
 
 	// Check if we recently sent a DM about this PR (prevents duplicates during rolling deployments)
 	hasRecent, err := slackClient.HasRecentDMAboutPR(ctx, userID, pr.HTMLURL)
