@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	"github.com/slack-go/slack"
 )
 
@@ -225,4 +226,62 @@ func formatEnhancedPRBlock(pr *PR) slack.Block {
 		nil,
 		nil,
 	)
+}
+
+// BuildBlocksWithDebug creates Slack Block Kit UI with debug information about user mapping.
+func BuildBlocksWithDebug(dashboard *Dashboard, primaryOrg string, mapping *usermapping.ReverseMapping) []slack.Block {
+	// Build standard blocks first
+	blocks := BuildBlocks(dashboard, primaryOrg)
+
+	// Add debug section if mapping info is available
+	if mapping != nil {
+		blocks = append(blocks,
+			slack.NewDividerBlock(),
+			slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn",
+					fmt.Sprintf("🔍 *Debug Info*\n"+
+						"GitHub: `@%s`  •  Mapped via: `%s`  •  Confidence: `%d%%`",
+						mapping.GitHubUsername,
+						mapping.MatchMethod,
+						mapping.Confidence),
+					false,
+					false,
+				),
+				nil,
+				nil,
+			),
+		)
+
+		// Add mapping guidance if confidence is low
+		if mapping.Confidence < 80 {
+			blocks = append(blocks,
+				slack.NewContextBlock("",
+					slack.NewTextBlockObject("mrkdwn",
+						fmt.Sprintf("⚠️  Low confidence mapping. Add manual override to `slack.yaml`:\n```yaml\nusers:\n  %s: %s\n```",
+							mapping.GitHubUsername,
+							mapping.SlackEmail),
+						false,
+						false,
+					),
+				),
+			)
+		}
+	} else {
+		// No mapping found - show error message
+		blocks = append(blocks,
+			slack.NewDividerBlock(),
+			slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn",
+					"❌ *Could not map Slack user to GitHub*\n"+
+						"Add your mapping to `.codeGROOVE/slack.yaml`:\n```yaml\nusers:\n  your-github-username: your-email@company.com\n```",
+					false,
+					false,
+				),
+				nil,
+				nil,
+			),
+		)
+	}
+
+	return blocks
 }

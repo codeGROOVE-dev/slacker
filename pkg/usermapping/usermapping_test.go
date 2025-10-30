@@ -17,11 +17,19 @@ var errMockNotFound = errors.New("mock: not found")
 // MockSlackAPI mocks the Slack API for testing.
 type MockSlackAPI struct {
 	getUserByEmailFunc func(ctx context.Context, email string) (*slack.User, error)
+	getUserInfoFunc    func(userID string) (*slack.User, error)
 }
 
 func (m *MockSlackAPI) GetUserByEmailContext(ctx context.Context, email string) (*slack.User, error) {
 	if m.getUserByEmailFunc != nil {
 		return m.getUserByEmailFunc(ctx, email)
+	}
+	return nil, errMockNotFound
+}
+
+func (m *MockSlackAPI) GetUserInfo(userID string) (*slack.User, error) {
+	if m.getUserInfoFunc != nil {
+		return m.getUserInfoFunc(userID)
 	}
 	return nil, errMockNotFound
 }

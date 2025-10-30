@@ -11,15 +11,17 @@ import (
 	"github.com/codeGROOVE-dev/slacker/pkg/github"
 	"github.com/codeGROOVE-dev/slacker/pkg/home"
 	"github.com/codeGROOVE-dev/slacker/pkg/state"
+	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	gogithub "github.com/google/go-github/v50/github"
 )
 
 // HomeHandler handles app_home_opened events for a workspace.
 type HomeHandler struct {
-	slackManager  *Manager
-	githubManager *github.Manager
-	configManager *config.Manager
-	stateStore    state.Store
+	slackManager   *Manager
+	githubManager  *github.Manager
+	configManager  *config.Manager
+	stateStore     state.Store
+	reverseMapping *usermapping.ReverseService
 }
 
 // NewHomeHandler creates a new home view handler.
@@ -28,12 +30,14 @@ func NewHomeHandler(
 	githubManager *github.Manager,
 	configManager *config.Manager,
 	stateStore state.Store,
+	reverseMapping *usermapping.ReverseService,
 ) *HomeHandler {
 	return &HomeHandler{
-		slackManager:  slackManager,
-		githubManager: githubManager,
-		configManager: configManager,
-		stateStore:    stateStore,
+		slackManager:   slackManager,
+		githubManager:  githubManager,
+		configManager:  configManager,
+		stateStore:     stateStore,
+		reverseMapping: reverseMapping,
 	}
 }
 
@@ -77,35 +81,34 @@ func (h *HomeHandler) tryHandleAppHomeOpened(ctx context.Context, teamID, slackU
 		return fmt.Errorf("failed to get Slack client: %w", err)
 	}
 
-	// Get Slack user info to extract email
-	slackUser, err := slackClient.API().GetUserInfo(slackUserID)
-	if err != nil {
-		// Don't mask invalid_auth errors - let them propagate for retry logic
-		if strings.Contains(err.Error(), "invalid_auth") {
-			return fmt.Errorf("failed to get Slack user info: %w", err)
-		}
-		slog.Warn("failed to get Slack user info", "user_id", slackUserID, "error", err)
-		return h.publishPlaceholderHome(ctx, slackClient, slackUserID)
-	}
-
-	// Extract GitHub username from email (simple heuristic: part before @)
-	// Works for "username@company.com" -> "username"
-	email := slackUser.Profile.Email
-	atIndex := strings.IndexByte(email, '@')
-	if atIndex <= 0 {
-		slog.Warn("could not extract GitHub username from Slack email",
-			"slack_user_id", slackUserID,
-			"email", email)
-		return h.publishPlaceholderHome(ctx, slackClient, slackUserID)
-	}
-	githubUsername := email[:atIndex]
-
 	// Get all orgs for this workspace
 	workspaceOrgs := h.workspaceOrgs(teamID)
 	if len(workspaceOrgs) == 0 {
 		slog.Warn("no workspace orgs found", "team_id", teamID)
-		return h.publishPlaceholderHome(ctx, slackClient, slackUserID)
+		return h.publishPlaceholderHome(ctx, slackClient, slackUserID, nil)
 	}
+
+	// Get config for first org to extract domain and user overrides
+	cfg, exists := h.configManager.Config(workspaceOrgs[0])
+	if !exists {
+		return fmt.Errorf("no config for org: %s", workspaceOrgs[0])
+	}
+
+	// Update reverse mapping overrides from config
+	if len(cfg.Users) > 0 {
+		h.reverseMapping.SetOverrides(cfg.Users)
+	}
+
+	// Map Slack user to GitHub username
+	mapping, err := h.reverseMapping.LookupGitHub(ctx, slackClient.API(), slackUserID, workspaceOrgs[0], cfg.Global.EmailDomain)
+	if err != nil {
+		slog.Warn("failed to map Slack user to GitHub",
+			"slack_user_id", slackUserID,
+			"error", err)
+		return h.publishPlaceholderHome(ctx, slackClient, slackUserID, nil)
+	}
+
+	githubUsername := mapping.GitHubUsername
 
 	// Get GitHub client for first org (they all share the same app)
 	githubClient, ok := h.githubManager.ClientForOrg(workspaceOrgs[0])
@@ -130,14 +133,14 @@ func (h *HomeHandler) tryHandleAppHomeOpened(ctx context.Context, teamID, slackU
 		slog.Error("failed to fetch dashboard",
 			"github_user", githubUsername,
 			"error", err)
-		return h.publishPlaceholderHome(ctx, slackClient, slackUserID)
+		return h.publishPlaceholderHome(ctx, slackClient, slackUserID, mapping)
 	}
 
 	// Add workspace orgs to dashboard for UI display
 	dashboard.WorkspaceOrgs = workspaceOrgs
 
-	// Build Block Kit UI - use first org as primary
-	blocks := home.BuildBlocks(dashboard, workspaceOrgs[0])
+	// Build Block Kit UI - use first org as primary, include debug info
+	blocks := home.BuildBlocksWithDebug(dashboard, workspaceOrgs[0], mapping)
 
 	// Publish to Slack
 	if err := slackClient.PublishHomeView(ctx, slackUserID, blocks); err != nil {
@@ -177,14 +180,14 @@ func (h *HomeHandler) workspaceOrgs(teamID string) []string {
 }
 
 // publishPlaceholderHome publishes a simple placeholder home view.
-func (*HomeHandler) publishPlaceholderHome(ctx context.Context, slackClient *Client, slackUserID string) error {
+func (*HomeHandler) publishPlaceholderHome(ctx context.Context, slackClient *Client, slackUserID string, mapping *usermapping.ReverseMapping) error {
 	slog.Debug("publishing placeholder home", "user_id", slackUserID)
 
-	blocks := home.BuildBlocks(&home.Dashboard{
+	blocks := home.BuildBlocksWithDebug(&home.Dashboard{
 		IncomingPRs:   nil,
 		OutgoingPRs:   nil,
 		WorkspaceOrgs: []string{"your-org"},
-	}, "your-org")
+	}, "your-org", mapping)
 
 	return slackClient.PublishHomeView(ctx, slackUserID, blocks)
 }
