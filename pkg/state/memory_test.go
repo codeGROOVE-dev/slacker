@@ -1,6 +1,7 @@
 package state
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -345,5 +346,235 @@ func TestClose(t *testing.T) {
 	err := store.Close()
 	if err != nil {
 		t.Errorf("unexpected error closing store: %v", err)
+	}
+}
+
+func TestPendingDMOperations(t *testing.T) {
+	store := NewMemoryStore()
+
+	// Test retrieval when no pending DMs exist
+	pending, err := store.GetPendingDMs(time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error getting pending DMs: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Errorf("expected 0 pending DMs, got %d", len(pending))
+	}
+
+	// Queue a DM that should be sent now
+	now := time.Now()
+	dm1 := PendingDM{
+		ID:            "dm-001",
+		WorkspaceID:   "T123",
+		UserID:        "U001",
+		PROwner:       "test-org",
+		PRRepo:        "test-repo",
+		PRNumber:      123,
+		PRURL:         "https://github.com/test-org/test-repo/pull/123",
+		PRTitle:       "Test PR",
+		PRAuthor:      "author",
+		PRState:       "open",
+		WorkflowState: "awaiting_review",
+		NextActions:   `{"U001":{"kind":"review"}}`,
+		ChannelID:     "C123",
+		ChannelName:   "test-channel",
+		QueuedAt:      now.Add(-10 * time.Minute),
+		SendAfter:     now.Add(-5 * time.Minute), // 5 minutes ago - ready to send
+	}
+
+	err = store.QueuePendingDM(dm1)
+	if err != nil {
+		t.Fatalf("unexpected error queueing DM: %v", err)
+	}
+
+	// Queue a DM that should be sent in the future
+	dm2 := PendingDM{
+		ID:            "dm-002",
+		WorkspaceID:   "T123",
+		UserID:        "U002",
+		PROwner:       "test-org",
+		PRRepo:        "test-repo",
+		PRNumber:      456,
+		PRURL:         "https://github.com/test-org/test-repo/pull/456",
+		PRTitle:       "Another PR",
+		PRAuthor:      "author2",
+		PRState:       "open",
+		WorkflowState: "tests_broken",
+		NextActions:   `{"U002":{"kind":"fix"}}`,
+		ChannelID:     "C456",
+		ChannelName:   "another-channel",
+		QueuedAt:      now,
+		SendAfter:     now.Add(10 * time.Minute), // 10 minutes from now - not ready yet
+	}
+
+	err = store.QueuePendingDM(dm2)
+	if err != nil {
+		t.Fatalf("unexpected error queueing second DM: %v", err)
+	}
+
+	// Get pending DMs that are ready to send
+	pending, err = store.GetPendingDMs(now)
+	if err != nil {
+		t.Fatalf("unexpected error getting pending DMs: %v", err)
+	}
+
+	// Only dm1 should be returned (dm2 is in the future)
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending DM, got %d", len(pending))
+	}
+
+	if pending[0].ID != "dm-001" {
+		t.Errorf("expected DM ID dm-001, got %s", pending[0].ID)
+	}
+	if pending[0].UserID != "U001" {
+		t.Errorf("expected UserID U001, got %s", pending[0].UserID)
+	}
+	if pending[0].PRNumber != 123 {
+		t.Errorf("expected PRNumber 123, got %d", pending[0].PRNumber)
+	}
+
+	// Get pending DMs 15 minutes from now - both should be ready
+	future := now.Add(15 * time.Minute)
+	pending, err = store.GetPendingDMs(future)
+	if err != nil {
+		t.Fatalf("unexpected error getting future pending DMs: %v", err)
+	}
+
+	if len(pending) != 2 {
+		t.Fatalf("expected 2 pending DMs in future, got %d", len(pending))
+	}
+
+	// Remove one DM
+	err = store.RemovePendingDM("dm-001")
+	if err != nil {
+		t.Fatalf("unexpected error removing DM: %v", err)
+	}
+
+	// Now only dm2 should remain
+	pending, err = store.GetPendingDMs(future)
+	if err != nil {
+		t.Fatalf("unexpected error getting pending DMs after removal: %v", err)
+	}
+
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending DM after removal, got %d", len(pending))
+	}
+
+	if pending[0].ID != "dm-002" {
+		t.Errorf("expected remaining DM to be dm-002, got %s", pending[0].ID)
+	}
+
+	// Remove non-existent DM should not error
+	err = store.RemovePendingDM("dm-999")
+	if err != nil {
+		t.Errorf("unexpected error removing non-existent DM: %v", err)
+	}
+}
+
+func TestPendingDMCleanup(t *testing.T) {
+	store := NewMemoryStore()
+
+	now := time.Now()
+	oldTime := now.Add(-100 * 24 * time.Hour) // 100 days ago
+
+	// Add an old pending DM (>90 days)
+	oldDM := PendingDM{
+		ID:        "old-dm",
+		UserID:    "U001",
+		PRURL:     "https://github.com/test/repo/pull/1",
+		QueuedAt:  oldTime,
+		SendAfter: oldTime,
+	}
+	store.QueuePendingDM(oldDM)
+
+	// Add a recent pending DM
+	recentDM := PendingDM{
+		ID:        "recent-dm",
+		UserID:    "U002",
+		PRURL:     "https://github.com/test/repo/pull/2",
+		QueuedAt:  now,
+		SendAfter: now.Add(10 * time.Minute),
+	}
+	store.QueuePendingDM(recentDM)
+
+	// Run cleanup
+	err := store.Cleanup()
+	if err != nil {
+		t.Fatalf("unexpected error during cleanup: %v", err)
+	}
+
+	// Verify old DM was removed
+	pending, err := store.GetPendingDMs(now.Add(24 * time.Hour))
+	if err != nil {
+		t.Fatalf("unexpected error getting pending DMs: %v", err)
+	}
+
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending DM after cleanup, got %d", len(pending))
+	}
+
+	if pending[0].ID != "recent-dm" {
+		t.Errorf("expected recent-dm to remain, got %s", pending[0].ID)
+	}
+}
+
+func TestPendingDMConcurrency(t *testing.T) {
+	store := NewMemoryStore()
+
+	now := time.Now()
+
+	// Queue multiple DMs concurrently
+	done := make(chan bool, 3)
+
+	for i := 0; i < 3; i++ {
+		go func(index int) {
+			dm := PendingDM{
+				ID:        fmt.Sprintf("dm-%d", index),
+				UserID:    fmt.Sprintf("U%03d", index),
+				PRURL:     fmt.Sprintf("https://github.com/test/repo/pull/%d", index),
+				QueuedAt:  now,
+				SendAfter: now.Add(-1 * time.Minute),
+			}
+			store.QueuePendingDM(dm)
+			done <- true
+		}(i)
+	}
+
+	// Wait for all goroutines
+	for i := 0; i < 3; i++ {
+		<-done
+	}
+
+	// Get all pending DMs
+	pending, err := store.GetPendingDMs(now)
+	if err != nil {
+		t.Fatalf("unexpected error getting pending DMs: %v", err)
+	}
+
+	if len(pending) != 3 {
+		t.Fatalf("expected 3 pending DMs, got %d", len(pending))
+	}
+
+	// Remove DMs concurrently
+	for i := 0; i < 3; i++ {
+		go func(index int) {
+			store.RemovePendingDM(fmt.Sprintf("dm-%d", index))
+			done <- true
+		}(i)
+	}
+
+	// Wait for all removals
+	for i := 0; i < 3; i++ {
+		<-done
+	}
+
+	// Verify all removed
+	pending, err = store.GetPendingDMs(now)
+	if err != nil {
+		t.Fatalf("unexpected error getting pending DMs after removal: %v", err)
+	}
+
+	if len(pending) != 0 {
+		t.Errorf("expected 0 pending DMs after concurrent removal, got %d", len(pending))
 	}
 }

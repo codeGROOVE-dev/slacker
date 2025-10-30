@@ -26,6 +26,7 @@ const (
 	kindDigest    = "SlackerDigest"
 	kindEvent     = "SlackerEvent"
 	kindNotify    = "SlackerNotification"
+	kindPendingDM = "SlackerPendingDM"
 )
 
 // ErrAlreadyProcessed indicates an event was already processed by another instance.
@@ -74,6 +75,25 @@ type eventEntity struct {
 type notifyEntity struct {
 	NotifiedAt time.Time `datastore:"notified_at"`
 	PRURL      string    `datastore:"pr_url"`
+}
+
+// Pending DM entity.
+type pendingDMEntity struct {
+	WorkspaceID   string    `datastore:"workspace_id"`
+	UserID        string    `datastore:"user_id"`
+	PROwner       string    `datastore:"pr_owner"`
+	PRRepo        string    `datastore:"pr_repo"`
+	PRNumber      int       `datastore:"pr_number"`
+	PRURL         string    `datastore:"pr_url"`
+	PRTitle       string    `datastore:"pr_title,noindex"`
+	PRAuthor      string    `datastore:"pr_author"`
+	PRState       string    `datastore:"pr_state"`
+	WorkflowState string    `datastore:"workflow_state"`
+	NextActions   string    `datastore:"next_actions,noindex"`
+	ChannelID     string    `datastore:"channel_id"`
+	ChannelName   string    `datastore:"channel_name"`
+	QueuedAt      time.Time `datastore:"queued_at"`
+	SendAfter     time.Time `datastore:"send_after"`
 }
 
 // NewDatastoreStore creates a new Datastore-backed store with in-memory cache.
@@ -658,6 +678,115 @@ func (s *DatastoreStore) RecordNotification(prURL string, notifiedAt time.Time) 
 	}()
 
 	return nil
+}
+
+// QueuePendingDM adds a pending DM to both memory and Datastore.
+func (s *DatastoreStore) QueuePendingDM(dm PendingDM) error {
+	// Always update memory cache
+	if err := s.memory.QueuePendingDM(dm); err != nil {
+		return err
+	}
+
+	// Skip Datastore if disabled
+	if s.disabled || s.ds == nil {
+		return nil
+	}
+
+	ctx := context.Background()
+	key := datastore.NameKey(kindPendingDM, dm.ID, nil)
+	entity := pendingDMEntity{
+		WorkspaceID:   dm.WorkspaceID,
+		UserID:        dm.UserID,
+		PROwner:       dm.PROwner,
+		PRRepo:        dm.PRRepo,
+		PRNumber:      dm.PRNumber,
+		PRURL:         dm.PRURL,
+		PRTitle:       dm.PRTitle,
+		PRAuthor:      dm.PRAuthor,
+		PRState:       dm.PRState,
+		WorkflowState: dm.WorkflowState,
+		NextActions:   dm.NextActions,
+		ChannelID:     dm.ChannelID,
+		ChannelName:   dm.ChannelName,
+		QueuedAt:      dm.QueuedAt,
+		SendAfter:     dm.SendAfter,
+	}
+
+	_, err := s.ds.Put(ctx, key, &entity)
+	return err
+}
+
+// GetPendingDMs returns all pending DMs that should be sent.
+// Reads from memory cache first, falls back to Datastore if empty.
+func (s *DatastoreStore) GetPendingDMs(before time.Time) ([]PendingDM, error) {
+	// Try memory first
+	dms, err := s.memory.GetPendingDMs(before)
+	if err == nil && len(dms) > 0 {
+		return dms, nil
+	}
+
+	// Skip Datastore if disabled
+	if s.disabled || s.ds == nil {
+		return dms, nil
+	}
+
+	// Query Datastore for pending DMs
+	ctx := context.Background()
+	query := datastore.NewQuery(kindPendingDM).
+		Filter("send_after <=", before).
+		Limit(100)
+
+	var entities []pendingDMEntity
+	keys, err := s.ds.GetAll(ctx, query, &entities)
+	if err != nil {
+		slog.Warn("failed to query pending DMs from Datastore", "error", err)
+		return dms, nil // Return memory results even if Datastore fails
+	}
+
+	// Convert entities to PendingDM structs and update memory cache
+	result := make([]PendingDM, 0, len(entities))
+	for i, entity := range entities {
+		dm := PendingDM{
+			ID:            keys[i].Name,
+			WorkspaceID:   entity.WorkspaceID,
+			UserID:        entity.UserID,
+			PROwner:       entity.PROwner,
+			PRRepo:        entity.PRRepo,
+			PRNumber:      entity.PRNumber,
+			PRURL:         entity.PRURL,
+			PRTitle:       entity.PRTitle,
+			PRAuthor:      entity.PRAuthor,
+			PRState:       entity.PRState,
+			WorkflowState: entity.WorkflowState,
+			NextActions:   entity.NextActions,
+			ChannelID:     entity.ChannelID,
+			ChannelName:   entity.ChannelName,
+			QueuedAt:      entity.QueuedAt,
+			SendAfter:     entity.SendAfter,
+		}
+		result = append(result, dm)
+		// Update memory cache
+		_ = s.memory.QueuePendingDM(dm)
+	}
+
+	return result, nil
+}
+
+// RemovePendingDM removes a pending DM from both memory and Datastore.
+func (s *DatastoreStore) RemovePendingDM(id string) error {
+	// Always remove from memory
+	if err := s.memory.RemovePendingDM(id); err != nil {
+		return err
+	}
+
+	// Skip Datastore if disabled
+	if s.disabled || s.ds == nil {
+		return nil
+	}
+
+	ctx := context.Background()
+	key := datastore.NameKey(kindPendingDM, id, nil)
+	return s.ds.Delete(ctx, key)
 }
 
 // Cleanup removes old data from both stores.

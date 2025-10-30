@@ -24,6 +24,26 @@ type DMInfo struct {
 	MessageText string    `json:"message_text"` // Current message text
 }
 
+// PendingDM represents a DM scheduled to be sent later.
+type PendingDM struct {
+	ID            string    `json:"id"`             // Unique ID for this pending DM
+	WorkspaceID   string    `json:"workspace_id"`   // Slack workspace ID
+	UserID        string    `json:"user_id"`        // Slack user ID to DM
+	PROwner       string    `json:"pr_owner"`       // GitHub PR owner
+	PRRepo        string    `json:"pr_repo"`        // GitHub PR repo
+	PRNumber      int       `json:"pr_number"`      // GitHub PR number
+	PRURL         string    `json:"pr_url"`         // GitHub PR URL
+	PRTitle       string    `json:"pr_title"`       // PR title
+	PRAuthor      string    `json:"pr_author"`      // PR author
+	PRState       string    `json:"pr_state"`       // Deprecated simplified state
+	WorkflowState string    `json:"workflow_state"` // Workflow state from turnclient
+	NextActions   string    `json:"next_actions"`   // Serialized NextAction map (JSON)
+	ChannelID     string    `json:"channel_id"`     // Channel where user was tagged
+	ChannelName   string    `json:"channel_name"`   // Channel name
+	QueuedAt      time.Time `json:"queued_at"`      // When this DM was queued
+	SendAfter     time.Time `json:"send_after"`     // Send DM after this time
+}
+
 // Store provides persistent storage for bot state.
 // Implementations must be safe for concurrent use.
 //
@@ -53,6 +73,11 @@ type Store interface {
 	// Notification tracking - track when we last notified about a PR
 	LastNotification(prURL string) time.Time
 	RecordNotification(prURL string, notifiedAt time.Time) error
+
+	// Pending DM queue - schedule DMs to be sent later
+	QueuePendingDM(dm PendingDM) error
+	GetPendingDMs(before time.Time) ([]PendingDM, error)
+	RemovePendingDM(id string) error
 
 	// Cleanup old data
 	Cleanup() error

@@ -260,6 +260,18 @@ func (m *mockStateStore) Cleanup() error {
 	return nil
 }
 
+func (m *mockStateStore) QueuePendingDM(dm state.PendingDM) error {
+	return nil
+}
+
+func (m *mockStateStore) GetPendingDMs(before time.Time) ([]state.PendingDM, error) {
+	return nil, nil
+}
+
+func (m *mockStateStore) RemovePendingDM(id string) error {
+	return nil
+}
+
 func (m *mockStateStore) Close() error {
 	return nil
 }

@@ -584,7 +584,7 @@ func TestNew(t *testing.T) {
 	mockConfig := &mockConfigManager{}
 
 	// Call New - it should not panic
-	manager := New(nil, mockConfig)
+	manager := New(nil, mockConfig, &mockStore{})
 
 	if manager == nil {
 		t.Fatal("expected non-nil manager")
@@ -604,7 +604,7 @@ func TestNewDailyDigestScheduler(t *testing.T) {
 	mockConfig := &mockConfigManager{}
 	mockState := &mockStateProvider{}
 	mockSlack := &mockSlackManager{}
-	manager := New(nil, mockConfig)
+	manager := New(nil, mockConfig, &mockStore{})
 
 	scheduler := NewDailyDigestScheduler(manager, nil, mockConfig, mockState, mockSlack)
 

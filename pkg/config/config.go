@@ -374,6 +374,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 			"team_id":             config.Global.TeamID,
 			"email_domain":        config.Global.EmailDomain,
 			"daily_reminders":     config.Global.DailyReminders,
+			"reminder_dm_delay":   config.Global.ReminderDMDelay,
 			"total_channels":      len(config.Channels),
 			"muted_channels":      muted,
 			"wildcard_channels":   wildcard,
@@ -575,20 +576,36 @@ func (m *Manager) ReminderDMDelay(org, channel string) int {
 
 	config, exists := m.configs[org]
 	if !exists {
+		slog.Debug("no config for org - using default delay",
+			logFieldOrg, org,
+			"default_delay_mins", defaultReminderDMDelayMinutes)
 		return defaultReminderDMDelayMinutes
 	}
 
 	// Check for channel-specific override
 	if channelConfig, ok := config.Channels[channel]; ok {
 		if channelConfig.ReminderDMDelay != nil {
+			slog.Debug("using channel-specific reminder delay",
+				logFieldOrg, org,
+				"channel", channel,
+				"delay_mins", *channelConfig.ReminderDMDelay)
 			return *channelConfig.ReminderDMDelay
 		}
 	}
 
 	// Return global setting (or default if not set)
 	if config.Global.ReminderDMDelay > 0 {
+		slog.Debug("using global reminder delay",
+			logFieldOrg, org,
+			"channel", channel,
+			"delay_mins", config.Global.ReminderDMDelay)
 		return config.Global.ReminderDMDelay
 	}
+	slog.Debug("global delay is 0 or unset - using default",
+		logFieldOrg, org,
+		"channel", channel,
+		"global_value", config.Global.ReminderDMDelay,
+		"default_delay_mins", defaultReminderDMDelayMinutes)
 	return defaultReminderDMDelayMinutes
 }
 

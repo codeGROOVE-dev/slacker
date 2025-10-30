@@ -24,7 +24,8 @@ type JSONStore struct {
 	digests       map[string]time.Time
 	events        map[string]time.Time
 	notifications map[string]time.Time
-	modified      bool // Track if we need to save
+	pendingDMs    map[string]PendingDM // Pending DMs to be sent
+	modified      bool                 // Track if we need to save
 }
 
 // NewJSONStore creates a new JSON-based state store.
@@ -47,6 +48,7 @@ func NewJSONStore() (*JSONStore, error) {
 		digests:       make(map[string]time.Time),
 		events:        make(map[string]time.Time),
 		notifications: make(map[string]time.Time),
+		pendingDMs:    make(map[string]PendingDM),
 		modified:      false,
 	}
 
@@ -325,13 +327,23 @@ func (s *JSONStore) Cleanup() error {
 		}
 	}
 
-	if cleanedThreads+cleanedDMs+cleanedDMMessages+cleanedDigests+cleanedEvents > 0 {
+	// Clean up old pending DMs (>7 days or already past send time by >1 day)
+	cleanedPendingDMs := 0
+	for key, dm := range s.pendingDMs {
+		if now.Sub(dm.QueuedAt) > 7*24*time.Hour || now.Sub(dm.SendAfter) > 24*time.Hour {
+			delete(s.pendingDMs, key)
+			cleanedPendingDMs++
+		}
+	}
+
+	if cleanedThreads+cleanedDMs+cleanedDMMessages+cleanedDigests+cleanedEvents+cleanedPendingDMs > 0 {
 		slog.Info("cleaned up old state",
 			"threads", cleanedThreads,
 			"dms", cleanedDMs,
 			"dm_messages", cleanedDMMessages,
 			"digests", cleanedDigests,
-			"events", cleanedEvents)
+			"events", cleanedEvents,
+			"pending_dms", cleanedPendingDMs)
 		s.modified = true
 		return s.save()
 	}
@@ -357,6 +369,7 @@ type persistentState struct {
 	Digests       map[string]time.Time  `json:"digests"`
 	Events        map[string]time.Time  `json:"events"`
 	Notifications map[string]time.Time  `json:"notifications"`
+	PendingDMs    map[string]PendingDM  `json:"pending_dms"`
 }
 
 // save persists state to disk.
@@ -373,6 +386,7 @@ func (s *JSONStore) save() error {
 		Digests:       s.digests,
 		Events:        s.events,
 		Notifications: s.notifications,
+		PendingDMs:    s.pendingDMs,
 	}
 
 	data, err := json.MarshalIndent(state, "", "  ")
@@ -422,6 +436,7 @@ func (s *JSONStore) load() error {
 	s.digests = state.Digests
 	s.events = state.Events
 	s.notifications = state.Notifications
+	s.pendingDMs = state.PendingDMs
 
 	if s.threads == nil {
 		s.threads = make(map[string]ThreadInfo)
@@ -441,6 +456,9 @@ func (s *JSONStore) load() error {
 	if s.notifications == nil {
 		s.notifications = make(map[string]time.Time)
 	}
+	if s.pendingDMs == nil {
+		s.pendingDMs = make(map[string]PendingDM)
+	}
 
 	slog.Info("loaded state from disk",
 		"threads", len(s.threads),
@@ -448,7 +466,48 @@ func (s *JSONStore) load() error {
 		"dm_messages", len(s.dmMessages),
 		"digests", len(s.digests),
 		"events", len(s.events),
-		"notifications", len(s.notifications))
+		"notifications", len(s.notifications),
+		"pending_dms", len(s.pendingDMs))
 
+	return nil
+}
+
+// QueuePendingDM adds a DM to the pending queue.
+func (s *JSONStore) QueuePendingDM(dm PendingDM) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pendingDMs[dm.ID] = dm
+	s.modified = true
+	// Best-effort persistence to JSON file for restart recovery
+	if err := s.save(); err != nil {
+		slog.Error("failed to persist pending DM to JSON file", "dm_id", dm.ID, "error", err)
+	}
+	return nil
+}
+
+// GetPendingDMs returns all pending DMs that should be sent (SendAfter <= before).
+func (s *JSONStore) GetPendingDMs(before time.Time) ([]PendingDM, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var result []PendingDM
+	for _, dm := range s.pendingDMs {
+		if !dm.SendAfter.After(before) {
+			result = append(result, dm)
+		}
+	}
+	return result, nil
+}
+
+// RemovePendingDM removes a pending DM from the queue.
+func (s *JSONStore) RemovePendingDM(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.pendingDMs, id)
+	s.modified = true
+	// Best-effort persistence to JSON file for restart recovery
+	if err := s.save(); err != nil {
+		slog.Error("failed to persist pending DM removal to JSON file", "dm_id", id, "error", err)
+	}
 	return nil
 }

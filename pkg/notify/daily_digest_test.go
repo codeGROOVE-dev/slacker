@@ -603,7 +603,7 @@ func TestNewDailyDigestScheduler_FactoryWorks(t *testing.T) {
 	mockConfigMgr := &mockConfigProvider{}
 	mockState := &mockStateProvider{}
 	mockSlack := &mockSlackManagerWithClient{}
-	manager := New(mockSlack, mockConfigMgr)
+	manager := New(mockSlack, mockConfigMgr, &mockStore{})
 
 	scheduler := NewDailyDigestScheduler(manager, mockGitHubMgr, mockConfigMgr, mockState, mockSlack)
 

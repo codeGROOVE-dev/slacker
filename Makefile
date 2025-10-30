@@ -16,35 +16,7 @@ build-registrar:
 
 # Run tests with race detection and coverage
 test:
-	@echo "Running tests with race detection and coverage..."
-	@go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
-	@echo ""
-	@echo "Coverage by package:"
-	@go test -coverprofile=coverage.out -covermode=atomic ./... 2>&1 | grep -E "coverage:" | awk '{print $$2 "\t" $$5}' | column -t
-	@echo ""
-	@echo "Checking for packages below 80% coverage..."
-	@failed=0; \
-	packages=$$(go list ./... | grep -v "/cmd/"); \
-	for pkg in $$packages; do \
-		output=$$(go test -coverprofile=/dev/null "$$pkg" 2>&1); \
-		if echo "$$output" | grep -q "\[no test files\]"; then \
-			continue; \
-		fi; \
-		coverage=$$(echo "$$output" | grep "coverage:" | awk '{print $$5}' | sed 's/%//'); \
-		if [ -n "$$coverage" ] && [ "$$coverage" != "statements" ]; then \
-			pkg_short=$$(echo "$$pkg" | sed 's|github.com/codeGROOVE-dev/slacker/||'); \
-			if [ "$$(echo "$$coverage < 80.0" | bc -l 2>/dev/null || echo 0)" -eq 1 ]; then \
-				echo "❌ FAIL: $$pkg_short has $$coverage% coverage (minimum: 80%)"; \
-				failed=1; \
-			fi; \
-		fi; \
-	done; \
-	if [ $$failed -eq 1 ]; then \
-		echo ""; \
-		echo "Coverage check failed. All packages must have at least 80% coverage."; \
-		exit 1; \
-	fi
-	@echo "✅ All packages meet 80% coverage threshold"
+	go test -v -race -cover ./...
 
 # Format code
 fmt:

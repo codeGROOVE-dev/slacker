@@ -315,3 +315,290 @@ func TestJSONStore_SaveLoad_RoundTrip(t *testing.T) {
 		t.Errorf("expected 1 digest, got %d", len(store2.digests))
 	}
 }
+
+func TestJSONStore_PendingDMOperations(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "slacker-state-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	store := &JSONStore{
+		baseDir:       tempDir,
+		threads:       make(map[string]ThreadInfo),
+		dms:           make(map[string]time.Time),
+		dmMessages:    make(map[string]DMInfo),
+		digests:       make(map[string]time.Time),
+		events:        make(map[string]time.Time),
+		notifications: make(map[string]time.Time),
+		pendingDMs:    make(map[string]PendingDM),
+	}
+
+	// Test retrieval when no pending DMs exist
+	pending, err := store.GetPendingDMs(time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error getting pending DMs: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Errorf("expected 0 pending DMs, got %d", len(pending))
+	}
+
+	// Queue a DM that should be sent now
+	now := time.Now()
+	dm1 := PendingDM{
+		ID:            "dm-001",
+		WorkspaceID:   "T123",
+		UserID:        "U001",
+		PROwner:       "test-org",
+		PRRepo:        "test-repo",
+		PRNumber:      123,
+		PRURL:         "https://github.com/test-org/test-repo/pull/123",
+		PRTitle:       "Test PR",
+		PRAuthor:      "author",
+		PRState:       "open",
+		WorkflowState: "awaiting_review",
+		NextActions:   `{"U001":{"kind":"review"}}`,
+		ChannelID:     "C123",
+		ChannelName:   "test-channel",
+		QueuedAt:      now.Add(-10 * time.Minute),
+		SendAfter:     now.Add(-5 * time.Minute), // 5 minutes ago - ready to send
+	}
+
+	err = store.QueuePendingDM(dm1)
+	if err != nil {
+		t.Fatalf("unexpected error queueing DM: %v", err)
+	}
+
+	// Queue a DM that should be sent in the future
+	dm2 := PendingDM{
+		ID:            "dm-002",
+		WorkspaceID:   "T123",
+		UserID:        "U002",
+		PROwner:       "test-org",
+		PRRepo:        "test-repo",
+		PRNumber:      456,
+		PRURL:         "https://github.com/test-org/test-repo/pull/456",
+		PRTitle:       "Another PR",
+		PRAuthor:      "author2",
+		PRState:       "open",
+		WorkflowState: "tests_broken",
+		NextActions:   `{"U002":{"kind":"fix"}}`,
+		ChannelID:     "C456",
+		ChannelName:   "another-channel",
+		QueuedAt:      now,
+		SendAfter:     now.Add(10 * time.Minute), // 10 minutes from now - not ready yet
+	}
+
+	err = store.QueuePendingDM(dm2)
+	if err != nil {
+		t.Fatalf("unexpected error queueing second DM: %v", err)
+	}
+
+	// Get pending DMs that are ready to send
+	pending, err = store.GetPendingDMs(now)
+	if err != nil {
+		t.Fatalf("unexpected error getting pending DMs: %v", err)
+	}
+
+	// Only dm1 should be returned (dm2 is in the future)
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending DM, got %d", len(pending))
+	}
+
+	if pending[0].ID != "dm-001" {
+		t.Errorf("expected DM ID dm-001, got %s", pending[0].ID)
+	}
+	if pending[0].UserID != "U001" {
+		t.Errorf("expected UserID U001, got %s", pending[0].UserID)
+	}
+	if pending[0].PRNumber != 123 {
+		t.Errorf("expected PRNumber 123, got %d", pending[0].PRNumber)
+	}
+
+	// Get pending DMs 15 minutes from now - both should be ready
+	future := now.Add(15 * time.Minute)
+	pending, err = store.GetPendingDMs(future)
+	if err != nil {
+		t.Fatalf("unexpected error getting future pending DMs: %v", err)
+	}
+
+	if len(pending) != 2 {
+		t.Fatalf("expected 2 pending DMs in future, got %d", len(pending))
+	}
+
+	// Remove one DM
+	err = store.RemovePendingDM("dm-001")
+	if err != nil {
+		t.Fatalf("unexpected error removing DM: %v", err)
+	}
+
+	// Now only dm2 should remain
+	pending, err = store.GetPendingDMs(future)
+	if err != nil {
+		t.Fatalf("unexpected error getting pending DMs after removal: %v", err)
+	}
+
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending DM after removal, got %d", len(pending))
+	}
+
+	if pending[0].ID != "dm-002" {
+		t.Errorf("expected remaining DM to be dm-002, got %s", pending[0].ID)
+	}
+
+	// Remove non-existent DM should not error
+	err = store.RemovePendingDM("dm-999")
+	if err != nil {
+		t.Errorf("unexpected error removing non-existent DM: %v", err)
+	}
+}
+
+func TestJSONStore_PendingDMPersistence(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "slacker-state-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Create first store instance
+	store1 := &JSONStore{
+		baseDir:       tempDir,
+		threads:       make(map[string]ThreadInfo),
+		dms:           make(map[string]time.Time),
+		dmMessages:    make(map[string]DMInfo),
+		digests:       make(map[string]time.Time),
+		events:        make(map[string]time.Time),
+		notifications: make(map[string]time.Time),
+		pendingDMs:    make(map[string]PendingDM),
+	}
+
+	// Queue some pending DMs
+	now := time.Now()
+	dm1 := PendingDM{
+		ID:        "dm-001",
+		UserID:    "U001",
+		PRURL:     "https://github.com/test/repo/pull/123",
+		PRTitle:   "Test PR",
+		SendAfter: now.Add(5 * time.Minute),
+	}
+	dm2 := PendingDM{
+		ID:        "dm-002",
+		UserID:    "U002",
+		PRURL:     "https://github.com/test/repo/pull/456",
+		PRTitle:   "Another PR",
+		SendAfter: now.Add(10 * time.Minute),
+	}
+
+	store1.QueuePendingDM(dm1)
+	store1.QueuePendingDM(dm2)
+
+	// Save to disk (happens automatically in QueuePendingDM via modified flag)
+	err = store1.save()
+	if err != nil {
+		t.Fatalf("unexpected error saving: %v", err)
+	}
+
+	// Create second store instance (simulates restart)
+	store2 := &JSONStore{
+		baseDir:       tempDir,
+		threads:       make(map[string]ThreadInfo),
+		dms:           make(map[string]time.Time),
+		dmMessages:    make(map[string]DMInfo),
+		digests:       make(map[string]time.Time),
+		events:        make(map[string]time.Time),
+		notifications: make(map[string]time.Time),
+		pendingDMs:    make(map[string]PendingDM),
+	}
+
+	// Load from disk
+	err = store2.load()
+	if err != nil {
+		t.Fatalf("unexpected error loading: %v", err)
+	}
+
+	// Verify pending DMs persisted
+	future := now.Add(15 * time.Minute)
+	pending, err := store2.GetPendingDMs(future)
+	if err != nil {
+		t.Fatalf("unexpected error getting pending DMs: %v", err)
+	}
+
+	if len(pending) != 2 {
+		t.Fatalf("expected 2 pending DMs after reload, got %d", len(pending))
+	}
+
+	// Verify the data matches
+	dmMap := make(map[string]PendingDM)
+	for _, dm := range pending {
+		dmMap[dm.ID] = dm
+	}
+
+	if dmMap["dm-001"].UserID != "U001" {
+		t.Errorf("expected UserID U001 for dm-001, got %s", dmMap["dm-001"].UserID)
+	}
+	if dmMap["dm-002"].UserID != "U002" {
+		t.Errorf("expected UserID U002 for dm-002, got %s", dmMap["dm-002"].UserID)
+	}
+}
+
+func TestJSONStore_PendingDMCleanup(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "slacker-state-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	store := &JSONStore{
+		baseDir:       tempDir,
+		threads:       make(map[string]ThreadInfo),
+		dms:           make(map[string]time.Time),
+		dmMessages:    make(map[string]DMInfo),
+		digests:       make(map[string]time.Time),
+		events:        make(map[string]time.Time),
+		notifications: make(map[string]time.Time),
+		pendingDMs:    make(map[string]PendingDM),
+	}
+
+	now := time.Now()
+	oldTime := now.Add(-100 * 24 * time.Hour) // 100 days ago
+
+	// Add an old pending DM (>90 days)
+	oldDM := PendingDM{
+		ID:        "old-dm",
+		UserID:    "U001",
+		PRURL:     "https://github.com/test/repo/pull/1",
+		QueuedAt:  oldTime,
+		SendAfter: oldTime,
+	}
+	store.QueuePendingDM(oldDM)
+
+	// Add a recent pending DM
+	recentDM := PendingDM{
+		ID:        "recent-dm",
+		UserID:    "U002",
+		PRURL:     "https://github.com/test/repo/pull/2",
+		QueuedAt:  now,
+		SendAfter: now.Add(10 * time.Minute),
+	}
+	store.QueuePendingDM(recentDM)
+
+	// Run cleanup
+	err = store.Cleanup()
+	if err != nil {
+		t.Fatalf("unexpected error during cleanup: %v", err)
+	}
+
+	// Verify old DM was removed
+	pending, err := store.GetPendingDMs(now.Add(24 * time.Hour))
+	if err != nil {
+		t.Fatalf("unexpected error getting pending DMs: %v", err)
+	}
+
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending DM after cleanup, got %d", len(pending))
+	}
+
+	if pending[0].ID != "recent-dm" {
+		t.Errorf("expected recent-dm to remain, got %s", pending[0].ID)
+	}
+}

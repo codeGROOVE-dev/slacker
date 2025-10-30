@@ -162,24 +162,7 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	slackManager := slack.NewManager(cfg.SlackSigningSecret)
 
 	// Initialize state store (in-memory + Datastore or JSON for persistence).
-	//nolint:interfacebloat // Interface mirrors state.Store for local type safety
-	var stateStore interface {
-		Thread(owner, repo string, number int, channelID string) (state.ThreadInfo, bool)
-		SaveThread(owner, repo string, number int, channelID string, info state.ThreadInfo) error
-		LastDM(userID, prURL string) (time.Time, bool)
-		RecordDM(userID, prURL string, sentAt time.Time) error
-		DMMessage(userID, prURL string) (state.DMInfo, bool)
-		SaveDMMessage(userID, prURL string, info state.DMInfo) error
-		ListDMUsers(prURL string) []string
-		LastDigest(userID, date string) (time.Time, bool)
-		RecordDigest(userID, date string, sentAt time.Time) error
-		WasProcessed(eventKey string) bool
-		MarkProcessed(eventKey string, ttl time.Duration) error
-		LastNotification(prURL string) time.Time
-		RecordNotification(prURL string, notifiedAt time.Time) error
-		Cleanup() error
-		Close() error
-	}
+	var stateStore state.Store
 
 	// Check if Datastore should be used via DATASTORE=<database-id>
 	// Examples:
@@ -256,7 +239,7 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	slog.Info("configured Slack manager with state store for DM tracking")
 
 	// Initialize notification manager for multi-workspace notifications.
-	notifier := notify.New(notify.WrapSlackManager(slackManager), configManager)
+	notifier := notify.New(notify.WrapSlackManager(slackManager), configManager, stateStore)
 
 	// Initialize event router for multi-workspace event handling.
 	eventRouter := slack.NewEventRouter(slackManager)
@@ -679,23 +662,7 @@ func runBotCoordinators(
 	githubManager *github.Manager,
 	configManager *config.Manager,
 	notifier *notify.Manager,
-	stateStore interface {
-		Thread(owner, repo string, number int, channelID string) (state.ThreadInfo, bool)
-		SaveThread(owner, repo string, number int, channelID string, info state.ThreadInfo) error
-		LastDM(userID, prURL string) (time.Time, bool)
-		RecordDM(userID, prURL string, sentAt time.Time) error
-		DMMessage(userID, prURL string) (state.DMInfo, bool)
-		SaveDMMessage(userID, prURL string, info state.DMInfo) error
-		ListDMUsers(prURL string) []string
-		LastDigest(userID, date string) (time.Time, bool)
-		RecordDigest(userID, date string, sentAt time.Time) error
-		WasProcessed(eventKey string) bool
-		MarkProcessed(eventKey string, ttl time.Duration) error
-		LastNotification(prURL string) time.Time
-		RecordNotification(prURL string, notifiedAt time.Time) error
-		Cleanup() error
-		Close() error
-	},
+	stateStore state.Store,
 	sprinklerURL string,
 ) error {
 	cm := &coordinatorManager{
