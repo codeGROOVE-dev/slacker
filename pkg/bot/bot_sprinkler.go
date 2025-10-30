@@ -11,6 +11,7 @@ import (
 
 	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
+	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
 
 // Constants for URL parsing.
@@ -84,13 +85,142 @@ func (c *Coordinator) lookupPRsForCheckEvent(ctx context.Context, event client.E
 	owner := parts[3]
 	repo := parts[4]
 
-	slog.Info("sprinkler cache miss - looking up PRs for commit via GitHub API",
+	// First, check our local commit→PR cache (populated from recent PR events)
+	// This is MUCH faster than GitHub API and usually works since check events
+	// arrive seconds after PR events
+	cachedPRs := c.commitPRCache.FindPRsForCommit(owner, repo, commitSHA)
+	if len(cachedPRs) > 0 {
+		slog.Info("found PRs for commit in cache - avoiding GitHub API call",
+			"organization", organization,
+			"owner", owner,
+			"repo", repo,
+			"commit_sha", commitSHA,
+			"pr_count", len(cachedPRs),
+			"pr_numbers", cachedPRs,
+			"type", event.Type,
+			"delivery_id", deliveryID,
+			"cache_hit", true)
+		return cachedPRs
+	}
+
+	// Cache miss - try turnclient lookup on most recent PR before falling back to GitHub API
+	slog.Info("commit→PR cache miss - will try turnclient on recent PR before GitHub API",
 		"organization", organization,
 		"owner", owner,
 		"repo", repo,
 		"commit_sha", commitSHA,
 		"type", event.Type,
-		"delivery_id", deliveryID)
+		"delivery_id", deliveryID,
+		"cache_hit", false,
+		"reason", "check event arrived before PR event or cache expired")
+
+	// Second attempt: Check if we recently saw a PR for this repo
+	// If yes, fetch it via turnclient to see if it contains this commit
+	// This is cheaper than searching all PRs via GitHub API
+	mostRecentPR := c.commitPRCache.MostRecentPR(owner, repo)
+	if mostRecentPR > 0 {
+		slog.Debug("attempting turnclient lookup on most recent PR for repo",
+			"organization", organization,
+			"owner", owner,
+			"repo", repo,
+			"pr_number", mostRecentPR,
+			"commit_sha", commitSHA,
+			"rationale", "check events usually arrive for recently updated PRs")
+
+		// Get GitHub token
+		githubToken := c.github.InstallationToken(ctx)
+		if githubToken != "" {
+			// Create turnclient
+			turnClient, tcErr := turn.NewDefaultClient()
+			if tcErr == nil {
+				turnClient.SetAuthToken(githubToken)
+
+				// Check the recent PR with current timestamp
+				checkCtx, checkCancel := context.WithTimeout(ctx, 30*time.Second)
+				prURL := fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, mostRecentPR)
+				checkResult, checkErr := turnClient.Check(checkCtx, prURL, owner, time.Now())
+				checkCancel()
+
+				if checkErr == nil && checkResult != nil {
+					// Check if any commits match
+					for _, prCommit := range checkResult.PullRequest.Commits {
+						if prCommit == commitSHA {
+							slog.Info("found commit in most recent PR via turnclient - avoiding GitHub API search",
+								"organization", organization,
+								"owner", owner,
+								"repo", repo,
+								"pr_number", mostRecentPR,
+								"commit_sha", commitSHA,
+								"turnclient_hit", true,
+								"bonus", "got free PR status update")
+
+							// Populate cache with all commits from this PR
+							for _, commit := range checkResult.PullRequest.Commits {
+								if commit != "" {
+									c.commitPRCache.RecordPR(owner, repo, mostRecentPR, commit)
+								}
+							}
+
+							// Process the PR update since we have fresh data
+							go c.handlePullRequestEventWithData(context.Background(), owner, repo, struct {
+								Action      string `json:"action"`
+								PullRequest struct {
+									HTMLURL   string    `json:"html_url"`
+									Title     string    `json:"title"`
+									CreatedAt time.Time `json:"created_at"`
+									User      struct {
+										Login string `json:"login"`
+									} `json:"user"`
+									Number int `json:"number"`
+								} `json:"pull_request"`
+								Number int `json:"number"`
+							}{
+								Action: "synchronize",
+								PullRequest: struct {
+									HTMLURL   string    `json:"html_url"`
+									Title     string    `json:"title"`
+									CreatedAt time.Time `json:"created_at"`
+									User      struct {
+										Login string `json:"login"`
+									} `json:"user"`
+									Number int `json:"number"`
+								}{
+									HTMLURL:   prURL,
+									Title:     checkResult.PullRequest.Title,
+									CreatedAt: checkResult.PullRequest.CreatedAt,
+									User: struct {
+										Login string `json:"login"`
+									}{
+										Login: checkResult.PullRequest.Author,
+									},
+									Number: mostRecentPR,
+								},
+								Number: mostRecentPR,
+							}, checkResult, nil)
+
+							return []int{mostRecentPR}
+						}
+					}
+
+					slog.Debug("commit not found in most recent PR - will fall back to GitHub API",
+						"organization", organization,
+						"owner", owner,
+						"repo", repo,
+						"pr_number", mostRecentPR,
+						"commit_sha", commitSHA,
+						"pr_commits_checked", len(checkResult.PullRequest.Commits))
+				}
+			}
+		}
+	}
+
+	// Third attempt: Fall back to GitHub API to search all PRs
+	slog.Info("falling back to GitHub API to search all PRs for commit",
+		"organization", organization,
+		"owner", owner,
+		"repo", repo,
+		"commit_sha", commitSHA,
+		"tried_turnclient", mostRecentPR > 0)
 
 	// Look up PRs for this commit using GitHub API
 	// Allow up to 3 minutes for retries (2 min max delay + buffer)
