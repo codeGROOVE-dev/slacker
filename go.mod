@@ -4,7 +4,7 @@ go 1.25.1
 
 require (
 	github.com/codeGROOVE-dev/ds9 v0.6.0
-	github.com/codeGROOVE-dev/gh-mailto v0.0.0-20251024133418-149270eb16a9
+	github.com/codeGROOVE-dev/gh-mailto v0.0.0-20251030132316-7b86852c2928
 	github.com/codeGROOVE-dev/gsm v0.0.0-20251019065141-833fe2363d22
 	github.com/codeGROOVE-dev/prx v0.0.0-20251030022101-ff906928a1e4
 	github.com/codeGROOVE-dev/retry v1.3.0
@@ -38,5 +38,3 @@ require (
 	golang.org/x/text v0.30.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 )
-
-replace github.com/codeGROOVE-dev/gh-mailto => ../gh-mailto
