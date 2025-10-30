@@ -66,6 +66,7 @@ func TestLookupPRsForCheckEvent_Success(t *testing.T) {
 		stateStore:     &mockStateStore{},
 		configManager:  config.New(),
 		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		commitPRCache:  &CommitPRCache{entries: make(map[string][]CommitPREntry)},
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -103,6 +104,7 @@ func TestLookupPRsForCheckEvent_NoCommitSHA(t *testing.T) {
 		stateStore:     &mockStateStore{},
 		configManager:  config.New(),
 		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		commitPRCache:  &CommitPRCache{entries: make(map[string][]CommitPREntry)},
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -136,6 +138,7 @@ func TestLookupPRsForCheckEvent_InvalidURL(t *testing.T) {
 		stateStore:     &mockStateStore{},
 		configManager:  config.New(),
 		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		commitPRCache:  &CommitPRCache{entries: make(map[string][]CommitPREntry)},
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -172,6 +175,7 @@ func TestLookupPRsForCheckEvent_NoPRsFound(t *testing.T) {
 		stateStore:     &mockStateStore{},
 		configManager:  config.New(),
 		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		commitPRCache:  &CommitPRCache{entries: make(map[string][]CommitPREntry)},
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -338,6 +342,7 @@ func TestHandleSprinklerEvent_CheckEventWithCommit(t *testing.T) {
 		stateStore:     mockState,
 		configManager:  config.New(),
 		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		commitPRCache:  &CommitPRCache{entries: make(map[string][]CommitPREntry)},
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -376,6 +381,7 @@ func TestLookupPRsForCheckEvent_GitHubAPIFailure(t *testing.T) {
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
 		configManager:  config.New(),
 		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		commitPRCache:  &CommitPRCache{entries: make(map[string][]CommitPREntry)},
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
