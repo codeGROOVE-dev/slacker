@@ -16,11 +16,7 @@ build-registrar:
 
 # Run tests with race detection and coverage
 test:
-	@echo "Running tests with race detection and coverage..."
-	@go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
-	@echo ""
-	@echo "Coverage by package:"
-	@go test -coverprofile=coverage.out -covermode=atomic ./... 2>&1 | grep -E "coverage:" | awk '{print $$2 "\t" $$5}' | column -t
+	go test -v -race -cover ./...
 
 # Format code
 fmt:
