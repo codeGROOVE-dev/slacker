@@ -51,6 +51,7 @@ type RepoConfig struct {
 		ReminderDMDelay int    `yaml:"reminder_dm_delay"` // Minutes to wait before sending DM if user tagged in channel (0 = disabled)
 		DailyReminders  bool   `yaml:"daily_reminders"`
 	} `yaml:"global"`
+	Users map[string]string `yaml:"users"` // GitHub username -> email address (for manual overrides)
 }
 
 // configCacheEntry represents a cached configuration entry.

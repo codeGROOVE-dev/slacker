@@ -23,6 +23,7 @@ import (
 	"github.com/codeGROOVE-dev/slacker/pkg/notify"
 	"github.com/codeGROOVE-dev/slacker/pkg/slack"
 	"github.com/codeGROOVE-dev/slacker/pkg/state"
+	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
 	"github.com/gorilla/mux"
 	"golang.org/x/sync/errgroup"
@@ -244,8 +245,24 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	// Initialize event router for multi-workspace event handling.
 	eventRouter := slack.NewEventRouter(slackManager)
 
+	// Initialize reverse user mapping service (Slack → GitHub)
+	// Get GitHub token from one of the installations
+	var githubToken string
+	for _, org := range githubManager.AllOrgs() {
+		if client, ok := githubManager.ClientForOrg(org); ok {
+			githubToken = client.InstallationToken(ctx)
+			break
+		}
+	}
+	if githubToken == "" {
+		slog.Warn("no GitHub installations found - reverse user mapping will not work")
+	}
+	// Pass nil for Slack client - it will be provided per-request in HomeHandler
+	reverseMapping := usermapping.NewReverseService(nil, githubToken)
+	slog.Info("initialized reverse user mapping service (Slack → GitHub)")
+
 	// Initialize home view handler
-	homeHandler := slack.NewHomeHandler(slackManager, githubManager, configManager, stateStore)
+	homeHandler := slack.NewHomeHandler(slackManager, githubManager, configManager, stateStore, reverseMapping)
 	slackManager.SetHomeViewHandler(homeHandler.HandleAppHomeOpened)
 
 	// Initialize OAuth handler for Slack app installation.

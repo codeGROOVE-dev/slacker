@@ -39,6 +39,7 @@ type UserMapping struct {
 // SlackAPI defines the interface for Slack API operations needed by the mapping service.
 type SlackAPI interface {
 	GetUserByEmailContext(ctx context.Context, email string) (*slack.User, error)
+	GetUserInfo(userID string) (*slack.User, error)
 }
 
 // GitHubEmailLookup defines the interface for GitHub email lookup operations.
