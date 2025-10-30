@@ -18,9 +18,9 @@ func TestUpdateDMMessage(t *testing.T) {
 
 		prURL := "https://github.com/test/repo/pull/123"
 		err := client.UpdateDMMessage(ctx, "U001", prURL, "New text")
-		// Should not error when state store is nil (graceful degradation)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		// Should return ErrNoDMToUpdate when state store is nil
+		if !errors.Is(err, ErrNoDMToUpdate) {
+			t.Fatalf("expected ErrNoDMToUpdate, got: %v", err)
 		}
 	})
 }

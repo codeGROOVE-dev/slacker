@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codeGROOVE-dev/slacker/pkg/slack"
 	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	slackapi "github.com/slack-go/slack"
 )
@@ -16,6 +17,7 @@ type mockSlackClient struct {
 	isUserInChannelFunc    func(ctx context.Context, channelID, userID string) bool
 	userTimezoneFunc       func(ctx context.Context, userID string) (string, error)
 	sendDirectMessageFunc  func(ctx context.Context, userID, text string) (dmChannelID, messageTS string, err error)
+	updateDMMessageFunc    func(ctx context.Context, userID, prURL, newText string) error
 	hasRecentDMAboutPRFunc func(ctx context.Context, userID, prURL string) (bool, error)
 	saveDMMessageInfoFunc  func(ctx context.Context, userID, prURL, dmChannelID, messageTS, message string) error
 	apiFunc                func() *slackapi.Client
@@ -47,6 +49,14 @@ func (m *mockSlackClient) SendDirectMessage(ctx context.Context, userID, text st
 		return m.sendDirectMessageFunc(ctx, userID, text)
 	}
 	return "D123", "1234567890.123456", nil
+}
+
+func (m *mockSlackClient) UpdateDMMessage(ctx context.Context, userID, prURL, newText string) error {
+	if m.updateDMMessageFunc != nil {
+		return m.updateDMMessageFunc(ctx, userID, prURL, newText)
+	}
+	// Default: return ErrNoDMToUpdate (no DM exists to update)
+	return slack.ErrNoDMToUpdate
 }
 
 func (m *mockSlackClient) HasRecentDMAboutPR(ctx context.Context, userID, prURL string) (bool, error) {

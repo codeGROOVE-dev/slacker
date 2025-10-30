@@ -25,6 +25,7 @@ type SlackClient interface {
 
 	// DM operations
 	SendDirectMessage(ctx context.Context, userID, text string) (dmChannelID, messageTS string, err error)
+	UpdateDMMessage(ctx context.Context, userID, prURL, newText string) error
 	HasRecentDMAboutPR(ctx context.Context, userID, prURL string) (bool, error)
 	SaveDMMessageInfo(ctx context.Context, userID, prURL, dmChannelID, messageTS, message string) error
 
