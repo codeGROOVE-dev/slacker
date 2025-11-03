@@ -76,7 +76,7 @@ type Store interface {
 
 	// Pending DM queue - schedule DMs to be sent later
 	QueuePendingDM(dm PendingDM) error
-	GetPendingDMs(before time.Time) ([]PendingDM, error)
+	PendingDMs(before time.Time) ([]PendingDM, error)
 	RemovePendingDM(id string) error
 
 	// Cleanup old data

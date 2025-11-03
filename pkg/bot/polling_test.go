@@ -341,7 +341,7 @@ func TestUpdateThreadForClosedPR(t *testing.T) {
 				State:  tt.prState,
 			}
 
-			info := ThreadInfo{
+			info := cache.ThreadInfo{
 				ThreadTS:    "1234.567",
 				ChannelID:   "C123",
 				MessageText: ":hourglass: Test PR • testrepo#42 by @user",
@@ -546,14 +546,13 @@ func TestUpdateThreadForClosedPR_Merged(t *testing.T) {
 		State:  "MERGED",
 	}
 
-	info := ThreadInfo{
+	info := cache.ThreadInfo{
 		ThreadTS:    "1234567890.123456",
 		ChannelID:   "C123456",
 		MessageText: ":hourglass: Fix bug • testorg/testrepo#42 by @user",
 	}
 
 	err := c.updateThreadForClosedPR(ctx, pr, "C123456", info)
-
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}
@@ -590,14 +589,13 @@ func TestUpdateThreadForClosedPR_ClosedNotMerged(t *testing.T) {
 		State:  "CLOSED",
 	}
 
-	info := ThreadInfo{
+	info := cache.ThreadInfo{
 		ThreadTS:    "1234567890.123456",
 		ChannelID:   "C123456",
 		MessageText: ":test_tube: Fix bug • testorg/testrepo#42 by @user",
 	}
 
 	err := c.updateThreadForClosedPR(ctx, pr, "C123456", info)
-
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}
@@ -634,14 +632,13 @@ func TestUpdateThreadForClosedPR_NoSpaceInMessage(t *testing.T) {
 		State:  "MERGED",
 	}
 
-	info := ThreadInfo{
+	info := cache.ThreadInfo{
 		ThreadTS:    "1234567890.123456",
 		ChannelID:   "C123456",
 		MessageText: "NoSpaces",
 	}
 
 	err := c.updateThreadForClosedPR(ctx, pr, "C123456", info)
-
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}
@@ -676,7 +673,7 @@ func TestUpdateThreadForClosedPR_InvalidState(t *testing.T) {
 		State:  "INVALID",
 	}
 
-	info := ThreadInfo{
+	info := cache.ThreadInfo{
 		ThreadTS:    "1234567890.123456",
 		ChannelID:   "C123456",
 		MessageText: ":hourglass: Fix bug",
@@ -717,7 +714,7 @@ func TestUpdateThreadForClosedPR_UpdateFails(t *testing.T) {
 		State:  "MERGED",
 	}
 
-	info := ThreadInfo{
+	info := cache.ThreadInfo{
 		ThreadTS:    "1234567890.123456",
 		ChannelID:   "C123456",
 		MessageText: ":hourglass: Fix bug",
@@ -848,11 +845,11 @@ func TestShouldReconcilePR(t *testing.T) {
 	twoHoursAgo := now.Add(-2 * time.Hour)
 
 	tests := []struct {
-		name               string
-		prUpdatedAt        time.Time
-		lastNotified       time.Time
-		expectedReason     string
-		expectedReconcile  bool
+		name              string
+		prUpdatedAt       time.Time
+		lastNotified      time.Time
+		expectedReason    string
+		expectedReconcile bool
 	}{
 		{
 			name:              "never notified",
@@ -1131,7 +1128,7 @@ func TestUpdateClosedPRThread_WithConfiguredChannels(t *testing.T) {
 	// Mock state store with existing thread info
 	mockState := &mockStateStore{
 		processedEvents: make(map[string]bool),
-		threads: map[string]ThreadInfo{
+		threads: map[string]cache.ThreadInfo{
 			"thread:testorg/testrepo#42:C123": {
 				ThreadTS:    "1234567890.123456",
 				ChannelID:   "C123",

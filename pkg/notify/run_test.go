@@ -15,7 +15,7 @@ func (m *mockStore) QueuePendingDM(dm state.PendingDM) error {
 	return nil
 }
 
-func (m *mockStore) GetPendingDMs(before time.Time) ([]state.PendingDM, error) {
+func (m *mockStore) PendingDMs(before time.Time) ([]state.PendingDM, error) {
 	return nil, nil
 }
 

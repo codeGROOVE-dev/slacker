@@ -164,16 +164,6 @@ func (c *Client) SetManager(manager *Manager) {
 	c.manager = manager
 }
 
-// invalidateWorkspaceCache invalidates this workspace's client in the manager cache.
-// This forces a fresh token to be fetched from GSM on next access.
-func (c *Client) invalidateWorkspaceCache() {
-	if c.manager != nil && c.teamID != "" {
-		c.manager.InvalidateCache(c.teamID)
-		slog.Info("invalidated workspace cache due to auth event",
-			"team_id", c.teamID)
-	}
-}
-
 // WorkspaceInfo returns information about the current workspace (cached for 1 hour).
 func (c *Client) WorkspaceInfo(ctx context.Context) (*slack.TeamInfo, error) {
 	cacheKey := "team_info"
@@ -807,12 +797,20 @@ func (c *Client) EventsHandler(writer http.ResponseWriter, r *http.Request) {
 			// Tokens revoked - invalidate workspace client cache to force refresh
 			slog.Warn("tokens revoked event received - invalidating workspace cache",
 				"team_id", c.teamID)
-			c.invalidateWorkspaceCache()
+			if c.manager != nil && c.teamID != "" {
+				c.manager.InvalidateCache(c.teamID)
+				slog.Info("invalidated workspace cache due to auth event",
+					"team_id", c.teamID)
+			}
 		case *slackevents.AppUninstalledEvent:
 			// App uninstalled - invalidate workspace client cache
 			slog.Warn("app uninstalled event received",
 				"team_id", c.teamID)
-			c.invalidateWorkspaceCache()
+			if c.manager != nil && c.teamID != "" {
+				c.manager.InvalidateCache(c.teamID)
+				slog.Info("invalidated workspace cache due to auth event",
+					"team_id", c.teamID)
+			}
 		}
 	}
 

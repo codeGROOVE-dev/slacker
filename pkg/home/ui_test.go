@@ -308,7 +308,10 @@ func TestFormatEnhancedPRBlock(t *testing.T) {
 				UpdatedAt:   now.Add(-1 * time.Hour),
 			},
 			validate: func(t *testing.T, block slack.Block) {
-				sb := block.(*slack.SectionBlock)
+				sb, ok := block.(*slack.SectionBlock)
+				if !ok {
+					t.Fatal("expected block to be *slack.SectionBlock")
+				}
 				text := sb.Text.Text
 
 				// Should have pause emoji
@@ -339,7 +342,10 @@ func TestFormatEnhancedPRBlock(t *testing.T) {
 				UpdatedAt:   now.Add(-30 * time.Minute),
 			},
 			validate: func(t *testing.T, block slack.Block) {
-				sb := block.(*slack.SectionBlock)
+				sb, ok := block.(*slack.SectionBlock)
+				if !ok {
+					t.Fatal("expected block to be *slack.SectionBlock")
+				}
 				text := sb.Text.Text
 
 				// Should have eyes emoji
@@ -370,7 +376,10 @@ func TestFormatEnhancedPRBlock(t *testing.T) {
 				UpdatedAt:   now.Add(-24 * time.Hour),
 			},
 			validate: func(t *testing.T, block slack.Block) {
-				sb := block.(*slack.SectionBlock)
+				sb, ok := block.(*slack.SectionBlock)
+				if !ok {
+					t.Fatal("expected block to be *slack.SectionBlock")
+				}
 				text := sb.Text.Text
 
 				// Should have hourglass emoji
@@ -399,7 +408,10 @@ func TestFormatEnhancedPRBlock(t *testing.T) {
 				UpdatedAt:  now,
 			},
 			validate: func(t *testing.T, block slack.Block) {
-				sb := block.(*slack.SectionBlock)
+				sb, ok := block.(*slack.SectionBlock)
+				if !ok {
+					t.Fatal("expected block to be *slack.SectionBlock")
+				}
 				text := sb.Text.Text
 
 				// Should truncate to 120 characters with "..."
@@ -427,7 +439,10 @@ func TestFormatEnhancedPRBlock(t *testing.T) {
 				UpdatedAt:  now.Add(-5 * 24 * time.Hour),
 			},
 			validate: func(t *testing.T, block slack.Block) {
-				sb := block.(*slack.SectionBlock)
+				sb, ok := block.(*slack.SectionBlock)
+				if !ok {
+					t.Fatal("expected block to be *slack.SectionBlock")
+				}
 				text := sb.Text.Text
 
 				// Should show age in days
@@ -446,7 +461,10 @@ func TestFormatEnhancedPRBlock(t *testing.T) {
 				UpdatedAt:  now.Add(-60 * 24 * time.Hour),
 			},
 			validate: func(t *testing.T, block slack.Block) {
-				sb := block.(*slack.SectionBlock)
+				sb, ok := block.(*slack.SectionBlock)
+				if !ok {
+					t.Fatal("expected block to be *slack.SectionBlock")
+				}
 				text := sb.Text.Text
 
 				// Should show age in months (approximately 2 months)

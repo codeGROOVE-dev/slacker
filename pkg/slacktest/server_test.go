@@ -151,6 +151,7 @@ func TestMockServerUpdateMessage(t *testing.T) {
 	client := slack.New("test-token", slack.OptionAPIURL(server.URL+"/api/"))
 
 	// Update the message
+	//nolint:dogsled // Slack API returns multiple values, only error is needed for this test
 	_, _, _, err := client.UpdateMessage("C001", "1234567.890", slack.MsgOptionText("Updated message", false))
 	if err != nil {
 		t.Fatalf("UpdateMessage failed: %v", err)
@@ -186,7 +187,10 @@ func TestMockServerReset(t *testing.T) {
 	client := slack.New("test-token", slack.OptionAPIURL(server.URL+"/api/"))
 
 	// Post a message
-	_, _, _ = client.PostMessage("C001", slack.MsgOptionText("Test", false))
+	_, _, err := client.PostMessage("C001", slack.MsgOptionText("Test", false))
+	if err != nil {
+		t.Fatalf("failed to post message: %v", err)
+	}
 
 	// Verify data exists
 	if len(server.GetPostedMessages()) != 1 {

@@ -104,7 +104,6 @@ func TestClient_Authenticate_RetryOnFailure(t *testing.T) {
 
 	ctx := context.Background()
 	err = client.authenticate(ctx)
-
 	// Should still succeed after retry
 	if err != nil {
 		t.Fatalf("authenticate() should succeed after retry, got: %v", err)

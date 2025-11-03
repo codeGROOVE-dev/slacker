@@ -7,6 +7,7 @@ import (
 	"time"
 
 	ghmailto "github.com/codeGROOVE-dev/gh-mailto/pkg/gh-mailto"
+	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/slacker/pkg/notify"
 	"github.com/codeGROOVE-dev/slacker/pkg/slack"
 	"github.com/codeGROOVE-dev/slacker/pkg/slacktest"
@@ -14,7 +15,6 @@ import (
 	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 	slackapi "github.com/slack-go/slack"
-	"github.com/codeGROOVE-dev/slacker/pkg/config"
 )
 
 // TestUserMappingIntegration tests the complete flow of mapping GitHub users to Slack users.

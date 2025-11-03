@@ -172,7 +172,7 @@ func TestSaveThread(t *testing.T) {
 
 	mockState := &mockStateStore{
 		processedEvents: make(map[string]bool),
-		threads:         make(map[string]ThreadInfo),
+		threads:         make(map[string]cache.ThreadInfo),
 	}
 
 	c := &Coordinator{
@@ -185,7 +185,7 @@ func TestSaveThread(t *testing.T) {
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
-	threadInfo := ThreadInfo{
+	threadInfo := cache.ThreadInfo{
 		ChannelID: "C123456",
 		ThreadTS:  "1234567890.123456",
 	}
@@ -225,7 +225,7 @@ func TestSaveThread_PersistenceError(t *testing.T) {
 
 	mockState := &mockStateStore{
 		processedEvents: make(map[string]bool),
-		threads:         make(map[string]ThreadInfo),
+		threads:         make(map[string]cache.ThreadInfo),
 		saveThreadErr:   errors.New("database error"),
 	}
 
@@ -239,7 +239,7 @@ func TestSaveThread_PersistenceError(t *testing.T) {
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
-	threadInfo := ThreadInfo{
+	threadInfo := cache.ThreadInfo{
 		ChannelID: "C123456",
 		ThreadTS:  "1234567890.123456",
 	}
@@ -268,7 +268,7 @@ func TestSaveThread_PersistenceError(t *testing.T) {
 func TestThreadCache_Set(t *testing.T) {
 	threadCache := cache.New()
 
-	threadInfo := ThreadInfo{
+	threadInfo := cache.ThreadInfo{
 		ChannelID:   "C123456",
 		ThreadTS:    "1234567890.123456",
 		MessageText: "Test message",

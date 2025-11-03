@@ -280,7 +280,7 @@ func formatNextActionsInternal(ctx context.Context, nextActions map[string]turn.
 // Store interface for persistent DM queue management.
 type Store interface {
 	QueuePendingDM(dm state.PendingDM) error
-	GetPendingDMs(before time.Time) ([]state.PendingDM, error)
+	PendingDMs(before time.Time) ([]state.PendingDM, error)
 	RemovePendingDM(id string) error
 }
 
@@ -337,7 +337,7 @@ func (m *Manager) Run(ctx context.Context) error {
 // processPendingDMs checks for pending DMs that should be sent and sends them.
 func (m *Manager) processPendingDMs(ctx context.Context) error {
 	now := time.Now()
-	pendingDMs, err := m.store.GetPendingDMs(now)
+	pendingDMs, err := m.store.PendingDMs(now)
 	if err != nil {
 		return fmt.Errorf("failed to get pending DMs: %w", err)
 	}

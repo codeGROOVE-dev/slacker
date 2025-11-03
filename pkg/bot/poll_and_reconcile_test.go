@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 	"github.com/codeGROOVE-dev/slacker/pkg/github"
 )
 
@@ -143,7 +144,7 @@ func TestUpdateClosedPRThread_HappyPath(t *testing.T) {
 
 	// Pre-populate state store with existing thread using builder
 	mockState := NewMockState().
-		WithThread("testorg", "testrepo", 42, "C123", ThreadInfo{
+		WithThread("testorg", "testrepo", 42, "C123", cache.ThreadInfo{
 			ThreadTS:    "1234.567",
 			ChannelID:   "C123",
 			MessageText: ":hourglass: Test PR",

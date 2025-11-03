@@ -37,15 +37,6 @@ type prContext struct {
 	Number   int
 }
 
-// ThreadInfo is an alias to cache.ThreadInfo for backward compatibility.
-type ThreadInfo = cache.ThreadInfo
-
-// ThreadCache is an alias to cache.ThreadCache for backward compatibility.
-type ThreadCache = cache.ThreadCache
-
-// CommitPRCache is an alias to cache.CommitPRCache for backward compatibility.
-type CommitPRCache = cache.CommitPRCache
-
 // Coordinator coordinates between GitHub, Slack, and notifications for a single org.
 //
 //nolint:govet // Field order optimized for logical grouping over memory alignment
@@ -59,15 +50,15 @@ type Coordinator struct {
 	configManager    ConfigManager
 	notifier         *notify.Manager
 	userMapper       UserMapper
-	threadCache      *ThreadCache   // In-memory cache for fast lookups
-	commitPRCache    *CommitPRCache // Maps commit SHAs to PR numbers for check events
-	eventSemaphore   chan struct{}  // Limits concurrent event processing (prevents overwhelming APIs)
+	threadCache      *cache.ThreadCache   // In-memory cache for fast lookups
+	commitPRCache    *cache.CommitPRCache // Maps commit SHAs to PR numbers for check events
+	eventSemaphore   chan struct{}        // Limits concurrent event processing (prevents overwhelming APIs)
 }
 
 // StateStore interface for persistent state - allows dependency injection for testing.
 type StateStore interface {
-	Thread(owner, repo string, number int, channelID string) (ThreadInfo, bool)
-	SaveThread(owner, repo string, number int, channelID string, info ThreadInfo) error
+	Thread(owner, repo string, number int, channelID string) (cache.ThreadInfo, bool)
+	SaveThread(owner, repo string, number int, channelID string, info cache.ThreadInfo) error
 	LastDM(userID, prURL string) (time.Time, bool)
 	RecordDM(userID, prURL string, sentAt time.Time) error
 	ListDMUsers(prURL string) []string
@@ -127,7 +118,7 @@ func New(
 
 // saveThread persists thread info to both cache and persistent storage.
 // This ensures threads survive restarts and are available for closed PR updates.
-func (c *Coordinator) saveThread(owner, repo string, number int, channelID string, info ThreadInfo) {
+func (c *Coordinator) saveThread(owner, repo string, number int, channelID string, info cache.ThreadInfo) {
 	// Save to in-memory cache for fast lookups
 	key := fmt.Sprintf("%s/%s#%d:%s", owner, repo, number, channelID)
 	c.threadCache.Set(key, info)
@@ -205,7 +196,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 			"current_message_preview", initialSearchText[:min(100, len(initialSearchText))])
 
 		// Save the found thread (cache + persist)
-		c.saveThread(owner, repo, prNumber, channelID, ThreadInfo{
+		c.saveThread(owner, repo, prNumber, channelID, cache.ThreadInfo{
 			ThreadTS:    initialSearchTS,
 			ChannelID:   channelID,
 			LastState:   prState,
@@ -248,7 +239,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 			// Try to take over creation
 			if !c.threadCache.MarkCreating(cacheKey) {
 				// Still being created, give up
-				return "", false, "", fmt.Errorf("timed out waiting for thread creation")
+				return "", false, "", errors.New("timed out waiting for thread creation")
 			}
 		}
 	}
@@ -281,7 +272,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 			"note", "this prevented duplicate thread creation during rolling deployment")
 
 		// Save it and return (cache + persist)
-		c.saveThread(owner, repo, prNumber, channelID, ThreadInfo{
+		c.saveThread(owner, repo, prNumber, channelID, cache.ThreadInfo{
 			ThreadTS:    crossInstanceCheckTS,
 			ChannelID:   channelID,
 			LastState:   prState,
@@ -304,7 +295,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 	}
 
 	// Save the new thread (cache + persist)
-	c.saveThread(owner, repo, prNumber, channelID, ThreadInfo{
+	c.saveThread(owner, repo, prNumber, channelID, cache.ThreadInfo{
 		ThreadTS:    newThreadTS,
 		ChannelID:   channelID,
 		LastState:   prState,
@@ -1394,7 +1385,7 @@ func (c *Coordinator) processPRForChannel(
 					"next_poll_in", "5m")
 			} else {
 				// Save updated thread info (cache + persist)
-				c.saveThread(owner, repo, prNumber, channelID, ThreadInfo{
+				c.saveThread(owner, repo, prNumber, channelID, cache.ThreadInfo{
 					ThreadTS:    threadTS,
 					ChannelID:   channelID,
 					LastState:   prState,

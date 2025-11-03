@@ -19,20 +19,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// mockGitHubClient is a simple mock for testing.
-type mockGitHubClient struct {
-	installationToken string
-	client            *github.Client
-}
-
-func (m *mockGitHubClient) Client() any {
-	return m.client
-}
-
-func (m *mockGitHubClient) InstallationToken(ctx context.Context) string {
-	return m.installationToken
-}
-
 func TestClient_Client(t *testing.T) {
 	ghClient := github.NewClient(nil)
 	c := &Client{
@@ -124,8 +110,12 @@ func TestManagerWrapper_ClientForOrg(t *testing.T) {
 	}
 
 	// Verify it's the right client
-	if gotClient.(*Client).organization != "testorg" {
-		t.Errorf("expected organization 'testorg', got %q", gotClient.(*Client).organization)
+	client, clientOK := gotClient.(*Client)
+	if !clientOK {
+		t.Fatal("expected gotClient to be *Client")
+	}
+	if client.organization != "testorg" {
+		t.Errorf("expected organization 'testorg', got %q", client.organization)
 	}
 }
 
@@ -187,7 +177,6 @@ func TestRefreshingTokenSource_Token(t *testing.T) {
 
 	ts := &refreshingTokenSource{client: c}
 	token, err := ts.Token()
-
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -205,7 +194,6 @@ func TestRefreshingTokenSource_Token_ValidToken(t *testing.T) {
 
 	ts := &refreshingTokenSource{client: c}
 	token, err := ts.Token()
-
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -249,7 +237,7 @@ func TestUserAgentTransport_RoundTrip(t *testing.T) {
 	// Create a mock round tripper
 	mockTransport := &mockRoundTripper{
 		response: &http.Response{
-			StatusCode: 200,
+			StatusCode: http.StatusOK,
 			Body:       http.NoBody,
 		},
 	}
@@ -259,7 +247,7 @@ func TestUserAgentTransport_RoundTrip(t *testing.T) {
 	}
 
 	req := &http.Request{
-		Method: "GET",
+		Method: http.MethodGet,
 		URL:    &url.URL{Scheme: "https", Host: "api.github.com", Path: "/test"},
 		Header: make(http.Header),
 	}
@@ -268,9 +256,11 @@ func TestUserAgentTransport_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	//nolint:errcheck // Error intentionally ignored in test
+	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		t.Errorf("expected status code 200, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected status code %d, got %d", http.StatusOK, resp.StatusCode)
 	}
 
 	userAgent := mockTransport.capturedRequest.Header.Get("User-Agent")
@@ -464,7 +454,8 @@ func TestFindPRsForCommit_WithMockServer(t *testing.T) {
 					"state":  "closed",
 				},
 			}
-			json.NewEncoder(w).Encode(resp)
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 		http.NotFound(w, r)
@@ -474,6 +465,7 @@ func TestFindPRsForCommit_WithMockServer(t *testing.T) {
 	// Create a client pointing to our mock server
 	httpClient := server.Client()
 	ghClient := github.NewClient(httpClient)
+	//nolint:errcheck // Error intentionally ignored in test
 	ghClient.BaseURL, _ = url.Parse(server.URL + "/")
 
 	c := &Client{
@@ -675,6 +667,7 @@ func TestFindPRsForCommit_NotFound(t *testing.T) {
 
 	httpClient := server.Client()
 	ghClient := github.NewClient(httpClient)
+	//nolint:errcheck // Error intentionally ignored in test
 	ghClient.BaseURL, _ = url.Parse(server.URL + "/")
 
 	c := &Client{
@@ -846,7 +839,8 @@ func TestSearchClient_ListOpenPRs(t *testing.T) {
 					},
 				},
 			}
-			json.NewEncoder(w).Encode(resp)
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 
@@ -859,6 +853,7 @@ func TestSearchClient_ListOpenPRs(t *testing.T) {
 	src := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"})
 	httpClient := oauth2.NewClient(ctx, src)
 	searchClient := github.NewClient(httpClient)
+	//nolint:errcheck // Error intentionally ignored in test
 	searchClient.BaseURL, _ = url.Parse(server.URL + "/")
 
 	client := &SearchClient{
@@ -928,7 +923,8 @@ func TestSearchClient_ListClosedPRs(t *testing.T) {
 					},
 				},
 			}
-			json.NewEncoder(w).Encode(resp)
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 		http.NotFound(w, r)
@@ -939,6 +935,7 @@ func TestSearchClient_ListClosedPRs(t *testing.T) {
 	src := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"})
 	httpClient := oauth2.NewClient(ctx, src)
 	searchClient := github.NewClient(httpClient)
+	//nolint:errcheck // Error intentionally ignored in test
 	searchClient.BaseURL, _ = url.Parse(server.URL + "/")
 
 	client := &SearchClient{
@@ -1054,7 +1051,8 @@ func TestSearchPRs_Pagination(t *testing.T) {
 					},
 				},
 			}
-			json.NewEncoder(w).Encode(resp)
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 		http.NotFound(w, r)
@@ -1066,6 +1064,7 @@ func TestSearchPRs_Pagination(t *testing.T) {
 	src := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"})
 	httpClient := oauth2.NewClient(ctx, src)
 	searchClient := github.NewClient(httpClient)
+	//nolint:errcheck // Error intentionally ignored in test
 	searchClient.BaseURL, _ = url.Parse(server.URL + "/")
 
 	client := &SearchClient{
@@ -1098,6 +1097,7 @@ func TestSearchPRs_SearchError(t *testing.T) {
 	src := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"})
 	httpClient := oauth2.NewClient(ctx, src)
 	searchClient := github.NewClient(httpClient)
+	//nolint:errcheck // Error intentionally ignored in test
 	searchClient.BaseURL, _ = url.Parse(server.URL + "/")
 
 	client := &SearchClient{
@@ -1145,7 +1145,8 @@ func TestSearchPRs_SkipsIssues(t *testing.T) {
 					},
 				},
 			}
-			json.NewEncoder(w).Encode(resp)
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 		http.NotFound(w, r)
@@ -1156,6 +1157,7 @@ func TestSearchPRs_SkipsIssues(t *testing.T) {
 	src := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"})
 	httpClient := oauth2.NewClient(ctx, src)
 	searchClient := github.NewClient(httpClient)
+	//nolint:errcheck // Error intentionally ignored in test
 	searchClient.BaseURL, _ = url.Parse(server.URL + "/")
 
 	client := &SearchClient{
@@ -1201,7 +1203,8 @@ func TestSearchPRs_InvalidRepositoryURL(t *testing.T) {
 					},
 				},
 			}
-			json.NewEncoder(w).Encode(resp)
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 		http.NotFound(w, r)
@@ -1212,6 +1215,7 @@ func TestSearchPRs_InvalidRepositoryURL(t *testing.T) {
 	src := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"})
 	httpClient := oauth2.NewClient(ctx, src)
 	searchClient := github.NewClient(httpClient)
+	//nolint:errcheck // Error intentionally ignored in test
 	searchClient.BaseURL, _ = url.Parse(server.URL + "/")
 
 	client := &SearchClient{
@@ -1251,7 +1255,8 @@ func TestManager_RefreshInstallations_Success(t *testing.T) {
 					},
 				},
 			}
-			json.NewEncoder(w).Encode(resp)
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 		// Installation token endpoint
@@ -1262,7 +1267,8 @@ func TestManager_RefreshInstallations_Success(t *testing.T) {
 				"token":      "ghs_test_token",
 				"expires_at": time.Now().Add(1 * time.Hour).Format(time.RFC3339),
 			}
-			json.NewEncoder(w).Encode(resp)
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 		http.NotFound(w, r)
@@ -1281,6 +1287,7 @@ func TestManager_RefreshInstallations_Success(t *testing.T) {
 	tc := oauth2.NewClient(ctx, ts)
 	tc.Transport = &userAgentTransport{base: tc.Transport}
 	testClient := github.NewClient(tc)
+	//nolint:errcheck // Error intentionally ignored in test
 	testClient.BaseURL, _ = url.Parse(server.URL + "/")
 
 	// We can't easily override the client creation in RefreshInstallations
@@ -1313,7 +1320,8 @@ func TestManager_RefreshInstallations_SkipsPersonalAccounts(t *testing.T) {
 					},
 				},
 			}
-			json.NewEncoder(w).Encode(resp)
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 		http.NotFound(w, r)
@@ -1351,7 +1359,8 @@ func TestManager_RefreshInstallations_MissingAccount(t *testing.T) {
 					// Missing account field
 				},
 			}
-			json.NewEncoder(w).Encode(resp)
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 		http.NotFound(w, r)
@@ -1385,7 +1394,8 @@ func TestClient_Authenticate_Success(t *testing.T) {
 				"token":      "ghs_test_installation_token",
 				"expires_at": time.Now().Add(1 * time.Hour).Format(time.RFC3339),
 			}
-			json.NewEncoder(w).Encode(resp)
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 		http.NotFound(w, r)
@@ -1449,7 +1459,8 @@ func TestSearchPRs_MaxPageLimit(t *testing.T) {
 					},
 				},
 			}
-			json.NewEncoder(w).Encode(resp)
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 		http.NotFound(w, r)
@@ -1461,6 +1472,7 @@ func TestSearchPRs_MaxPageLimit(t *testing.T) {
 	src := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"})
 	httpClient := oauth2.NewClient(ctx, src)
 	searchClient := github.NewClient(httpClient)
+	//nolint:errcheck // Error intentionally ignored in test
 	searchClient.BaseURL, _ = url.Parse(server.URL + "/")
 
 	client := &SearchClient{

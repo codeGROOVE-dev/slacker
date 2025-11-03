@@ -115,14 +115,14 @@ func TestCachedMessageText(t *testing.T) {
 	tests := []struct {
 		name        string
 		cacheKey    string
-		threadInfo  ThreadInfo
+		threadInfo  cache.ThreadInfo
 		expectFound bool
 		expectText  string
 	}{
 		{
 			name:     "message text cached",
 			cacheKey: "org/repo#1:C123",
-			threadInfo: ThreadInfo{
+			threadInfo: cache.ThreadInfo{
 				ThreadTS:    "1234567890.123456",
 				ChannelID:   "C123",
 				LastState:   "awaiting_review",
@@ -134,7 +134,7 @@ func TestCachedMessageText(t *testing.T) {
 		{
 			name:     "empty message text in cache",
 			cacheKey: "org/repo#2:C123",
-			threadInfo: ThreadInfo{
+			threadInfo: cache.ThreadInfo{
 				ThreadTS:    "1234567890.123457",
 				ChannelID:   "C123",
 				LastState:   "tests_running",

@@ -297,18 +297,22 @@ func TestEnrichPR(t *testing.T) {
 			enriched := scheduler.enrichPR(tt.pr, checkResult, "testuser", tt.action)
 
 			// Verify all expected fields
+			//nolint:errcheck // Type assertion in test is safe
 			if enriched.ActionKind != tt.wantFields["ActionKind"].(string) {
 				t.Errorf("ActionKind = %q, want %q", enriched.ActionKind, tt.wantFields["ActionKind"])
 			}
 
+			//nolint:errcheck // Type assertion in test is safe
 			if enriched.ActionReason != tt.wantFields["ActionReason"].(string) {
 				t.Errorf("ActionReason = %q, want %q", enriched.ActionReason, tt.wantFields["ActionReason"])
 			}
 
+			//nolint:errcheck // Type assertion in test is safe
 			if enriched.NeedsReview != tt.wantFields["NeedsReview"].(bool) {
 				t.Errorf("NeedsReview = %v, want %v", enriched.NeedsReview, tt.wantFields["NeedsReview"])
 			}
 
+			//nolint:errcheck // Type assertion in test is safe
 			if enriched.IsBlocked != tt.wantFields["IsBlocked"].(bool) {
 				t.Errorf("IsBlocked = %v, want %v", enriched.IsBlocked, tt.wantFields["IsBlocked"])
 			}

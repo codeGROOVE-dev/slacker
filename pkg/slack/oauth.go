@@ -35,9 +35,9 @@ func (s *slackOAuthExchanger) ExchangeCode(ctx context.Context, clientID, client
 
 // OAuthHandler handles the OAuth callback from Slack.
 type OAuthHandler struct {
-	store        WorkspaceStorer  // For OAuth callback storage
-	exchanger    OAuthExchanger   // For OAuth code exchange
-	manager      *Manager         // For debug listing (optional)
+	store        WorkspaceStorer // For OAuth callback storage
+	exchanger    OAuthExchanger  // For OAuth code exchange
+	manager      *Manager        // For debug listing (optional)
 	clientID     string
 	clientSecret string
 }

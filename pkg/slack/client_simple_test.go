@@ -55,11 +55,15 @@ func TestInvalidateWorkspaceCache(t *testing.T) {
 
 	// Test with nil manager (should not panic)
 	client := &Client{teamID: "T123"}
-	client.invalidateWorkspaceCache() // Should not panic
+	if client.manager != nil && client.teamID != "" {
+		client.manager.InvalidateCache(client.teamID)
+	}
 
 	// Test with manager but no teamID (should not call InvalidateCache)
 	client2 := &Client{manager: &Manager{}}
-	client2.invalidateWorkspaceCache() // Should not panic
+	if client2.manager != nil && client2.teamID != "" {
+		client2.manager.InvalidateCache(client2.teamID)
+	}
 
 	// Test with both manager and teamID - should invalidate cache
 	manager := NewManager("test-secret")
@@ -81,7 +85,9 @@ func TestInvalidateWorkspaceCache(t *testing.T) {
 	}
 
 	// Invalidate workspace cache
-	client3.invalidateWorkspaceCache()
+	if client3.manager != nil && client3.teamID != "" {
+		client3.manager.InvalidateCache(client3.teamID)
+	}
 
 	// Verify cache was cleared
 	if len(manager.clients) != 0 {

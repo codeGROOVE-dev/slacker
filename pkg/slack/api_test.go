@@ -15,6 +15,7 @@ func TestSlackAPIWrapper(t *testing.T) {
 
 	t.Run("RawClient", func(t *testing.T) {
 		rawClient := slack.New("test-token")
+		//nolint:errcheck // Type assertion in test is safe
 		wrapper := newSlackAPIWrapper(rawClient).(*slackAPIWrapper)
 
 		if wrapper.RawClient() != rawClient {

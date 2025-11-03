@@ -162,6 +162,7 @@ func (c *Coordinator) lookupPRsForCheckEvent(ctx context.Context, event client.E
 							}
 
 							// Process the PR update since we have fresh data
+							//nolint:contextcheck // Background context intentional - goroutine must outlive parent timeout
 							go c.handlePullRequestEventWithData(context.Background(), owner, repo, struct {
 								Action      string `json:"action"`
 								PullRequest struct {

@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	ghmailto "github.com/codeGROOVE-dev/gh-mailto/pkg/gh-mailto"
 	"github.com/slack-go/slack"
 )
 
@@ -28,28 +27,6 @@ func (m *mockSlackClient) GetUserInfo(userID string) (*slack.User, error) {
 		return user, nil
 	}
 	return nil, &slack.SlackErrorResponse{Err: "user_not_found"}
-}
-
-// mockOrgCache implements the org cache for testing.
-func createMockOrgCache(org string, identities []ghmailto.OrgIdentity) *ghmailto.OrgIdentityCache {
-	cache := &ghmailto.OrgIdentityCache{
-		Organization:  org,
-		CachedAt:      time.Now(),
-		Identities:    identities,
-		EmailToGitHub: make(map[string]string),
-		GitHubToEmail: make(map[string]string),
-		TotalMembers:  len(identities),
-	}
-
-	for i := range identities {
-		identity := &identities[i]
-		if identity.PrimaryEmail != "" {
-			cache.GitHubToEmail[identity.GitHubUsername] = identity.PrimaryEmail
-			cache.EmailToGitHub[identity.PrimaryEmail] = identity.GitHubUsername
-		}
-	}
-
-	return cache
 }
 
 func TestReverseMapping_ConfigOverride(t *testing.T) {

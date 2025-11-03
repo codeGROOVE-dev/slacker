@@ -671,8 +671,6 @@ func (cm *coordinatorManager) handleRefreshInstallations(ctx context.Context) {
 // runBotCoordinators manages bot coordinators for all GitHub installations.
 // It spawns one coordinator per org and refreshes the list every 5 minutes.
 // Failed coordinators are automatically restarted every minute.
-//
-//nolint:interfacebloat // Interface mirrors state.Store for local type safety
 func runBotCoordinators(
 	ctx context.Context,
 	slackManager *slack.Manager,

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 	"github.com/codeGROOVE-dev/slacker/pkg/github"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
@@ -345,7 +346,7 @@ func (c *Coordinator) updateClosedPRThread(ctx context.Context, pr *github.PRSna
 			}
 
 			// Found via channel history - reconstruct ThreadInfo
-			info = ThreadInfo{
+			info = cache.ThreadInfo{
 				ThreadTS:    threadTS,
 				ChannelID:   id,
 				MessageText: messageText,
@@ -414,7 +415,7 @@ func replaceEmojiPrefix(text, newEmoji string) string {
 }
 
 // updateThreadForClosedPR updates a single thread's message to reflect closed/merged state.
-func (c *Coordinator) updateThreadForClosedPR(ctx context.Context, pr *github.PRSnapshot, channelID string, info ThreadInfo) error {
+func (c *Coordinator) updateThreadForClosedPR(ctx context.Context, pr *github.PRSnapshot, channelID string, info cache.ThreadInfo) error {
 	emoji, err := emojiForPRState(pr.State)
 	if err != nil {
 		return err

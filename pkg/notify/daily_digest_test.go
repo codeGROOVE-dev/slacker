@@ -227,7 +227,6 @@ func TestSendDigest_Success(t *testing.T) {
 	}
 
 	err := scheduler.sendDigest(ctx, mockUserMapper, mockClient, "testuser", "test-org", "example.com", prs)
-
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -269,7 +268,6 @@ func TestAnalyzePR_Success(t *testing.T) {
 	}
 
 	result, err := scheduler.analyzePR(ctx, mockClient, "test-org", pr)
-
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -522,7 +520,6 @@ func TestSendDigest_PRSorting(t *testing.T) {
 	prs := []home.PR{oldPR, newPR}
 
 	err := scheduler.sendDigest(ctx, mockUserMapper, mockClient, "testuser", "test-org", "example.com", prs)
-
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -581,7 +578,6 @@ func TestSendDigest_TimezoneFallback(t *testing.T) {
 	}
 
 	err := scheduler.sendDigest(ctx, mockUserMapper, mockClient, "testuser", "test-org", "example.com", prs)
-
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}

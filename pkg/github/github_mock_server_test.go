@@ -116,7 +116,8 @@ func NewMockGitHubServer() *MockGitHubServer {
 	mux.HandleFunc("/rate_limit", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"resources": map[string]interface{}{
 				"core": map[string]interface{}{
 					"limit":     5000,
@@ -131,7 +132,8 @@ func NewMockGitHubServer() *MockGitHubServer {
 	mux.HandleFunc("/installation/repositories", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"total_count":  0,
 			"repositories": []interface{}{},
 		})
@@ -187,7 +189,8 @@ func (m *MockGitHubServer) handleListInstallations(w http.ResponseWriter, r *htt
 
 	// Return installations
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(m.installations)
+	//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+	_ = json.NewEncoder(w).Encode(m.installations)
 }
 
 // handleGetInstallation handles GET /app/installations/{id}.
@@ -210,7 +213,8 @@ func (m *MockGitHubServer) handleGetInstallation(w http.ResponseWriter, r *http.
 	for _, inst := range m.installations {
 		if inst.ID == id {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(inst)
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(inst)
 			return
 		}
 	}
@@ -278,7 +282,8 @@ func (m *MockGitHubServer) handleCreateInstallationToken(w http.ResponseWriter, 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(token)
+	//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+	_ = json.NewEncoder(w).Encode(token)
 }
 
 // handleListPRsForCommit handles GET /repos/{owner}/{repo}/commits/{sha}/pulls.
@@ -326,7 +331,8 @@ func (m *MockGitHubServer) handleListPRsForCommit(w http.ResponseWriter, r *http
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(prs)
+	//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+	_ = json.NewEncoder(w).Encode(prs)
 }
 
 // handleListPRs handles GET /repos/{owner}/{repo}/pulls.
@@ -369,7 +375,8 @@ func (m *MockGitHubServer) handleListPRs(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(prs)
+	//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+	_ = json.NewEncoder(w).Encode(prs)
 }
 
 // handleSearchIssues handles GET /search/issues (used for PR search).
@@ -433,5 +440,6 @@ func (m *MockGitHubServer) handleSearchIssues(w http.ResponseWriter, r *http.Req
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+	_ = json.NewEncoder(w).Encode(result)
 }

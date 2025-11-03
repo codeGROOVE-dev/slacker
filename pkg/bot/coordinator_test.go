@@ -10,7 +10,7 @@ import (
 func TestCoordinator_saveThread(t *testing.T) {
 	// Create mock state store
 	mockStore := &mockStateStore{
-		threads: make(map[string]ThreadInfo),
+		threads: make(map[string]cache.ThreadInfo),
 	}
 
 	// Create coordinator with mock
@@ -24,7 +24,7 @@ func TestCoordinator_saveThread(t *testing.T) {
 	repo := "testrepo"
 	number := 123
 	channelID := "C123"
-	info := ThreadInfo{
+	info := cache.ThreadInfo{
 		ThreadTS:      "1234567890.123456",
 		MessageText:   "Test PR message",
 		ChannelID:     channelID,

@@ -296,5 +296,3 @@ func TestProcessPRForChannel_MessageUpdateError(t *testing.T) {
 		t.Error("expected non-nil result even when update fails")
 	}
 }
-
-

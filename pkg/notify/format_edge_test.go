@@ -75,7 +75,6 @@ func TestNotifyUser_NoChannelName(t *testing.T) {
 
 	// Call with empty channelName - should use default delay
 	err := manager.NotifyUser(ctx, "T123", "U123", "C123", "", pr)
-
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -118,7 +117,6 @@ func TestNotifyUser_HasRecentDM(t *testing.T) {
 	}
 
 	err := manager.NotifyUser(ctx, "T123", "U123", "C123", "test-channel", pr)
-
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -167,7 +165,6 @@ func TestNotifyUser_SaveDMMessageInfoError(t *testing.T) {
 	}
 
 	err := manager.NotifyUser(ctx, "T123", "U123", "C123", "test-channel", pr)
-
 	// Should not error even if SaveDMMessageInfo fails
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)

@@ -716,11 +716,11 @@ func (s *DatastoreStore) QueuePendingDM(dm PendingDM) error {
 	return err
 }
 
-// GetPendingDMs returns all pending DMs that should be sent.
+// PendingDMs returns all pending DMs that should be sent.
 // Reads from memory cache first, falls back to Datastore if empty.
-func (s *DatastoreStore) GetPendingDMs(before time.Time) ([]PendingDM, error) {
+func (s *DatastoreStore) PendingDMs(before time.Time) ([]PendingDM, error) {
 	// Try memory first
-	dms, err := s.memory.GetPendingDMs(before)
+	dms, err := s.memory.PendingDMs(before)
 	if err == nil && len(dms) > 0 {
 		return dms, nil
 	}
@@ -765,7 +765,8 @@ func (s *DatastoreStore) GetPendingDMs(before time.Time) ([]PendingDM, error) {
 			SendAfter:     entity.SendAfter,
 		}
 		result = append(result, dm)
-		// Update memory cache
+		// Update memory cache (ignore error since cache is best-effort and we have authoritative result from datastore)
+		//nolint:errcheck // Cache update is best-effort; authoritative result from datastore
 		_ = s.memory.QueuePendingDM(dm)
 	}
 

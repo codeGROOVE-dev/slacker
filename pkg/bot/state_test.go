@@ -253,7 +253,7 @@ func TestThreadCache_GetSet(t *testing.T) {
 	}
 
 	// Test Set
-	testInfo := ThreadInfo{
+	testInfo := cache.ThreadInfo{
 		ThreadTS:    "1234567890.123456",
 		MessageText: "Test PR message",
 		ChannelID:   "C123",
@@ -297,7 +297,7 @@ func TestThreadCache_Cleanup(t *testing.T) {
 	now := time.Now()
 
 	// Add old entry (2 hours ago)
-	oldInfo := ThreadInfo{
+	oldInfo := cache.ThreadInfo{
 		ThreadTS:    "1111111111.111111",
 		MessageText: "Old PR",
 		ChannelID:   "C111",
@@ -306,7 +306,7 @@ func TestThreadCache_Cleanup(t *testing.T) {
 	threadCache.SetForTest("old/repo#1:C111", oldInfo)
 
 	// Add recent entry (30 minutes ago)
-	recentInfo := ThreadInfo{
+	recentInfo := cache.ThreadInfo{
 		ThreadTS:    "2222222222.222222",
 		MessageText: "Recent PR",
 		ChannelID:   "C222",
@@ -315,7 +315,7 @@ func TestThreadCache_Cleanup(t *testing.T) {
 	threadCache.SetForTest("recent/repo#2:C222", recentInfo)
 
 	// Add very recent entry (5 minutes ago)
-	veryRecentInfo := ThreadInfo{
+	veryRecentInfo := cache.ThreadInfo{
 		ThreadTS:    "3333333333.333333",
 		MessageText: "New PR",
 		ChannelID:   "C333",
@@ -351,13 +351,13 @@ func TestThreadCache_MultipleChannels(t *testing.T) {
 	prKey1 := "owner/repo#123:C111"
 	prKey2 := "owner/repo#123:C222"
 
-	info1 := ThreadInfo{
+	info1 := cache.ThreadInfo{
 		ThreadTS:    "1111111111.111111",
 		MessageText: "PR in channel 1",
 		ChannelID:   "C111",
 	}
 
-	info2 := ThreadInfo{
+	info2 := cache.ThreadInfo{
 		ThreadTS:    "2222222222.222222",
 		MessageText: "PR in channel 2",
 		ChannelID:   "C222",
@@ -393,7 +393,7 @@ func TestThreadCache_UpdateExisting(t *testing.T) {
 	prKey := "owner/repo#123:C123"
 
 	// Set initial info
-	initialInfo := ThreadInfo{
+	initialInfo := cache.ThreadInfo{
 		ThreadTS:    "1111111111.111111",
 		MessageText: "Initial message",
 		ChannelID:   "C123",
@@ -408,7 +408,7 @@ func TestThreadCache_UpdateExisting(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Update with new message text
-	updatedInfo := ThreadInfo{
+	updatedInfo := cache.ThreadInfo{
 		ThreadTS:    "1111111111.111111", // Same thread
 		MessageText: "Updated message",   // New message text
 		ChannelID:   "C123",

@@ -45,7 +45,8 @@ func TestNewDatastoreStore(t *testing.T) {
 	}
 
 	// Clean up
-	store.Close()
+	//nolint:errcheck // Test cleanup error can be ignored
+	_ = store.Close()
 }
 
 func TestDatastoreStore_ThreadOperations(t *testing.T) {
@@ -57,7 +58,8 @@ func TestDatastoreStore_ThreadOperations(t *testing.T) {
 		memory:   NewMemoryStore(),
 		disabled: false,
 	}
-	defer store.Close()
+	//nolint:errcheck // Test cleanup error can be ignored
+	defer func() { _ = store.Close() }()
 
 	// Test non-existent thread
 	_, exists := store.Thread("owner", "repo", 123, "C123")
@@ -116,7 +118,8 @@ func TestDatastoreStore_DMOperations(t *testing.T) {
 		memory:   NewMemoryStore(),
 		disabled: false,
 	}
-	defer store.Close()
+	//nolint:errcheck // Test cleanup error can be ignored
+	defer func() { _ = store.Close() }()
 
 	prURL := "https://github.com/test/repo/pull/123"
 
@@ -169,7 +172,8 @@ func TestDatastoreStore_DMMessageOperations(t *testing.T) {
 		memory:   NewMemoryStore(),
 		disabled: false,
 	}
-	defer store.Close()
+	//nolint:errcheck // Test cleanup error can be ignored
+	defer func() { _ = store.Close() }()
 
 	prURL := "https://github.com/test/repo/pull/123"
 
@@ -232,7 +236,8 @@ func TestDatastoreStore_ListDMUsers(t *testing.T) {
 		memory:   NewMemoryStore(),
 		disabled: false,
 	}
-	defer store.Close()
+	//nolint:errcheck // Test cleanup error can be ignored
+	defer func() { _ = store.Close() }()
 
 	prURL := "https://github.com/test/repo/pull/123"
 
@@ -244,9 +249,15 @@ func TestDatastoreStore_ListDMUsers(t *testing.T) {
 		MessageText: "Test DM",
 	}
 
-	store.SaveDMMessage("U001", prURL, dmInfo)
-	store.SaveDMMessage("U002", prURL, dmInfo)
-	store.SaveDMMessage("U003", prURL, dmInfo)
+	if err := store.SaveDMMessage("U001", prURL, dmInfo); err != nil {
+		t.Fatalf("failed to save DM for U001: %v", err)
+	}
+	if err := store.SaveDMMessage("U002", prURL, dmInfo); err != nil {
+		t.Fatalf("failed to save DM for U002: %v", err)
+	}
+	if err := store.SaveDMMessage("U003", prURL, dmInfo); err != nil {
+		t.Fatalf("failed to save DM for U003: %v", err)
+	}
 
 	// List from memory cache (fast path)
 	users := store.ListDMUsers(prURL)
@@ -276,7 +287,8 @@ func TestDatastoreStore_DigestOperations(t *testing.T) {
 		memory:   NewMemoryStore(),
 		disabled: false,
 	}
-	defer store.Close()
+	//nolint:errcheck // Test cleanup error can be ignored
+	defer func() { _ = store.Close() }()
 
 	userID := "U001"
 	date := "2025-01-15"
@@ -330,7 +342,8 @@ func TestDatastoreStore_EventDeduplication(t *testing.T) {
 		memory:   NewMemoryStore(),
 		disabled: false,
 	}
-	defer store.Close()
+	//nolint:errcheck // Test cleanup error can be ignored
+	defer func() { _ = store.Close() }()
 
 	eventKey := "webhook-12345"
 
@@ -377,7 +390,8 @@ func TestDatastoreStore_NotificationTracking(t *testing.T) {
 		memory:   NewMemoryStore(),
 		disabled: false,
 	}
-	defer store.Close()
+	//nolint:errcheck // Test cleanup error can be ignored
+	defer func() { _ = store.Close() }()
 
 	prURL := "https://github.com/test/repo/pull/123"
 
@@ -415,7 +429,8 @@ func TestDatastoreStore_DisabledMode(t *testing.T) {
 		memory:   NewMemoryStore(),
 		disabled: true,
 	}
-	defer store.Close()
+	//nolint:errcheck // Test cleanup error can be ignored
+	defer func() { _ = store.Close() }()
 
 	// All operations should work with memory only
 	threadInfo := ThreadInfo{
@@ -450,7 +465,8 @@ func TestDatastoreStore_Cleanup(t *testing.T) {
 		memory:   NewMemoryStore(),
 		disabled: false,
 	}
-	defer store.Close()
+	//nolint:errcheck // Test cleanup error can be ignored
+	defer func() { _ = store.Close() }()
 
 	// Add some old data to memory
 	oldTime := time.Now().Add(-100 * 24 * time.Hour)
@@ -517,7 +533,9 @@ func TestDatastoreStore_MemoryFirstFallback(t *testing.T) {
 		LastEventTime: time.Now(),
 	}
 
-	store.SaveThread("owner", "repo", 123, "C123", threadInfo)
+	if err := store.SaveThread("owner", "repo", 123, "C123", threadInfo); err != nil {
+		t.Fatalf("failed to save thread: %v", err)
+	}
 
 	// Immediate retrieval should hit memory cache (fast path)
 	start := time.Now()
@@ -539,7 +557,8 @@ func TestDatastoreStore_MemoryFirstFallback(t *testing.T) {
 
 	// Give async goroutine time to complete before store.Close()
 	time.Sleep(500 * time.Millisecond)
-	store.Close()
+	//nolint:errcheck // Test cleanup error can be ignored
+	_ = store.Close()
 }
 
 func TestDatastoreStore_PendingDMOperations(t *testing.T) {
@@ -551,10 +570,11 @@ func TestDatastoreStore_PendingDMOperations(t *testing.T) {
 		memory:   NewMemoryStore(),
 		disabled: false,
 	}
-	defer store.Close()
+	//nolint:errcheck // Test cleanup error can be ignored
+	defer func() { _ = store.Close() }()
 
 	// Test retrieval when no pending DMs exist
-	pending, err := store.GetPendingDMs(time.Now())
+	pending, err := store.PendingDMs(time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs: %v", err)
 	}
@@ -614,7 +634,7 @@ func TestDatastoreStore_PendingDMOperations(t *testing.T) {
 	}
 
 	// Get pending DMs from memory cache (fast path)
-	pending, err = store.GetPendingDMs(now)
+	pending, err = store.PendingDMs(now)
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs: %v", err)
 	}
@@ -638,7 +658,7 @@ func TestDatastoreStore_PendingDMOperations(t *testing.T) {
 	// Note: The mock Datastore may return all DMs regardless of filter
 	// In production, the filter would work correctly
 	future := now.Add(15 * time.Minute)
-	pending, err = store.GetPendingDMs(future)
+	pending, err = store.PendingDMs(future)
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs from Datastore: %v", err)
 	}
@@ -674,7 +694,7 @@ func TestDatastoreStore_PendingDMOperations(t *testing.T) {
 
 	// Now only dm-002 should remain in Datastore (query in future to catch it)
 	futureLater := now.Add(15 * time.Minute)
-	pending, err = store.GetPendingDMs(futureLater)
+	pending, err = store.PendingDMs(futureLater)
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs after removal: %v", err)
 	}
@@ -701,7 +721,8 @@ func TestDatastoreStore_PendingDMDisabledMode(t *testing.T) {
 		memory:   NewMemoryStore(),
 		disabled: true,
 	}
-	defer store.Close()
+	//nolint:errcheck // Test cleanup error can be ignored
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -719,7 +740,7 @@ func TestDatastoreStore_PendingDMDisabledMode(t *testing.T) {
 	}
 
 	// Get pending DMs from memory
-	pending, err := store.GetPendingDMs(now)
+	pending, err := store.PendingDMs(now)
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs in disabled mode: %v", err)
 	}
@@ -735,7 +756,7 @@ func TestDatastoreStore_PendingDMDisabledMode(t *testing.T) {
 	}
 
 	// Verify removed
-	pending, err = store.GetPendingDMs(now)
+	pending, err = store.PendingDMs(now)
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs after removal: %v", err)
 	}
@@ -754,7 +775,8 @@ func TestDatastoreStore_PendingDMCleanup(t *testing.T) {
 		memory:   NewMemoryStore(),
 		disabled: false,
 	}
-	defer store.Close()
+	//nolint:errcheck // Test cleanup error can be ignored
+	defer func() { _ = store.Close() }()
 
 	now := time.Now().Truncate(time.Millisecond)
 	oldTime := now.Add(-100 * 24 * time.Hour) // 100 days ago
@@ -767,7 +789,9 @@ func TestDatastoreStore_PendingDMCleanup(t *testing.T) {
 		QueuedAt:  oldTime,
 		SendAfter: oldTime,
 	}
-	store.QueuePendingDM(oldDM)
+	if err := store.QueuePendingDM(oldDM); err != nil {
+		t.Fatalf("failed to queue old DM: %v", err)
+	}
 
 	// Add a recent pending DM
 	recentDM := PendingDM{
@@ -777,7 +801,9 @@ func TestDatastoreStore_PendingDMCleanup(t *testing.T) {
 		QueuedAt:  now,
 		SendAfter: now.Add(10 * time.Minute),
 	}
-	store.QueuePendingDM(recentDM)
+	if err := store.QueuePendingDM(recentDM); err != nil {
+		t.Fatalf("failed to queue recent DM: %v", err)
+	}
 
 	// Give async writes time to complete
 	time.Sleep(200 * time.Millisecond)
@@ -789,7 +815,7 @@ func TestDatastoreStore_PendingDMCleanup(t *testing.T) {
 	}
 
 	// Verify old DM was removed from memory
-	pending, err := store.GetPendingDMs(now.Add(24 * time.Hour))
+	pending, err := store.PendingDMs(now.Add(24 * time.Hour))
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs: %v", err)
 	}

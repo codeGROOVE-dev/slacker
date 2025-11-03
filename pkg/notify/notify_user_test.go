@@ -135,7 +135,6 @@ func TestNotifyUser_UserInactive(t *testing.T) {
 	}
 
 	err := manager.NotifyUser(ctx, "T123", "U123", "C123", "test-channel", pr)
-
 	// Should not error, but should defer notification
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -179,7 +178,6 @@ func TestNotifyUser_AntiSpam(t *testing.T) {
 	}
 
 	err := manager.NotifyUser(ctx, "T123", "U123", "C123", "test-channel", pr)
-
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -237,7 +235,6 @@ func TestNotifyUser_DelayedDM_UserInChannel(t *testing.T) {
 	}
 
 	err := manager.NotifyUser(ctx, "T123", "U123", "C123", "test-channel", pr)
-
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -294,7 +291,6 @@ func TestNotifyUser_DelayedDM_UserNotInChannel(t *testing.T) {
 	}
 
 	err := manager.NotifyUser(ctx, "T123", "U123", "C123", "test-channel", pr)
-
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -355,7 +351,6 @@ func TestNotifyUser_DelayElapsed(t *testing.T) {
 	}
 
 	err := manager.NotifyUser(ctx, "T123", "U123", "C123", "test-channel", pr)
-
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -411,7 +406,6 @@ func TestNotifyUser_RemindersDisabled(t *testing.T) {
 	}
 
 	err := manager.NotifyUser(ctx, "T123", "U123", "C123", "test-channel", pr)
-
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -478,7 +472,7 @@ func (m *mockStoreCustomizable) QueuePendingDM(dm state.PendingDM) error {
 	return nil
 }
 
-func (m *mockStoreCustomizable) GetPendingDMs(before time.Time) ([]state.PendingDM, error) {
+func (m *mockStoreCustomizable) PendingDMs(before time.Time) ([]state.PendingDM, error) {
 	if m.getPendingDMsFunc != nil {
 		return m.getPendingDMsFunc(before)
 	}

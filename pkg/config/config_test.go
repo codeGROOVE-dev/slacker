@@ -962,7 +962,9 @@ channels:
 				Encoding: &encoding,
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(response)
 			return
 		}
 		http.NotFound(w, r)
@@ -1046,7 +1048,8 @@ channels: [1, 2, 3]
 			Encoding: &encoding,
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+		_ = json.NewEncoder(w).Encode(response)
 	}
 
 	client, server := createTestGitHubClient(handler)
@@ -1184,7 +1187,8 @@ func TestManager_LoadConfigEmptyContent(t *testing.T) {
 			Type: github.String("file"),
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+		_ = json.NewEncoder(w).Encode(response)
 	}
 
 	client, server := createTestGitHubClient(handler)

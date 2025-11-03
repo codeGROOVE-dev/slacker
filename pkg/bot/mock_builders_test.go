@@ -1,11 +1,12 @@
 package bot
 
 import (
-	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 	"context"
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 
 	"github.com/codeGROOVE-dev/slacker/pkg/notify"
 	"github.com/slack-go/slack"
@@ -125,7 +126,7 @@ type MockStateBuilder struct {
 func NewMockState() *MockStateBuilder {
 	return &MockStateBuilder{
 		mock: &mockStateStore{
-			threads:           make(map[string]ThreadInfo),
+			threads:           make(map[string]cache.ThreadInfo),
 			dmTimes:           make(map[string]time.Time),
 			dmUsers:           make(map[string][]string),
 			processedEvents:   make(map[string]bool),
@@ -135,7 +136,7 @@ func NewMockState() *MockStateBuilder {
 }
 
 // WithThread pre-populates a thread in the state store.
-func (b *MockStateBuilder) WithThread(owner, repo string, number int, channelID string, info ThreadInfo) *MockStateBuilder {
+func (b *MockStateBuilder) WithThread(owner, repo string, number int, channelID string, info cache.ThreadInfo) *MockStateBuilder {
 	key := fmt.Sprintf("%s/%s#%d:%s", owner, repo, number, channelID)
 	b.mock.threads[key] = info
 	return b

@@ -606,7 +606,6 @@ func TestHandleAuthError_RefreshSuccess(t *testing.T) {
 	mockGH.token = "new-token"
 
 	newClient, err := c.handleAuthError(ctx, "testorg", createConfig)
-
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}

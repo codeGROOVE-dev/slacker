@@ -264,7 +264,7 @@ func (m *mockStateStore) QueuePendingDM(dm state.PendingDM) error {
 	return nil
 }
 
-func (m *mockStateStore) GetPendingDMs(before time.Time) ([]state.PendingDM, error) {
+func (m *mockStateStore) PendingDMs(before time.Time) ([]state.PendingDM, error) {
 	return nil, nil
 }
 
@@ -301,7 +301,8 @@ func TestSearchPRs(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(response)
 			return
 		}
 		http.NotFound(w, r)
@@ -396,7 +397,8 @@ func TestFetchDashboard(t *testing.T) {
 				Issues: issues,
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(response)
 			return
 		}
 		http.NotFound(w, r)

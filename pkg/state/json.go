@@ -485,8 +485,8 @@ func (s *JSONStore) QueuePendingDM(dm PendingDM) error {
 	return nil
 }
 
-// GetPendingDMs returns all pending DMs that should be sent (SendAfter <= before).
-func (s *JSONStore) GetPendingDMs(before time.Time) ([]PendingDM, error) {
+// PendingDMs returns all pending DMs that should be sent (SendAfter <= before).
+func (s *JSONStore) PendingDMs(before time.Time) ([]PendingDM, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

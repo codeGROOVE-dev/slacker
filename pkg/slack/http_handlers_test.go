@@ -33,7 +33,10 @@ func TestEventsHandler_URLVerification(t *testing.T) {
 		"challenge": challenge,
 		"token":     "test-token",
 	}
-	bodyBytes, _ := json.Marshal(body)
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("failed to marshal body: %v", err)
+	}
 
 	client := &Client{
 		signingSecret: "test-secret",

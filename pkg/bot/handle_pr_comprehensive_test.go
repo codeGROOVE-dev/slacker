@@ -351,4 +351,3 @@ func TestHandlePullRequestEventWithData_ExtractStateFromTurnclient(t *testing.T)
 		})
 	}
 }
-

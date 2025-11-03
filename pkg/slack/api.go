@@ -8,6 +8,8 @@ import (
 
 // SlackAPI defines the interface for Slack API operations.
 // This abstraction allows for easier testing by enabling mock implementations.
+//
+//nolint:dupl // Interface duplicated in mock is intentional for testing
 type SlackAPI interface {
 	// Team operations.
 	GetTeamInfoContext(ctx context.Context) (*slack.TeamInfo, error)

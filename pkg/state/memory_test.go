@@ -171,9 +171,15 @@ func TestListDMUsers(t *testing.T) {
 		MessageText: "Test DM",
 	}
 
-	store.SaveDMMessage("U001", prURL, dmInfo)
-	store.SaveDMMessage("U002", prURL, dmInfo)
-	store.SaveDMMessage("U003", prURL, dmInfo)
+	if err := store.SaveDMMessage("U001", prURL, dmInfo); err != nil {
+		t.Fatalf("failed to save DM for U001: %v", err)
+	}
+	if err := store.SaveDMMessage("U002", prURL, dmInfo); err != nil {
+		t.Fatalf("failed to save DM for U002: %v", err)
+	}
+	if err := store.SaveDMMessage("U003", prURL, dmInfo); err != nil {
+		t.Fatalf("failed to save DM for U003: %v", err)
+	}
 
 	// List users
 	users = store.ListDMUsers(prURL)
@@ -353,7 +359,7 @@ func TestPendingDMOperations(t *testing.T) {
 	store := NewMemoryStore()
 
 	// Test retrieval when no pending DMs exist
-	pending, err := store.GetPendingDMs(time.Now())
+	pending, err := store.PendingDMs(time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs: %v", err)
 	}
@@ -413,7 +419,7 @@ func TestPendingDMOperations(t *testing.T) {
 	}
 
 	// Get pending DMs that are ready to send
-	pending, err = store.GetPendingDMs(now)
+	pending, err = store.PendingDMs(now)
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs: %v", err)
 	}
@@ -435,7 +441,7 @@ func TestPendingDMOperations(t *testing.T) {
 
 	// Get pending DMs 15 minutes from now - both should be ready
 	future := now.Add(15 * time.Minute)
-	pending, err = store.GetPendingDMs(future)
+	pending, err = store.PendingDMs(future)
 	if err != nil {
 		t.Fatalf("unexpected error getting future pending DMs: %v", err)
 	}
@@ -451,7 +457,7 @@ func TestPendingDMOperations(t *testing.T) {
 	}
 
 	// Now only dm2 should remain
-	pending, err = store.GetPendingDMs(future)
+	pending, err = store.PendingDMs(future)
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs after removal: %v", err)
 	}
@@ -485,7 +491,9 @@ func TestPendingDMCleanup(t *testing.T) {
 		QueuedAt:  oldTime,
 		SendAfter: oldTime,
 	}
-	store.QueuePendingDM(oldDM)
+	if err := store.QueuePendingDM(oldDM); err != nil {
+		t.Fatalf("failed to queue old DM: %v", err)
+	}
 
 	// Add a recent pending DM
 	recentDM := PendingDM{
@@ -495,7 +503,9 @@ func TestPendingDMCleanup(t *testing.T) {
 		QueuedAt:  now,
 		SendAfter: now.Add(10 * time.Minute),
 	}
-	store.QueuePendingDM(recentDM)
+	if err := store.QueuePendingDM(recentDM); err != nil {
+		t.Fatalf("failed to queue recent DM: %v", err)
+	}
 
 	// Run cleanup
 	err := store.Cleanup()
@@ -504,7 +514,7 @@ func TestPendingDMCleanup(t *testing.T) {
 	}
 
 	// Verify old DM was removed
-	pending, err := store.GetPendingDMs(now.Add(24 * time.Hour))
+	pending, err := store.PendingDMs(now.Add(24 * time.Hour))
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs: %v", err)
 	}
@@ -535,7 +545,9 @@ func TestPendingDMConcurrency(t *testing.T) {
 				QueuedAt:  now,
 				SendAfter: now.Add(-1 * time.Minute),
 			}
-			store.QueuePendingDM(dm)
+			if err := store.QueuePendingDM(dm); err != nil {
+				t.Errorf("failed to queue DM in goroutine %d: %v", index, err)
+			}
 			done <- true
 		}(i)
 	}
@@ -546,7 +558,7 @@ func TestPendingDMConcurrency(t *testing.T) {
 	}
 
 	// Get all pending DMs
-	pending, err := store.GetPendingDMs(now)
+	pending, err := store.PendingDMs(now)
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs: %v", err)
 	}
@@ -558,7 +570,9 @@ func TestPendingDMConcurrency(t *testing.T) {
 	// Remove DMs concurrently
 	for i := 0; i < 3; i++ {
 		go func(index int) {
-			store.RemovePendingDM(fmt.Sprintf("dm-%d", index))
+			if err := store.RemovePendingDM(fmt.Sprintf("dm-%d", index)); err != nil {
+				t.Errorf("failed to remove DM in goroutine %d: %v", index, err)
+			}
 			done <- true
 		}(i)
 	}
@@ -569,7 +583,7 @@ func TestPendingDMConcurrency(t *testing.T) {
 	}
 
 	// Verify all removed
-	pending, err = store.GetPendingDMs(now)
+	pending, err = store.PendingDMs(now)
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs after removal: %v", err)
 	}
