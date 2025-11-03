@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/slack-go/slack"
 )
 
 func TestUpdateDMMessage(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("no_state_store", func(t *testing.T) {
@@ -26,6 +30,8 @@ func TestUpdateDMMessage(t *testing.T) {
 }
 
 func TestSearchMessages(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("success", func(t *testing.T) {
@@ -81,6 +87,8 @@ func TestSearchMessages(t *testing.T) {
 }
 
 func TestAPI(t *testing.T) {
+	t.Parallel()
+
 	t.Run("wrapper_returns_raw_client", func(t *testing.T) {
 		rawClient := slack.New("test-token")
 		wrapper := newSlackAPIWrapper(rawClient)
@@ -110,6 +118,8 @@ func TestAPI(t *testing.T) {
 }
 
 func TestResolveChannelID(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("cached_channel", func(t *testing.T) {
@@ -192,6 +202,8 @@ func TestResolveChannelID(t *testing.T) {
 }
 
 func TestIsUserInChannel(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("user_in_channel", func(t *testing.T) {
@@ -242,7 +254,8 @@ func TestIsUserInChannel(t *testing.T) {
 		}
 
 		client := &Client{
-			api: api,
+			api:        api,
+			retryDelay: 1 * time.Millisecond,
 			cache: &apiCache{
 				entries: make(map[string]cacheEntry),
 			},
@@ -256,6 +269,8 @@ func TestIsUserInChannel(t *testing.T) {
 }
 
 func TestPublishHomeView(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("success", func(t *testing.T) {
@@ -304,6 +319,8 @@ func TestPublishHomeView(t *testing.T) {
 }
 
 func TestChannelHistory(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("success", func(t *testing.T) {
@@ -373,12 +390,169 @@ func TestChannelHistory(t *testing.T) {
 		}
 
 		client := &Client{
-			api: api,
+			api:        api,
+			retryDelay: 1 * time.Millisecond,
 		}
 
 		_, err := client.ChannelHistory(ctx, "C123", "", "", 100)
 		if err == nil {
 			t.Fatal("expected error")
+		}
+	})
+}
+
+// Programmable mock state store for DM tests
+type programmableMockStateStore struct {
+	dmMessages       map[string]state.DMInfo
+	saveDMMessageErr error
+}
+
+func (m *programmableMockStateStore) DMMessage(userID, prURL string) (state.DMInfo, bool) {
+	key := userID + ":" + prURL
+	info, exists := m.dmMessages[key]
+	return info, exists
+}
+
+func (m *programmableMockStateStore) SaveDMMessage(userID, prURL string, info state.DMInfo) error {
+	if m.saveDMMessageErr != nil {
+		return m.saveDMMessageErr
+	}
+	key := userID + ":" + prURL
+	if m.dmMessages == nil {
+		m.dmMessages = make(map[string]state.DMInfo)
+	}
+	m.dmMessages[key] = info
+	return nil
+}
+
+func TestUpdateDMMessage_Complete(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	prURL := "https://github.com/test/repo/pull/123"
+
+	t.Run("dm_not_found", func(t *testing.T) {
+		mockStore := &programmableMockStateStore{
+			dmMessages: make(map[string]state.DMInfo),
+		}
+
+		client := &Client{
+			api:        &mockSlackAPI{},
+			stateStore: mockStore,
+		}
+
+		err := client.UpdateDMMessage(ctx, "U001", prURL, "New text")
+		if !errors.Is(err, ErrNoDMToUpdate) {
+			t.Fatalf("expected ErrNoDMToUpdate, got: %v", err)
+		}
+	})
+
+	t.Run("update_success", func(t *testing.T) {
+		mockStore := &programmableMockStateStore{
+			dmMessages: map[string]state.DMInfo{
+				"U001:" + prURL: {
+					ChannelID:   "D123",
+					MessageTS:   "1234567890.123456",
+					MessageText: "Old text",
+				},
+			},
+		}
+
+		updateCalled := false
+		api := &mockSlackAPI{
+			updateMessageFunc: func(ctx context.Context, channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error) {
+				updateCalled = true
+				if channelID != "D123" {
+					t.Errorf("expected channel D123, got %s", channelID)
+				}
+				if timestamp != "1234567890.123456" {
+					t.Errorf("expected timestamp 1234567890.123456, got %s", timestamp)
+				}
+				// Note: text is passed via options, not as a parameter
+				return channelID, timestamp, "New text", nil
+			},
+		}
+
+		client := &Client{
+			api:        api,
+			stateStore: mockStore,
+		}
+
+		err := client.UpdateDMMessage(ctx, "U001", prURL, "New text")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if !updateCalled {
+			t.Error("expected Slack UpdateMessage to be called")
+		}
+
+		// Verify message text was updated in store
+		info, exists := mockStore.DMMessage("U001", prURL)
+		if !exists {
+			t.Fatal("expected DM message to still exist in store")
+		}
+		if info.MessageText != "New text" {
+			t.Errorf("expected updated text 'New text', got %s", info.MessageText)
+		}
+	})
+
+	t.Run("slack_update_fails", func(t *testing.T) {
+		mockStore := &programmableMockStateStore{
+			dmMessages: map[string]state.DMInfo{
+				"U001:" + prURL: {
+					ChannelID:   "D123",
+					MessageTS:   "1234567890.123456",
+					MessageText: "Old text",
+				},
+			},
+		}
+
+		api := &mockSlackAPI{
+			updateMessageFunc: func(ctx context.Context, channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error) {
+				return "", "", "", errors.New("slack API error")
+			},
+		}
+
+		client := &Client{
+			api:        api,
+			stateStore: mockStore,
+			retryDelay: 10 * time.Millisecond, // Fast retries for tests
+		}
+
+		err := client.UpdateDMMessage(ctx, "U001", prURL, "New text")
+		if err == nil {
+			t.Fatal("expected error from Slack API")
+		}
+	})
+
+	t.Run("save_dm_message_fails", func(t *testing.T) {
+		mockStore := &programmableMockStateStore{
+			dmMessages: map[string]state.DMInfo{
+				"U001:" + prURL: {
+					ChannelID:   "D123",
+					MessageTS:   "1234567890.123456",
+					MessageText: "Old text",
+				},
+			},
+			saveDMMessageErr: errors.New("save error"),
+		}
+
+		api := &mockSlackAPI{
+			updateMessageFunc: func(ctx context.Context, channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error) {
+				return channelID, timestamp, "New text", nil
+			},
+		}
+
+		client := &Client{
+			api:        api,
+			stateStore: mockStore,
+		}
+
+		// Should succeed despite save error (just logs warning)
+		err := client.UpdateDMMessage(ctx, "U001", prURL, "New text")
+		if err != nil {
+			t.Fatalf("unexpected error (save failure should just log warning): %v", err)
 		}
 	})
 }

@@ -10,6 +10,8 @@ import (
 
 // TestPostThread_BotNotInChannel tests error when bot is not in channel.
 func TestPostThread_BotNotInChannel(t *testing.T) {
+	t.Parallel()
+
 	mockSlack := slacktest.New()
 	defer mockSlack.Close()
 
@@ -38,6 +40,8 @@ func TestPostThread_BotNotInChannel(t *testing.T) {
 
 // TestPostThread_LongText tests posting message with text longer than 100 characters.
 func TestPostThread_LongText(t *testing.T) {
+	t.Parallel()
+
 	mockSlack := slacktest.New()
 	defer mockSlack.Close()
 
@@ -77,6 +81,8 @@ func TestPostThread_LongText(t *testing.T) {
 
 // TestSendDirectMessage_LongText tests sending DM with long text.
 func TestSendDirectMessage_LongText(t *testing.T) {
+	t.Parallel()
+
 	mockSlack := slacktest.New()
 	defer mockSlack.Close()
 

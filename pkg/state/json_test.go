@@ -602,3 +602,155 @@ func TestJSONStore_PendingDMCleanup(t *testing.T) {
 		t.Errorf("expected recent-dm to remain, got %s", pending[0].ID)
 	}
 }
+
+func TestJSONStore_DMMessage(t *testing.T) {
+	store := &JSONStore{
+		baseDir:       os.TempDir(),
+		threads:       make(map[string]ThreadInfo),
+		dms:           make(map[string]time.Time),
+		dmMessages:    make(map[string]DMInfo),
+		digests:       make(map[string]time.Time),
+		events:        make(map[string]time.Time),
+		notifications: make(map[string]time.Time),
+		pendingDMs:    make(map[string]PendingDM),
+	}
+
+	prURL := "https://github.com/test/repo/pull/123"
+	userID := "U001"
+
+	// Test non-existent DM message
+	_, exists := store.DMMessage(userID, prURL)
+	if exists {
+		t.Error("expected DM message to not exist")
+	}
+
+	// Save DM message
+	dmInfo := DMInfo{
+		SentAt:      time.Now(),
+		ChannelID:   "D001",
+		MessageTS:   "1234567890.123456",
+		MessageText: "Test DM message",
+	}
+	store.SaveDMMessage(userID, prURL, dmInfo)
+
+	// Retrieve saved DM message
+	retrieved, exists := store.DMMessage(userID, prURL)
+	if !exists {
+		t.Fatal("expected DM message to exist")
+	}
+
+	if retrieved.ChannelID != dmInfo.ChannelID {
+		t.Errorf("expected ChannelID %s, got %s", dmInfo.ChannelID, retrieved.ChannelID)
+	}
+	if retrieved.MessageTS != dmInfo.MessageTS {
+		t.Errorf("expected MessageTS %s, got %s", dmInfo.MessageTS, retrieved.MessageTS)
+	}
+}
+
+func TestJSONStore_DigestOperations(t *testing.T) {
+	store := &JSONStore{
+		baseDir:       os.TempDir(),
+		threads:       make(map[string]ThreadInfo),
+		dms:           make(map[string]time.Time),
+		dmMessages:    make(map[string]DMInfo),
+		digests:       make(map[string]time.Time),
+		events:        make(map[string]time.Time),
+		notifications: make(map[string]time.Time),
+		pendingDMs:    make(map[string]PendingDM),
+	}
+
+	userID := "U001"
+	date := "2025-10-30"
+
+	// Test non-existent digest
+	_, exists := store.LastDigest(userID, date)
+	if exists {
+		t.Error("expected digest to not exist")
+	}
+
+	// Record digest
+	sentAt := time.Now()
+	err := store.RecordDigest(userID, date, sentAt)
+	if err != nil {
+		t.Fatalf("unexpected error recording digest: %v", err)
+	}
+
+	// Retrieve digest
+	retrieved, exists := store.LastDigest(userID, date)
+	if !exists {
+		t.Fatal("expected digest to exist")
+	}
+
+	if !retrieved.Equal(sentAt) {
+		t.Errorf("expected sentAt %v, got %v", sentAt, retrieved)
+	}
+}
+
+func TestJSONStore_EventProcessing(t *testing.T) {
+	store := &JSONStore{
+		baseDir:       os.TempDir(),
+		threads:       make(map[string]ThreadInfo),
+		dms:           make(map[string]time.Time),
+		dmMessages:    make(map[string]DMInfo),
+		digests:       make(map[string]time.Time),
+		events:        make(map[string]time.Time),
+		notifications: make(map[string]time.Time),
+		pendingDMs:    make(map[string]PendingDM),
+	}
+
+	eventKey := "pull_request:123:opened"
+
+	// Test unprocessed event
+	if store.WasProcessed(eventKey) {
+		t.Error("expected event to not be processed")
+	}
+
+	// Mark event as processed
+	err := store.MarkProcessed(eventKey, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("unexpected error marking event as processed: %v", err)
+	}
+
+	// Check if event was processed
+	if !store.WasProcessed(eventKey) {
+		t.Error("expected event to be processed")
+	}
+}
+
+func TestJSONStore_NotificationOperations(t *testing.T) {
+	store := &JSONStore{
+		baseDir:       os.TempDir(),
+		threads:       make(map[string]ThreadInfo),
+		dms:           make(map[string]time.Time),
+		dmMessages:    make(map[string]DMInfo),
+		digests:       make(map[string]time.Time),
+		events:        make(map[string]time.Time),
+		notifications: make(map[string]time.Time),
+		pendingDMs:    make(map[string]PendingDM),
+	}
+
+	prURL := "https://github.com/test/repo/pull/123"
+
+	// Test non-existent notification (should return zero time)
+	lastNotif := store.LastNotification(prURL)
+	if !lastNotif.IsZero() {
+		t.Error("expected zero time for non-existent notification")
+	}
+
+	// Record notification
+	notifiedAt := time.Now()
+	err := store.RecordNotification(prURL, notifiedAt)
+	if err != nil {
+		t.Fatalf("unexpected error recording notification: %v", err)
+	}
+
+	// Retrieve notification
+	retrieved := store.LastNotification(prURL)
+	if retrieved.IsZero() {
+		t.Fatal("expected non-zero notification time")
+	}
+
+	if !retrieved.Equal(notifiedAt) {
+		t.Errorf("expected notifiedAt %v, got %v", notifiedAt, retrieved)
+	}
+}

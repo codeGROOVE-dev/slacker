@@ -4,8 +4,8 @@ github.com/cloudflare/circl v1.6.1 h1:zqIqSPIndyBh1bjLVVDHMPpVKqp8Su/V+6MeDzzQBQ
 github.com/cloudflare/circl v1.6.1/go.mod h1:uddAzsPgqdMAYatqJ0lsjX1oECcQLIlRpzZh3pJrofs=
 github.com/codeGROOVE-dev/ds9 v0.6.0 h1:JG7vBH17UAKaVoeQilrIvA1I0fg3iNbdUMBSDS7ixgI=
 github.com/codeGROOVE-dev/ds9 v0.6.0/go.mod h1:0UDipxF1DADfqM5GtjefgB2u+EXdDgOKmxVvrSGLHoM=
-github.com/codeGROOVE-dev/gh-mailto v0.0.0-20251030132316-7b86852c2928 h1:fDiQ7GnN6tDUIrYqXKCmxcatFzZqr+Bp3aNBA0Q2AVk=
-github.com/codeGROOVE-dev/gh-mailto v0.0.0-20251030132316-7b86852c2928/go.mod h1:4Hr2ySB8dcpeZqZq/7UbXdEJ/5RK9coYGHvW90ZfieE=
+github.com/codeGROOVE-dev/gh-mailto v0.0.0-20251030182955-b6a1494332f1 h1:VB5mLo9mIgBHTMwRQicKDPz0VYy0xcvBSrtV5IZtaZc=
+github.com/codeGROOVE-dev/gh-mailto v0.0.0-20251030182955-b6a1494332f1/go.mod h1:HFNNMF5nOOUTC3hboPiS/03K0IhKSUGEIQ7i7nxYSI0=
 github.com/codeGROOVE-dev/gsm v0.0.0-20251019065141-833fe2363d22 h1:gtN3rOc6YspO646BkcOxBhPjEqKUz+jl175jIqglfDg=
 github.com/codeGROOVE-dev/gsm v0.0.0-20251019065141-833fe2363d22/go.mod h1:KV+w19ubP32PxZPE1hOtlCpTaNpF0Bpb32w5djO8UTg=
 github.com/codeGROOVE-dev/prx v0.0.0-20251030022101-ff906928a1e4 h1:DSuoUwP3oyR4cHrX0cUh9c7CtYjXNIcyCmqpIwHilIU=
@@ -49,10 +49,6 @@ github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZN
 github.com/rogpeppe/go-internal v1.9.0/go.mod h1:WtVeX8xhTBvf0smdhujwtBcq4Qrzq/fJaraNFVN+nFs=
 github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0tI/otEQ=
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
-github.com/shurcooL/githubv4 v0.0.0-20240727222349-48295856cce7 h1:cYCy18SHPKRkvclm+pWm1Lk4YrREb4IOIb/YdFO0p2M=
-github.com/shurcooL/githubv4 v0.0.0-20240727222349-48295856cce7/go.mod h1:zqMwyHmnN/eDOZOdiTohqIUKUrTFX62PNlu7IJdu0q8=
-github.com/shurcooL/graphql v0.0.0-20230722043721-ed46e5a46466 h1:17JxqqJY66GmZVHkmAsGEkcIu0oCe3AM420QDgGwZx0=
-github.com/shurcooL/graphql v0.0.0-20230722043721-ed46e5a46466/go.mod h1:9dIRpgIY7hVhoqfe0/FcYp0bpInZaT7dc3BYOprrIUE=
 github.com/slack-go/slack v0.17.3 h1:zV5qO3Q+WJAQ/XwbGfNFrRMaJ5T/naqaonyPV/1TP4g=
 github.com/slack-go/slack v0.17.3/go.mod h1:X+UqOufi3LYQHDnMG1vxf0J8asC6+WllXrVrhl8/Prk=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=

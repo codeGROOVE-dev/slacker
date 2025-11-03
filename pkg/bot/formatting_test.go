@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
@@ -14,7 +13,7 @@ func TestFormatNextActions_NilCheckResult(t *testing.T) {
 
 	c := &Coordinator{
 		userMapper:    usermapping.New(nil, ""),
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 	}
 
 	result := c.formatNextActions(ctx, nil, "testorg", "test.com")
@@ -28,7 +27,7 @@ func TestFormatNextActions_EmptyNextAction(t *testing.T) {
 
 	c := &Coordinator{
 		userMapper:    usermapping.New(nil, ""),
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 	}
 
 	checkResult := &turn.CheckResponse{
@@ -48,7 +47,7 @@ func TestFormatNextActions_SystemUser(t *testing.T) {
 
 	c := &Coordinator{
 		userMapper:    usermapping.New(nil, ""),
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 	}
 
 	checkResult := &turn.CheckResponse{
@@ -71,7 +70,7 @@ func TestFormatNextActions_SnakeCaseConversion(t *testing.T) {
 
 	c := &Coordinator{
 		userMapper:    usermapping.New(nil, ""),
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 	}
 
 	checkResult := &turn.CheckResponse{
@@ -94,7 +93,7 @@ func TestFormatNextActions_MultipleSystemActions(t *testing.T) {
 
 	c := &Coordinator{
 		userMapper:    usermapping.New(nil, ""),
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 	}
 
 	checkResult := &turn.CheckResponse{

@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -15,16 +16,38 @@ import (
 	"github.com/slack-go/slack"
 )
 
+// WorkspaceStorer stores workspace credentials after OAuth completion.
+type WorkspaceStorer interface {
+	StoreWorkspace(ctx context.Context, metadata *WorkspaceMetadata, token string) error
+}
+
+// OAuthExchanger exchanges OAuth authorization codes for access tokens.
+type OAuthExchanger interface {
+	ExchangeCode(ctx context.Context, clientID, clientSecret, code string) (*slack.OAuthV2Response, error)
+}
+
+// slackOAuthExchanger is the default implementation using slack-go/slack.
+type slackOAuthExchanger struct{}
+
+func (s *slackOAuthExchanger) ExchangeCode(ctx context.Context, clientID, clientSecret, code string) (*slack.OAuthV2Response, error) {
+	return slack.GetOAuthV2ResponseContext(ctx, &http.Client{}, clientID, clientSecret, code, "")
+}
+
 // OAuthHandler handles the OAuth callback from Slack.
 type OAuthHandler struct {
-	manager      *Manager
+	store        WorkspaceStorer  // For OAuth callback storage
+	exchanger    OAuthExchanger   // For OAuth code exchange
+	manager      *Manager         // For debug listing (optional)
 	clientID     string
 	clientSecret string
 }
 
 // NewOAuthHandler creates a new OAuth handler.
+// If manager is passed (implements WorkspaceStorer), it's used for both storage and debug listing.
 func NewOAuthHandler(manager *Manager, clientID, clientSecret string) *OAuthHandler {
 	return &OAuthHandler{
+		store:        manager,
+		exchanger:    &slackOAuthExchanger{},
 		manager:      manager,
 		clientID:     clientID,
 		clientSecret: clientSecret,
@@ -101,14 +124,7 @@ func (h *OAuthHandler) HandleCallback(writer http.ResponseWriter, req *http.Requ
 	err := retry.Do(
 		func() error {
 			var err error
-			resp, err = slack.GetOAuthV2ResponseContext(
-				ctx,
-				&http.Client{},
-				h.clientID,
-				h.clientSecret,
-				code,
-				"", // redirect URI - leave empty if not specified during authorization
-			)
+			resp, err = h.exchanger.ExchangeCode(ctx, h.clientID, h.clientSecret, code)
 			if err != nil {
 				slog.Warn("failed to exchange OAuth code for token, will retry",
 					"error", err)
@@ -157,7 +173,7 @@ func (h *OAuthHandler) HandleCallback(writer http.ResponseWriter, req *http.Requ
 		BotUserID: botUserID,
 	}
 
-	if err := h.manager.StoreWorkspace(ctx, metadata, botToken); err != nil {
+	if err := h.store.StoreWorkspace(ctx, metadata, botToken); err != nil {
 		slog.Error("failed to store workspace credentials",
 			"team_id", teamID,
 			"team_name", teamName,

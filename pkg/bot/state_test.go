@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/prx/pkg/prx"
+	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
 
@@ -241,15 +242,12 @@ func TestGetStateQueryParam(t *testing.T) {
 }
 
 func TestThreadCache_GetSet(t *testing.T) {
-	cache := &ThreadCache{
-		prThreads: make(map[string]ThreadInfo),
-		creating:  make(map[string]bool),
-	}
+	threadCache := cache.New()
 
 	prKey := "owner/repo#123:C123"
 
 	// Test Get on empty cache
-	_, exists := cache.Get(prKey)
+	_, exists := threadCache.Get(prKey)
 	if exists {
 		t.Error("expected Get to return false for non-existent key")
 	}
@@ -262,10 +260,10 @@ func TestThreadCache_GetSet(t *testing.T) {
 		// UpdatedAt will be set by Set()
 	}
 
-	cache.Set(prKey, testInfo)
+	threadCache.Set(prKey, testInfo)
 
 	// Test Get after Set
-	info, exists := cache.Get(prKey)
+	info, exists := threadCache.Get(prKey)
 	if !exists {
 		t.Fatal("expected Get to return true after Set")
 	}
@@ -294,10 +292,7 @@ func TestThreadCache_GetSet(t *testing.T) {
 }
 
 func TestThreadCache_Cleanup(t *testing.T) {
-	cache := &ThreadCache{
-		prThreads: make(map[string]ThreadInfo),
-		creating:  make(map[string]bool),
-	}
+	threadCache := cache.New()
 
 	now := time.Now()
 
@@ -308,7 +303,7 @@ func TestThreadCache_Cleanup(t *testing.T) {
 		ChannelID:   "C111",
 		UpdatedAt:   now.Add(-2 * time.Hour),
 	}
-	cache.prThreads["old/repo#1:C111"] = oldInfo
+	threadCache.SetForTest("old/repo#1:C111", oldInfo)
 
 	// Add recent entry (30 minutes ago)
 	recentInfo := ThreadInfo{
@@ -317,7 +312,7 @@ func TestThreadCache_Cleanup(t *testing.T) {
 		ChannelID:   "C222",
 		UpdatedAt:   now.Add(-30 * time.Minute),
 	}
-	cache.prThreads["recent/repo#2:C222"] = recentInfo
+	threadCache.SetForTest("recent/repo#2:C222", recentInfo)
 
 	// Add very recent entry (5 minutes ago)
 	veryRecentInfo := ThreadInfo{
@@ -326,34 +321,31 @@ func TestThreadCache_Cleanup(t *testing.T) {
 		ChannelID:   "C333",
 		UpdatedAt:   now.Add(-5 * time.Minute),
 	}
-	cache.prThreads["new/repo#3:C333"] = veryRecentInfo
+	threadCache.SetForTest("new/repo#3:C333", veryRecentInfo)
 
 	// Cleanup entries older than 1 hour
-	cache.Cleanup(1 * time.Hour)
+	threadCache.Cleanup(1 * time.Hour)
 
 	// Verify old entry was removed
-	_, exists := cache.Get("old/repo#1:C111")
+	_, exists := threadCache.Get("old/repo#1:C111")
 	if exists {
 		t.Error("expected old entry to be removed by Cleanup")
 	}
 
 	// Verify recent entries were kept
-	_, exists = cache.Get("recent/repo#2:C222")
+	_, exists = threadCache.Get("recent/repo#2:C222")
 	if !exists {
 		t.Error("expected recent entry to be kept by Cleanup")
 	}
 
-	_, exists = cache.Get("new/repo#3:C333")
+	_, exists = threadCache.Get("new/repo#3:C333")
 	if !exists {
 		t.Error("expected very recent entry to be kept by Cleanup")
 	}
 }
 
 func TestThreadCache_MultipleChannels(t *testing.T) {
-	cache := &ThreadCache{
-		prThreads: make(map[string]ThreadInfo),
-		creating:  make(map[string]bool),
-	}
+	threadCache := cache.New()
 
 	// Same PR posted to multiple channels
 	prKey1 := "owner/repo#123:C111"
@@ -371,12 +363,12 @@ func TestThreadCache_MultipleChannels(t *testing.T) {
 		ChannelID:   "C222",
 	}
 
-	cache.Set(prKey1, info1)
-	cache.Set(prKey2, info2)
+	threadCache.Set(prKey1, info1)
+	threadCache.Set(prKey2, info2)
 
 	// Verify both are stored independently
-	retrievedInfo1, exists1 := cache.Get(prKey1)
-	retrievedInfo2, exists2 := cache.Get(prKey2)
+	retrievedInfo1, exists1 := threadCache.Get(prKey1)
+	retrievedInfo2, exists2 := threadCache.Get(prKey2)
 
 	if !exists1 || !exists2 {
 		t.Fatal("expected both channel entries to exist")
@@ -396,10 +388,7 @@ func TestThreadCache_MultipleChannels(t *testing.T) {
 }
 
 func TestThreadCache_UpdateExisting(t *testing.T) {
-	cache := &ThreadCache{
-		prThreads: make(map[string]ThreadInfo),
-		creating:  make(map[string]bool),
-	}
+	threadCache := cache.New()
 
 	prKey := "owner/repo#123:C123"
 
@@ -409,10 +398,10 @@ func TestThreadCache_UpdateExisting(t *testing.T) {
 		MessageText: "Initial message",
 		ChannelID:   "C123",
 	}
-	cache.Set(prKey, initialInfo)
+	threadCache.Set(prKey, initialInfo)
 
 	// Get initial UpdatedAt
-	info1, _ := cache.Get(prKey)
+	info1, _ := threadCache.Get(prKey)
 	firstUpdatedAt := info1.UpdatedAt
 
 	// Wait a bit
@@ -424,10 +413,10 @@ func TestThreadCache_UpdateExisting(t *testing.T) {
 		MessageText: "Updated message",   // New message text
 		ChannelID:   "C123",
 	}
-	cache.Set(prKey, updatedInfo)
+	threadCache.Set(prKey, updatedInfo)
 
 	// Verify update
-	info2, exists := cache.Get(prKey)
+	info2, exists := threadCache.Get(prKey)
 	if !exists {
 		t.Fatal("expected updated info to exist")
 	}

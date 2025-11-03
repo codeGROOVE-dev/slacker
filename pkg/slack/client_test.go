@@ -11,6 +11,8 @@ import (
 
 // TestPostThread verifies that PostThread sends messages to the correct channel with correct content.
 func TestPostThread(t *testing.T) {
+	t.Parallel()
+
 	mockSlack := slacktest.New()
 	defer mockSlack.Close()
 
@@ -113,6 +115,8 @@ func TestPostThread(t *testing.T) {
 
 // TestUpdateMessage verifies that UpdateMessage modifies existing messages correctly.
 func TestUpdateMessage(t *testing.T) {
+	t.Parallel()
+
 	mockSlack := slacktest.New()
 	defer mockSlack.Close()
 
@@ -197,6 +201,8 @@ func TestUpdateMessage(t *testing.T) {
 
 // TestSendDirectMessage verifies that DMs are sent to the correct users.
 func TestSendDirectMessage(t *testing.T) {
+	t.Parallel()
+
 	mockSlack := slacktest.New()
 	defer mockSlack.Close()
 
@@ -283,6 +289,8 @@ func TestSendDirectMessage(t *testing.T) {
 
 // TestMessageMutationSequence verifies that we can post, then update the same message.
 func TestMessageMutationSequence(t *testing.T) {
+	t.Parallel()
+
 	mockSlack := slacktest.New()
 	defer mockSlack.Close()
 
@@ -356,6 +364,8 @@ func TestMessageMutationSequence(t *testing.T) {
 
 // TestDMMutationSequence verifies that we can send a DM, then update it.
 func TestDMMutationSequence(t *testing.T) {
+	t.Parallel()
+
 	mockSlack := slacktest.New()
 	defer mockSlack.Close()
 
@@ -409,6 +419,8 @@ func TestDMMutationSequence(t *testing.T) {
 
 // TestMultipleChannelPosts verifies posting to multiple channels works correctly.
 func TestMultipleChannelPosts(t *testing.T) {
+	t.Parallel()
+
 	mockSlack := slacktest.New()
 	defer mockSlack.Close()
 

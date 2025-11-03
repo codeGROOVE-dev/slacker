@@ -64,6 +64,7 @@ type Client struct {
 	cache             *apiCache
 	manager           *Manager                                               // Reference to manager for cache invalidation
 	homeViewHandler   func(ctx context.Context, teamID, userID string) error // Callback for app_home_opened events
+	retryDelay        time.Duration                                          // Base delay for retries (default: 2s, can be overridden for tests)
 }
 
 // set stores a value in the cache with TTL.
@@ -118,6 +119,14 @@ func (c *Client) invalidateChannelCache(channelID string) {
 	// since channel resolution is primarily name->ID direction
 
 	slog.Debug("invalidated channel caches", "channel_id", channelID, "cleared", "membership")
+}
+
+// getRetryDelay returns the retry delay to use, defaulting to 2 seconds if not set.
+func (c *Client) getRetryDelay() time.Duration {
+	if c.retryDelay == 0 {
+		return 2 * time.Second
+	}
+	return c.retryDelay
 }
 
 // New creates a new Slack client with caching.
@@ -195,7 +204,7 @@ func (c *Client) WorkspaceInfo(ctx context.Context) (*slack.TeamInfo, error) {
 			return nil
 		},
 		retry.Attempts(5),
-		retry.Delay(2*time.Second),
+		retry.Delay(c.getRetryDelay()),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
@@ -266,7 +275,7 @@ func (c *Client) PostThread(ctx context.Context, channelID, text string, attachm
 			return nil
 		},
 		retry.Attempts(5),
-		retry.Delay(2*time.Second),
+		retry.Delay(c.getRetryDelay()),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
@@ -309,6 +318,8 @@ func (c *Client) UpdateMessage(ctx context.Context, channelID, timestamp, text s
 		slack.MsgOptionDisableLinkUnfurl(),
 	}
 
+	delay := c.getRetryDelay()
+
 	err := retry.Do(
 		func() error {
 			_, _, _, err := c.api.UpdateMessageContext(ctx, channelID, timestamp, options...)
@@ -329,10 +340,10 @@ func (c *Client) UpdateMessage(ctx context.Context, channelID, timestamp, text s
 			return nil
 		},
 		retry.Attempts(5),
-		retry.Delay(2*time.Second),
+		retry.Delay(delay),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
-		retry.MaxJitter(time.Second),
+		retry.MaxJitter(delay/2),
 		retry.LastErrorOnly(true),
 		retry.Context(ctx),
 	)
@@ -373,7 +384,7 @@ func (c *Client) PostThreadReply(ctx context.Context, channelID, threadTS, text 
 			return nil
 		},
 		retry.Attempts(5),
-		retry.Delay(2*time.Second),
+		retry.Delay(c.getRetryDelay()),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
@@ -454,7 +465,7 @@ func (c *Client) SendDirectMessage(ctx context.Context, userID, text string) (dm
 			return nil
 		},
 		retry.Attempts(5),
-		retry.Delay(time.Second),
+		retry.Delay(c.getRetryDelay()),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
@@ -487,7 +498,7 @@ func (c *Client) SendDirectMessage(ctx context.Context, userID, text string) (dm
 			return nil
 		},
 		retry.Attempts(5),
-		retry.Delay(2*time.Second),
+		retry.Delay(c.getRetryDelay()),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
@@ -600,7 +611,7 @@ func (c *Client) UserInfo(ctx context.Context, userID string) (*slack.User, erro
 			return nil
 		},
 		retry.Attempts(5),
-		retry.Delay(time.Second),
+		retry.Delay(c.getRetryDelay()),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
@@ -635,7 +646,7 @@ func (c *Client) UserPresence(ctx context.Context, userID string) (string, error
 			return nil
 		},
 		retry.Attempts(5),
-		retry.Delay(time.Second),
+		retry.Delay(c.getRetryDelay()),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
@@ -1079,7 +1090,7 @@ func (c *Client) PublishHomeView(ctx context.Context, userID string, blocks []sl
 			return nil
 		},
 		retry.Attempts(2),
-		retry.Delay(time.Second),
+		retry.Delay(c.getRetryDelay()),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
@@ -1107,7 +1118,7 @@ func (c *Client) SearchMessages(ctx context.Context, query string, params *slack
 			return nil
 		},
 		retry.Attempts(5),
-		retry.Delay(2*time.Second),
+		retry.Delay(c.getRetryDelay()),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
@@ -1158,7 +1169,7 @@ func (c *Client) ChannelHistory(
 			return nil
 		},
 		retry.Attempts(5),
-		retry.Delay(2*time.Second),
+		retry.Delay(c.getRetryDelay()),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
@@ -1209,7 +1220,7 @@ func (c *Client) BotInfo(ctx context.Context) (*slack.AuthTestResponse, error) {
 			return nil
 		},
 		retry.Attempts(5),
-		retry.Delay(2*time.Second),
+		retry.Delay(c.getRetryDelay()),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
@@ -1278,7 +1289,7 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 			return nil
 		},
 		retry.Attempts(5),
-		retry.Delay(2*time.Second),
+		retry.Delay(c.getRetryDelay()),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
@@ -1308,7 +1319,7 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 				return nil
 			},
 			retry.Attempts(5),
-			retry.Delay(2*time.Second),
+			retry.Delay(c.getRetryDelay()),
 			retry.MaxDelay(2*time.Minute),
 			retry.DelayType(retry.BackOffDelay),
 			retry.MaxJitter(time.Second),
@@ -1359,7 +1370,7 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 				return nil
 			},
 			retry.Attempts(5),
-			retry.Delay(2*time.Second),
+			retry.Delay(c.getRetryDelay()),
 			retry.MaxDelay(2*time.Minute),
 			retry.DelayType(retry.BackOffDelay),
 			retry.MaxJitter(time.Second),
@@ -1429,7 +1440,7 @@ func (c *Client) IsUserInChannel(ctx context.Context, channelID, userID string) 
 			return nil
 		},
 		retry.Attempts(5),
-		retry.Delay(2*time.Second),
+		retry.Delay(c.getRetryDelay()),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),
@@ -1506,7 +1517,7 @@ func (c *Client) IsBotInChannel(ctx context.Context, channelID string) bool {
 			return nil
 		},
 		retry.Attempts(5),
-		retry.Delay(2*time.Second),
+		retry.Delay(c.getRetryDelay()),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
 		retry.MaxJitter(time.Second),

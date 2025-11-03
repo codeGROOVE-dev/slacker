@@ -35,6 +35,8 @@ func (m *mockHomeHandler) handler(ctx context.Context, teamID, userID string) er
 
 // TestHandleInteractionsRefreshButton tests the refresh button interaction flow.
 func TestHandleInteractionsRefreshButton(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name           string
 		body           string
@@ -152,6 +154,8 @@ func TestHandleInteractionsRefreshButton(t *testing.T) {
 
 // TestHandleInteractionsFormParsing specifically tests the form parsing fix.
 func TestHandleInteractionsFormParsing(t *testing.T) {
+	t.Parallel()
+
 	// This test ensures the fix for parsing payload from already-read body works
 	payloadJSON := `{
 		"type": "block_actions",
@@ -212,6 +216,8 @@ func TestHandleInteractionsFormParsing(t *testing.T) {
 // TestClientInteractionsHandlerNoDoubleVerification tests that InteractionsHandler
 // doesn't try to re-verify the signature after EventRouter has already done so.
 func TestClientInteractionsHandlerNoDoubleVerification(t *testing.T) {
+	t.Parallel()
+
 	// This test validates the bug fix where Client.InteractionsHandler was trying
 	// to verify the signature AFTER FormValue() had already consumed the body,
 	// causing signature verification to fail with a 401.

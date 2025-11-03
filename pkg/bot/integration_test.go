@@ -14,6 +14,7 @@ import (
 	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 	slackapi "github.com/slack-go/slack"
+	"github.com/codeGROOVE-dev/slacker/pkg/config"
 )
 
 // TestUserMappingIntegration tests the complete flow of mapping GitHub users to Slack users.
@@ -371,6 +372,10 @@ func (m *mockGitHubLookup) Guess(ctx context.Context, username, organization str
 type mockConfigManager struct {
 	dmDelay      int
 	channelsFunc func(org, repo string) []string
+	workspace    string
+	domain       string
+	configData   map[string]interface{}
+	loadErr      error
 }
 
 func (m *mockConfigManager) DailyRemindersEnabled(org string) bool {
@@ -389,13 +394,45 @@ func (m *mockConfigManager) ChannelsForRepo(org, repo string) []string {
 }
 
 func (m *mockConfigManager) LoadConfig(ctx context.Context, org string) error {
+	if m.loadErr != nil {
+		return m.loadErr
+	}
 	return nil // Always succeed
 }
 
 func (m *mockConfigManager) WorkspaceName(org string) string {
+	if m.workspace != "" {
+		return m.workspace
+	}
 	return "test-workspace.slack.com"
 }
 
 func (m *mockConfigManager) Domain(org string) string {
+	if m.domain != "" {
+		return m.domain
+	}
 	return "test.com"
+}
+
+func (m *mockConfigManager) Config(org string) (*config.RepoConfig, bool) {
+	if m.configData != nil {
+		if cfg, ok := m.configData[org]; ok {
+			if repoCfg, ok := cfg.(*config.RepoConfig); ok {
+				return repoCfg, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func (m *mockConfigManager) ReloadConfig(ctx context.Context, org string) error {
+	return m.LoadConfig(ctx, org)
+}
+
+func (m *mockConfigManager) SetGitHubClient(org string, client any) {
+	// No-op for mock
+}
+
+func (m *mockConfigManager) SetWorkspaceName(workspaceName string) {
+	m.workspace = workspaceName
 }

@@ -242,3 +242,25 @@ func TestReverseMapping_SetOverrides(t *testing.T) {
 		t.Errorf("expected override for user1, got: %s", service.overrides["user1"])
 	}
 }
+
+func TestReverseMapping_WrongOrgDomain(t *testing.T) {
+	mockSlack := &mockSlackClient{
+		users: map[string]*slack.User{
+			"U12345": {
+				ID:   "U12345",
+				Name: "testuser",
+				Profile: slack.UserProfile{
+					Email: "test@wrongdomain.com", // Email domain doesn't match expected
+				},
+			},
+		},
+	}
+
+	service := NewReverseService(nil, "fake-token")
+
+	ctx := context.Background()
+	_, err := service.LookupGitHub(ctx, mockSlack, "U12345", "test-org", "company.com")
+	if err == nil {
+		t.Fatal("expected error for mismatched email domain, got nil")
+	}
+}

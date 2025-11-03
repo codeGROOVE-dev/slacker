@@ -1,18 +1,18 @@
 package bot
 
 import (
+	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 	"context"
 	"testing"
 	"time"
 
-	"github.com/codeGROOVE-dev/slacker/pkg/config"
 )
 
 func TestProcessEvent_EmptyMessage(t *testing.T) {
 	ctx := context.Background()
 
 	c := &Coordinator{
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 	}
 
 	msg := SprinklerMessage{
@@ -30,7 +30,7 @@ func TestProcessEvent_NoRepo(t *testing.T) {
 	ctx := context.Background()
 
 	c := &Coordinator{
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 	}
 
 	msg := SprinklerMessage{
@@ -48,7 +48,7 @@ func TestProcessEvent_InvalidRepoFormat(t *testing.T) {
 	ctx := context.Background()
 
 	c := &Coordinator{
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 	}
 
 	tests := []struct {
@@ -92,7 +92,7 @@ func TestProcessEvent_UnhandledEventType(t *testing.T) {
 	ctx := context.Background()
 
 	c := &Coordinator{
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 	}
 
 	msg := SprinklerMessage{
@@ -109,7 +109,7 @@ func TestProcessEvent_UnhandledEventType(t *testing.T) {
 func TestProcessEvent_PushToCodeGROOVERepo(t *testing.T) {
 	ctx := context.Background()
 
-	cfg := config.New()
+	cfg := NewMockConfig().Build()
 	c := &Coordinator{
 		configManager: cfg,
 	}
@@ -130,7 +130,7 @@ func TestProcessEvent_CheckEventWithoutPR(t *testing.T) {
 	ctx := context.Background()
 
 	c := &Coordinator{
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 	}
 
 	tests := []struct {
@@ -176,8 +176,8 @@ func TestProcessEvent_CheckEventWithPR(t *testing.T) {
 		github:         mockGH,
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
-		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		configManager:  NewMockConfig().Build(),
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -224,8 +224,8 @@ func TestProcessEvent_PullRequestReview(t *testing.T) {
 		github:         mockGH,
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
-		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		configManager:  NewMockConfig().Build(),
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -254,8 +254,8 @@ func TestProcessEvent_PullRequest(t *testing.T) {
 		github:         mockGH,
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
-		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		configManager:  NewMockConfig().Build(),
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -285,8 +285,8 @@ func TestProcessEvent_PullRequestCodeGROOVE(t *testing.T) {
 		github:         mockGH,
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
-		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		configManager:  NewMockConfig().Build(),
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 

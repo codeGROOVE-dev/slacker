@@ -695,3 +695,112 @@ func TestSelectBestMatch(t *testing.T) {
 		})
 	}
 }
+
+func TestService_SlackHandles_EmptyList(t *testing.T) {
+	service := &Service{
+		slackClient:  &MockSlackAPI{},
+		githubLookup: &MockGitHubLookup{},
+		cache:        make(map[string]*UserMapping),
+		lookupSem:    make(chan struct{}, 5),
+	}
+
+	ctx := context.Background()
+	result, err := service.SlackHandles(ctx, []string{}, "testorg", "example.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("expected empty result, got %d entries", len(result))
+	}
+}
+
+func TestService_FormatUserMentions_Empty(t *testing.T) {
+	service := &Service{
+		cache: make(map[string]*UserMapping),
+	}
+
+	ctx := context.Background()
+	result := service.FormatUserMentions(ctx, []string{}, "testorg", "example.com")
+	if result != "" {
+		t.Errorf("expected empty string, got %q", result)
+	}
+}
+
+func TestService_ContextCancellation(t *testing.T) {
+	service := &Service{
+		slackClient:  &MockSlackAPI{},
+		githubLookup: &MockGitHubLookup{},
+		cache:        make(map[string]*UserMapping),
+		lookupSem:    make(chan struct{}, 1),
+	}
+
+	// Fill the semaphore
+	service.lookupSem <- struct{}{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	_, err := service.SlackHandle(ctx, "testuser", "testorg", "example.com")
+	if err == nil {
+		t.Error("expected context cancellation error, got nil")
+	}
+	if err != context.Canceled {
+		t.Errorf("expected context.Canceled error, got %v", err)
+	}
+}
+
+func TestService_EmailGuessing(t *testing.T) {
+	ctx := context.Background()
+	githubUser := "newuser"
+	organization := "testorg"
+	domain := "example.com"
+	guessedEmail := "newuser@example.com"
+
+	mockGitHub := &MockGitHubLookup{
+		lookupFunc: func(ctx context.Context, username, organization string) (*ghmailto.Result, error) {
+			// No addresses found via lookup
+			return &ghmailto.Result{
+				Username:  githubUser,
+				Addresses: []ghmailto.Address{},
+			}, nil
+		},
+		guessFunc: func(ctx context.Context, username, organization string, opts ghmailto.GuessOptions) (*ghmailto.GuessResult, error) {
+			// Return guessed email
+			return &ghmailto.GuessResult{
+				Username: githubUser,
+				Guesses: []ghmailto.Address{
+					{Email: guessedEmail, Confidence: 80, Pattern: "{first}.{last}"},
+				},
+			}, nil
+		},
+	}
+
+	mockSlack := &MockSlackAPI{
+		getUserByEmailFunc: func(ctx context.Context, email string) (*slack.User, error) {
+			if email == guessedEmail {
+				return &slack.User{
+					ID:      "U999999",
+					Name:    "newuser.slack",
+					Profile: slack.UserProfile{Email: guessedEmail},
+					Deleted: false,
+				}, nil
+			}
+			return nil, errMockNotFound
+		},
+	}
+
+	service := &Service{
+		slackClient:  mockSlack,
+		githubLookup: mockGitHub,
+		cache:        make(map[string]*UserMapping),
+		lookupSem:    make(chan struct{}, 5),
+	}
+
+	result, err := service.SlackHandle(ctx, githubUser, organization, domain)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "U999999" {
+		t.Errorf("expected user ID 'U999999', got %q", result)
+	}
+}
