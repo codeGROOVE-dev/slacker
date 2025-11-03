@@ -8,7 +8,6 @@ import (
 
 	"github.com/codeGROOVE-dev/prx/pkg/prx"
 	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
-	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 	"github.com/slack-go/slack"
 )
@@ -38,7 +37,7 @@ func TestProcessPRForChannel_FindOrCreateThreadError(t *testing.T) {
 		github:         &mockGitHub{org: "testorg", token: "test-token"},
 		slack:          mockSlack,
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
-		configManager:  config.New(),
+		configManager:  NewMockConfig().Build(),
 		notifier:       nil,
 		userMapper:     &mockUserMapper{},
 		threadCache:    cache.New(),
@@ -146,7 +145,7 @@ func TestProcessPRForChannel_MessageUpdateNeeded(t *testing.T) {
 		github:         &mockGitHub{org: "testorg", token: "test-token"},
 		slack:          mockSlack,
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
-		configManager:  config.New(),
+		configManager:  NewMockConfig().Build(),
 		notifier:       nil,
 		userMapper:     &mockUserMapper{},
 		threadCache:    threadCache,
@@ -246,7 +245,7 @@ func TestProcessPRForChannel_MessageUpdateError(t *testing.T) {
 		github:         &mockGitHub{org: "testorg", token: "test-token"},
 		slack:          mockSlack,
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
-		configManager:  config.New(),
+		configManager:  NewMockConfig().Build(),
 		notifier:       nil,
 		userMapper:     &mockUserMapper{},
 		threadCache:    threadCache,

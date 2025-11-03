@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/slacker/pkg/notify"
 	"github.com/slack-go/slack"
 )
@@ -215,6 +214,65 @@ func (b *MockUserMapperBuilder) Build() *mockUserMapper {
 	return b.mock
 }
 
+// MockConfigBuilder provides a fluent API for building mockConfigManager instances.
+type MockConfigBuilder struct {
+	mock *mockConfigManager
+}
+
+// NewMockConfig creates a new mock config manager builder with sensible defaults.
+func NewMockConfig() *MockConfigBuilder {
+	return &MockConfigBuilder{
+		mock: &mockConfigManager{
+			channelsFunc: func(org, repo string) []string {
+				return []string{}
+			},
+			workspace:  "test-workspace.slack.com",
+			domain:     "test.com",
+			dmDelay:    65,
+			configData: make(map[string]interface{}),
+		},
+	}
+}
+
+// WithChannels configures channels for a specific org/repo.
+func (b *MockConfigBuilder) WithChannels(org, repo string, channels []string) *MockConfigBuilder {
+	key := org + "/" + repo
+	existingFunc := b.mock.channelsFunc
+	b.mock.channelsFunc = func(o, r string) []string {
+		if o+"/"+r == key {
+			return channels
+		}
+		if existingFunc != nil {
+			return existingFunc(o, r)
+		}
+		return []string{}
+	}
+	return b
+}
+
+// WithWorkspace configures the workspace name.
+func (b *MockConfigBuilder) WithWorkspace(workspace string) *MockConfigBuilder {
+	b.mock.workspace = workspace
+	return b
+}
+
+// WithDomain configures the email domain.
+func (b *MockConfigBuilder) WithDomain(domain string) *MockConfigBuilder {
+	b.mock.domain = domain
+	return b
+}
+
+// WithLoadError configures LoadConfig to return an error.
+func (b *MockConfigBuilder) WithLoadError(err error) *MockConfigBuilder {
+	b.mock.loadErr = err
+	return b
+}
+
+// Build returns the configured mockConfigManager.
+func (b *MockConfigBuilder) Build() *mockConfigManager {
+	return b.mock
+}
+
 // CoordinatorBuilder provides a fluent API for building Coordinator instances for tests.
 type CoordinatorBuilder struct {
 	coordinator *Coordinator
@@ -227,7 +285,7 @@ func NewTestCoordinator() *CoordinatorBuilder {
 			slack:          NewMockSlack().Build(),
 			github:         &mockGitHub{org: "testorg", token: "test-token"},
 			stateStore:     NewMockState().Build(),
-			configManager:  config.New(),
+			configManager:  NewMockConfig().Build(),
 			commitPRCache:  cache.NewCommitPRCache(),
 			threadCache:    cache.New(),
 			eventSemaphore: make(chan struct{}, 10),
@@ -255,7 +313,7 @@ func (b *CoordinatorBuilder) WithState(state *mockStateStore) *CoordinatorBuilde
 }
 
 // WithConfig configures the config manager.
-func (b *CoordinatorBuilder) WithConfig(cfg *config.Manager) *CoordinatorBuilder {
+func (b *CoordinatorBuilder) WithConfig(cfg ConfigManager) *CoordinatorBuilder {
 	b.coordinator.configManager = cfg
 	return b
 }

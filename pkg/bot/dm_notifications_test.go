@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
-	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
 
@@ -17,7 +16,7 @@ func TestSendDMNotificationsToSlackUsers_EmptyUserList(t *testing.T) {
 		github:         &mockGitHub{org: "testorg", token: "test-token"},
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
-		configManager:  config.New(),
+		configManager:  NewMockConfig().Build(),
 		notifier:       nil, // Can be nil for empty user list test
 		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
@@ -66,7 +65,7 @@ func TestSendDMNotificationsToGitHubUsers_EmptyUserList(t *testing.T) {
 		github:         &mockGitHub{org: "testorg", token: "test-token"},
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
-		configManager:  config.New(),
+		configManager:  NewMockConfig().Build(),
 		notifier:       nil, // Can be nil for empty user list test
 		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
@@ -120,7 +119,7 @@ func TestUpdateDMMessagesForPR_MergedPRNoDMRecipients(t *testing.T) {
 		github:         &mockGitHub{org: "testorg", token: "test-token"},
 		slack:          &mockSlackClient{},
 		stateStore:     mockState,
-		configManager:  config.New(),
+		configManager:  NewMockConfig().Build(),
 		notifier:       nil,
 		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
@@ -148,7 +147,7 @@ func TestUpdateDMMessagesForPR_NonTerminalStateNoBlockedUsers(t *testing.T) {
 		github:         &mockGitHub{org: "testorg", token: "test-token"},
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
-		configManager:  config.New(),
+		configManager:  NewMockConfig().Build(),
 		notifier:       nil,
 		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
@@ -180,7 +179,7 @@ func TestUpdateDMMessagesForPR_NonTerminalStateNilCheckResult(t *testing.T) {
 		github:         &mockGitHub{org: "testorg", token: "test-token"},
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
-		configManager:  config.New(),
+		configManager:  NewMockConfig().Build(),
 		notifier:       nil,
 		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
@@ -213,7 +212,7 @@ func TestUpdateDMMessagesForPR_ClosedPRNoDMRecipients(t *testing.T) {
 		github:         &mockGitHub{org: "testorg", token: "test-token"},
 		slack:          &mockSlackClient{},
 		stateStore:     mockState,
-		configManager:  config.New(),
+		configManager:  NewMockConfig().Build(),
 		notifier:       nil,
 		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
@@ -248,7 +247,7 @@ func TestUpdateDMMessagesForPR_MergedWithRecipients(t *testing.T) {
 	c := &Coordinator{
 		slack:         mockSlack,
 		stateStore:    mockState,
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 	}
 
 	prInfo := prUpdateInfo{
@@ -285,7 +284,7 @@ func TestUpdateDMMessagesForPR_ClosedWithRecipients(t *testing.T) {
 	c := &Coordinator{
 		slack:         mockSlack,
 		stateStore:    mockState,
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 	}
 
 	prInfo := prUpdateInfo{
@@ -328,7 +327,7 @@ func TestUpdateDMMessagesForPR_WithBlockedUsers(t *testing.T) {
 	c := &Coordinator{
 		slack:         mockSlack,
 		stateStore:    mockState,
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 		userMapper:    &mockUserMapper{},
 	}
 
@@ -371,7 +370,7 @@ func TestUpdateDMMessagesForPR_SkipsSystemUser(t *testing.T) {
 	c := &Coordinator{
 		slack:         mockSlack,
 		stateStore:    mockState,
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 		userMapper:    &mockUserMapper{},
 	}
 
@@ -404,4 +403,201 @@ func TestUpdateDMMessagesForPR_SkipsSystemUser(t *testing.T) {
 			t.Error("should not send DM to _system user")
 		}
 	}
+}
+
+// TestSendDMNotificationsToGitHubUsers_HappyPath tests successful GitHub->Slack mapping and DM sending.
+func TestSendDMNotificationsToGitHubUsers_HappyPath(t *testing.T) {
+	ctx := context.Background()
+
+	mockUserMapper := NewMockUserMapper().
+		WithMappings(map[string]string{
+			"user1": "U001",
+			"user2": "U002",
+		}).
+		Build()
+
+	mockConfig := NewMockConfig().
+		WithDomain("test.com").
+		Build()
+
+	c := NewTestCoordinator().
+		WithUserMapper(mockUserMapper).
+		WithConfig(mockConfig).
+		Build()
+	// Note: we can't easily test notifier.NotifyUser without full integration setup
+	// but we can verify the function completes without errors
+
+	event := struct {
+		Action      string `json:"action"`
+		PullRequest struct {
+			HTMLURL   string    `json:"html_url"`
+			Title     string    `json:"title"`
+			CreatedAt time.Time `json:"created_at"`
+			User      struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			Number int `json:"number"`
+		} `json:"pull_request"`
+		Number int `json:"number"`
+	}{
+		Action: "opened",
+		Number: 42,
+	}
+	event.PullRequest.HTMLURL = "https://github.com/testorg/testrepo/pull/42"
+	event.PullRequest.Title = "Test PR"
+	event.PullRequest.CreatedAt = time.Now()
+	event.PullRequest.User.Login = "author"
+	event.PullRequest.Number = 42
+
+	uniqueUsers := map[string]bool{
+		"user1": true,
+		"user2": true,
+	}
+
+	checkResult := &turn.CheckResponse{}
+
+	// Should complete without panic
+	c.sendDMNotificationsToGitHubUsers(ctx, "test-workspace", "testorg", "testrepo", 42, uniqueUsers, event, "awaiting_review", checkResult)
+}
+
+// TestSendDMNotificationsToGitHubUsers_MappingFailure tests when user mapping fails.
+func TestSendDMNotificationsToGitHubUsers_MappingFailure(t *testing.T) {
+	ctx := context.Background()
+
+	mockUserMapper := NewMockUserMapper().
+		WithMappings(map[string]string{
+			"user1": "U001",
+			// user2 will fail to map
+		}).
+		Build()
+
+	mockConfig := NewMockConfig().
+		WithDomain("test.com").
+		Build()
+
+	c := NewTestCoordinator().
+		WithUserMapper(mockUserMapper).
+		WithConfig(mockConfig).
+		Build()
+
+	event := struct {
+		Action      string `json:"action"`
+		PullRequest struct {
+			HTMLURL   string    `json:"html_url"`
+			Title     string    `json:"title"`
+			CreatedAt time.Time `json:"created_at"`
+			User      struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			Number int `json:"number"`
+		} `json:"pull_request"`
+		Number int `json:"number"`
+	}{
+		Action: "opened",
+		Number: 42,
+	}
+	event.PullRequest.HTMLURL = "https://github.com/testorg/testrepo/pull/42"
+	event.PullRequest.Title = "Test PR"
+	event.PullRequest.CreatedAt = time.Now()
+	event.PullRequest.User.Login = "author"
+	event.PullRequest.Number = 42
+
+	uniqueUsers := map[string]bool{
+		"user1": true,
+		"user2": true, // This will fail to map
+	}
+
+	checkResult := &turn.CheckResponse{}
+
+	// Should handle mapping failures gracefully
+	c.sendDMNotificationsToGitHubUsers(ctx, "test-workspace", "testorg", "testrepo", 42, uniqueUsers, event, "awaiting_review", checkResult)
+}
+
+// TestSendDMNotificationsToSlackUsers_HappyPath tests delayed DM notification logic.
+func TestSendDMNotificationsToSlackUsers_HappyPath(t *testing.T) {
+	ctx := context.Background()
+
+	mockConfig := NewMockConfig().
+		WithDomain("test.com").
+		Build()
+
+	c := NewTestCoordinator().
+		WithConfig(mockConfig).
+		Build()
+
+	event := struct {
+		Action      string `json:"action"`
+		PullRequest struct {
+			HTMLURL   string    `json:"html_url"`
+			Title     string    `json:"title"`
+			CreatedAt time.Time `json:"created_at"`
+			User      struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			Number int `json:"number"`
+		} `json:"pull_request"`
+		Number int `json:"number"`
+	}{
+		Action: "opened",
+		Number: 42,
+	}
+	event.PullRequest.HTMLURL = "https://github.com/testorg/testrepo/pull/42"
+	event.PullRequest.Title = "Test PR"
+	event.PullRequest.CreatedAt = time.Now()
+	event.PullRequest.User.Login = "author"
+	event.PullRequest.Number = 42
+
+	uniqueSlackUsers := map[string]bool{
+		"U001": true,
+		"U002": true,
+	}
+
+	checkResult := &turn.CheckResponse{}
+
+	// Should process users and set up delayed DMs
+	c.sendDMNotificationsToSlackUsers(ctx, "test-workspace", "testorg", "testrepo", 42, uniqueSlackUsers, event, "awaiting_review", checkResult)
+}
+
+// TestSendDMNotificationsToSlackUsers_ImmediateDM tests immediate DM when not tagged in channel.
+func TestSendDMNotificationsToSlackUsers_ImmediateDM(t *testing.T) {
+	ctx := context.Background()
+
+	mockConfig := NewMockConfig().
+		WithDomain("test.com").
+		Build()
+
+	c := NewTestCoordinator().
+		WithConfig(mockConfig).
+		Build()
+
+	event := struct {
+		Action      string `json:"action"`
+		PullRequest struct {
+			HTMLURL   string    `json:"html_url"`
+			Title     string    `json:"title"`
+			CreatedAt time.Time `json:"created_at"`
+			User      struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			Number int `json:"number"`
+		} `json:"pull_request"`
+		Number int `json:"number"`
+	}{
+		Action: "opened",
+		Number: 42,
+	}
+	event.PullRequest.HTMLURL = "https://github.com/testorg/testrepo/pull/42"
+	event.PullRequest.Title = "Test PR"
+	event.PullRequest.CreatedAt = time.Now()
+	event.PullRequest.User.Login = "author"
+	event.PullRequest.Number = 42
+
+	uniqueSlackUsers := map[string]bool{
+		"U001": true,
+	}
+
+	checkResult := &turn.CheckResponse{}
+
+	// Should send immediate DM when user wasn't tagged in channels
+	c.sendDMNotificationsToSlackUsers(ctx, "test-workspace", "testorg", "testrepo", 42, uniqueSlackUsers, event, "awaiting_review", checkResult)
 }

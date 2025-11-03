@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
-	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 	"github.com/slack-go/slack"
 )
@@ -18,7 +17,7 @@ func TestProcessChannelsInParallel_InvalidEventType(t *testing.T) {
 		github:         &mockGitHub{org: "testorg", token: "test-token"},
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
-		configManager:  config.New(),
+		configManager:  NewMockConfig().Build(),
 		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 		workspaceName:  "test-workspace.slack.com",
@@ -63,7 +62,7 @@ func TestProcessChannelsInParallel_NoValidChannels(t *testing.T) {
 		github:         &mockGitHub{org: "testorg", token: "test-token"},
 		slack:          mockSlack,
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
-		configManager:  config.New(),
+		configManager:  NewMockConfig().Build(),
 		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 		workspaceName:  "test-workspace.slack.com",
@@ -119,7 +118,7 @@ func TestProcessPRForChannel_InvalidEventType(t *testing.T) {
 		github:         &mockGitHub{org: "testorg", token: "test-token"},
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
-		configManager:  config.New(),
+		configManager:  NewMockConfig().Build(),
 		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 		workspaceName:  "test-workspace.slack.com",
@@ -159,7 +158,7 @@ func TestProcessPRForChannel_ChannelResolutionFailed(t *testing.T) {
 		github:         &mockGitHub{org: "testorg", token: "test-token"},
 		slack:          mockSlack,
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
-		configManager:  config.New(),
+		configManager:  NewMockConfig().Build(),
 		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 		workspaceName:  "test-workspace.slack.com",
@@ -238,7 +237,7 @@ func TestProcessChannelsInParallel_HappyPath(t *testing.T) {
 		github:         &mockGitHub{org: "testorg", token: "test-token"},
 		slack:          mockSlack,
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
-		configManager:  config.New(),
+		configManager:  NewMockConfig().Build(),
 		notifier:       nil,
 		userMapper:     &mockUserMapper{},
 		threadCache:    cache.New(),
@@ -321,7 +320,7 @@ func TestProcessChannelsInParallel_SomeChannelsInvalid(t *testing.T) {
 		github:         &mockGitHub{org: "testorg", token: "test-token"},
 		slack:          mockSlack,
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
-		configManager:  config.New(),
+		configManager:  NewMockConfig().Build(),
 		notifier:       nil,
 		userMapper:     &mockUserMapper{},
 		threadCache:    cache.New(),
@@ -405,7 +404,7 @@ func TestProcessPRForChannel_UserMappingFailures(t *testing.T) {
 		github:         &mockGitHub{org: "testorg", token: "test-token"},
 		slack:          mockSlack,
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
-		configManager:  config.New(),
+		configManager:  NewMockConfig().Build(),
 		notifier:       nil,
 		userMapper:     mockMapper,
 		threadCache:    cache.New(),

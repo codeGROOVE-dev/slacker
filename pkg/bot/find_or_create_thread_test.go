@@ -2,11 +2,11 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
-	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 	"github.com/slack-go/slack"
 )
@@ -28,7 +28,7 @@ func TestFindOrCreatePRThread_CacheHit(t *testing.T) {
 	c := NewTestCoordinator().
 		WithState(NewMockState().Build()).
 		WithSlack(NewMockSlack().Build()).
-		WithConfig(config.New()).
+		WithConfig(NewMockConfig().Build()).
 		Build()
 	c.threadCache = threadCache
 
@@ -83,7 +83,7 @@ func TestFindOrCreatePRThread_FallbackSearchDate(t *testing.T) {
 	c := NewTestCoordinator().
 		WithState(NewMockState().Build()).
 		WithSlack(mockSlack).
-		WithConfig(config.New()).
+		WithConfig(NewMockConfig().Build()).
 		Build()
 
 	pullRequest := struct {
@@ -140,7 +140,7 @@ func TestFindOrCreatePRThread_ConcurrentCreation(t *testing.T) {
 	c := NewTestCoordinator().
 		WithState(NewMockState().Build()).
 		WithSlack(mockSlack).
-		WithConfig(config.New()).
+		WithConfig(NewMockConfig().Build()).
 		Build()
 	c.threadCache = threadCache
 
@@ -205,7 +205,7 @@ func TestFindOrCreatePRThread_ZeroCreatedAt(t *testing.T) {
 	c := NewTestCoordinator().
 		WithState(NewMockState().Build()).
 		WithSlack(mockSlack).
-		WithConfig(config.New()).
+		WithConfig(NewMockConfig().Build()).
 		Build()
 
 	pullRequest := struct {
@@ -267,7 +267,7 @@ func TestFindOrCreatePRThread_ExistingThreadFound(t *testing.T) {
 	c := NewTestCoordinator().
 		WithState(NewMockState().Build()).
 		WithSlack(mockSlack).
-		WithConfig(config.New()).
+		WithConfig(NewMockConfig().Build()).
 		Build()
 
 	pullRequest := struct {
@@ -297,6 +297,183 @@ func TestFindOrCreatePRThread_ExistingThreadFound(t *testing.T) {
 	}
 	if threadTS != "existing.thread" {
 		t.Errorf("expected threadTS 'existing.thread', got %s", threadTS)
+	}
+	if messageText == "" {
+		t.Error("expected message text to be populated")
+	}
+}
+
+// TestFindOrCreatePRThread_CrossInstanceCheck tests when another instance creates thread during lock.
+func TestFindOrCreatePRThread_CrossInstanceCheck(t *testing.T) {
+	ctx := context.Background()
+
+	prURL := "https://github.com/testorg/testrepo/pull/42"
+
+	callCount := 0
+	mockSlack := NewMockSlack().Build()
+	mockSlack.channelHistoryFunc = func(ctx context.Context, channelID string, oldest, latest string, limit int) (*slack.GetConversationHistoryResponse, error) {
+		callCount++
+		if callCount == 1 {
+			// First search (initial): no thread found
+			return &slack.GetConversationHistoryResponse{
+				Messages: []slack.Message{},
+			}, nil
+		}
+		// Second search (cross-instance check): thread found
+		return &slack.GetConversationHistoryResponse{
+			Messages: []slack.Message{
+				{
+					Msg: slack.Msg{
+						Timestamp: "cross.instance",
+						Text:      ":hourglass: Test PR " + prURL,
+						User:      "B123",
+					},
+				},
+			},
+		}, nil
+	}
+	mockSlack.botInfoFunc = func(ctx context.Context) (*slack.AuthTestResponse, error) {
+		return &slack.AuthTestResponse{
+			UserID: "B123",
+		}, nil
+	}
+
+	c := NewTestCoordinator().
+		WithState(NewMockState().Build()).
+		WithSlack(mockSlack).
+		WithConfig(NewMockConfig().Build()).
+		Build()
+
+	pullRequest := struct {
+		CreatedAt time.Time `json:"created_at"`
+		User      struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		HTMLURL string `json:"html_url"`
+		Title   string `json:"title"`
+		Number  int    `json:"number"`
+	}{
+		CreatedAt: time.Now().Add(-1 * time.Hour),
+		HTMLURL:   prURL,
+		Title:     "Test PR",
+		Number:    42,
+	}
+	pullRequest.User.Login = "testauthor"
+
+	checkResult := &turn.CheckResponse{}
+
+	threadTS, wasNew, messageText, err := c.findOrCreatePRThread(ctx, "C123", "testorg", "testrepo", 42, "awaiting_review", pullRequest, checkResult)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if wasNew {
+		t.Error("expected existing thread (found by cross-instance check)")
+	}
+	if threadTS != "cross.instance" {
+		t.Errorf("expected threadTS 'cross.instance', got %s", threadTS)
+	}
+	if messageText == "" {
+		t.Error("expected message text to be populated")
+	}
+}
+
+// TestFindOrCreatePRThread_CreateThreadError tests error handling during thread creation.
+func TestFindOrCreatePRThread_CreateThreadError(t *testing.T) {
+	ctx := context.Background()
+
+	mockSlack := NewMockSlack().
+		WithChannelResolution("C123", "C123").
+		WithBotInChannel(true).
+		WithPostThreadError(errors.New("slack API error")).
+		Build()
+
+	mockSlack.channelHistoryFunc = func(ctx context.Context, channelID string, oldest, latest string, limit int) (*slack.GetConversationHistoryResponse, error) {
+		// No existing thread
+		return &slack.GetConversationHistoryResponse{
+			Messages: []slack.Message{},
+		}, nil
+	}
+
+	c := NewTestCoordinator().
+		WithState(NewMockState().Build()).
+		WithSlack(mockSlack).
+		WithConfig(NewMockConfig().Build()).
+		Build()
+
+	pullRequest := struct {
+		CreatedAt time.Time `json:"created_at"`
+		User      struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		HTMLURL string `json:"html_url"`
+		Title   string `json:"title"`
+		Number  int    `json:"number"`
+	}{
+		CreatedAt: time.Now().Add(-1 * time.Hour),
+		HTMLURL:   "https://github.com/testorg/testrepo/pull/42",
+		Title:     "Test PR",
+		Number:    42,
+	}
+	pullRequest.User.Login = "testauthor"
+
+	checkResult := &turn.CheckResponse{}
+
+	_, _, _, err := c.findOrCreatePRThread(ctx, "C123", "testorg", "testrepo", 42, "awaiting_review", pullRequest, checkResult)
+	if err == nil {
+		t.Error("expected error when thread creation fails")
+	}
+}
+
+// TestFindOrCreatePRThread_NewThreadCreation tests successful new thread creation.
+func TestFindOrCreatePRThread_NewThreadCreation(t *testing.T) {
+	ctx := context.Background()
+
+	mockSlack := NewMockSlack().
+		WithChannelResolution("C123", "C123").
+		WithBotInChannel(true).
+		WithPostThreadSuccess("new.thread.123").
+		Build()
+
+	mockSlack.channelHistoryFunc = func(ctx context.Context, channelID string, oldest, latest string, limit int) (*slack.GetConversationHistoryResponse, error) {
+		// No existing thread
+		return &slack.GetConversationHistoryResponse{
+			Messages: []slack.Message{},
+		}, nil
+	}
+
+	c := NewTestCoordinator().
+		WithState(NewMockState().Build()).
+		WithSlack(mockSlack).
+		WithConfig(NewMockConfig().Build()).
+		Build()
+
+	pullRequest := struct {
+		CreatedAt time.Time `json:"created_at"`
+		User      struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		HTMLURL string `json:"html_url"`
+		Title   string `json:"title"`
+		Number  int    `json:"number"`
+	}{
+		CreatedAt: time.Now().Add(-1 * time.Hour),
+		HTMLURL:   "https://github.com/testorg/testrepo/pull/42",
+		Title:     "Test PR",
+		Number:    42,
+	}
+	pullRequest.User.Login = "testauthor"
+
+	checkResult := &turn.CheckResponse{}
+
+	threadTS, wasNew, messageText, err := c.findOrCreatePRThread(ctx, "C123", "testorg", "testrepo", 42, "awaiting_review", pullRequest, checkResult)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !wasNew {
+		t.Error("expected new thread to be created")
+	}
+	if threadTS != "new.thread.123" {
+		t.Errorf("expected threadTS 'new.thread.123', got %s", threadTS)
 	}
 	if messageText == "" {
 		t.Error("expected message text to be populated")

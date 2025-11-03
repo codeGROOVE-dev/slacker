@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
-	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/slack-go/slack"
 )
 
@@ -26,7 +25,7 @@ func TestNew(t *testing.T) {
 		token: "test-token",
 	}
 
-	configMgr := config.New()
+	configMgr := NewMockConfig().Build()
 	stateStore := &mockStateStore{
 		processedEvents: make(map[string]bool),
 	}
@@ -99,7 +98,7 @@ func TestNew_WorkspaceInfoFailure(t *testing.T) {
 		token: "test-token",
 	}
 
-	configMgr := config.New()
+	configMgr := NewMockConfig().Build()
 	stateStore := &mockStateStore{
 		processedEvents: make(map[string]bool),
 	}
@@ -144,7 +143,7 @@ func TestNew_WithGitHubClient(t *testing.T) {
 		client: fakeGHClient,
 	}
 
-	configMgr := config.New()
+	configMgr := NewMockConfig().Build()
 	stateStore := &mockStateStore{
 		processedEvents: make(map[string]bool),
 	}
@@ -169,7 +168,7 @@ func TestNew_WithGitHubClient(t *testing.T) {
 
 func TestSaveThread(t *testing.T) {
 	mockSlack := &mockSlackClient{}
-	configMgr := config.New()
+	configMgr := NewMockConfig().Build()
 
 	mockState := &mockStateStore{
 		processedEvents: make(map[string]bool),
@@ -222,7 +221,7 @@ func TestSaveThread(t *testing.T) {
 
 func TestSaveThread_PersistenceError(t *testing.T) {
 	mockSlack := &mockSlackClient{}
-	configMgr := config.New()
+	configMgr := NewMockConfig().Build()
 
 	mockState := &mockStateStore{
 		processedEvents: make(map[string]bool),

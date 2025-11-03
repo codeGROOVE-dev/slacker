@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
-	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/slacker/pkg/notify"
 	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
@@ -57,7 +56,7 @@ type Coordinator struct {
 	workspaceName    string // Track workspace name for better logging
 	slack            SlackClient
 	github           GitHubClient
-	configManager    *config.Manager
+	configManager    ConfigManager
 	notifier         *notify.Manager
 	userMapper       UserMapper
 	threadCache      *ThreadCache   // In-memory cache for fast lookups
@@ -84,7 +83,7 @@ func New(
 	ctx context.Context,
 	slackClient SlackClient,
 	githubClient GitHubClient,
-	configManager *config.Manager,
+	configManager ConfigManager,
 	notifier *notify.Manager,
 	sprinklerURL string,
 	stateStore StateStore,

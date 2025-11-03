@@ -168,7 +168,8 @@ func TestIsUserActive(t *testing.T) {
 		}
 
 		client := &Client{
-			api: api,
+			api:        api,
+			retryDelay: 1 * time.Millisecond,
 		}
 
 		// Should return false on error

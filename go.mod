@@ -4,7 +4,7 @@ go 1.25.1
 
 require (
 	github.com/codeGROOVE-dev/ds9 v0.6.0
-	github.com/codeGROOVE-dev/gh-mailto v0.0.0-20251030132316-7b86852c2928
+	github.com/codeGROOVE-dev/gh-mailto v0.0.0-20251030182955-b6a1494332f1
 	github.com/codeGROOVE-dev/gsm v0.0.0-20251019065141-833fe2363d22
 	github.com/codeGROOVE-dev/prx v0.0.0-20251030022101-ff906928a1e4
 	github.com/codeGROOVE-dev/retry v1.3.0
@@ -29,8 +29,6 @@ require (
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
-	github.com/shurcooL/githubv4 v0.0.0-20240727222349-48295856cce7 // indirect
-	github.com/shurcooL/graphql v0.0.0-20230722043721-ed46e5a46466 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	golang.org/x/crypto v0.43.0 // indirect
 	golang.org/x/net v0.46.0 // indirect

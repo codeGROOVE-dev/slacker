@@ -7,7 +7,6 @@ import (
 
 	"github.com/codeGROOVE-dev/prx/pkg/prx"
 	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
-	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
 
@@ -16,7 +15,7 @@ func TestHandlePullRequestEventWithData_NoChannelsConfigured(t *testing.T) {
 	ctx := context.Background()
 
 	// Config manager that returns no channels
-	cfg := config.New()
+	cfg := NewMockConfig().Build()
 
 	c := &Coordinator{
 		github:         &mockGitHub{org: "testorg", token: "test-token"},
@@ -78,7 +77,7 @@ func TestHandlePullRequestEventWithData_WithBlockedUsers(t *testing.T) {
 	ctx := context.Background()
 
 	// Config manager with one channel configured
-	cfg := config.New()
+	cfg := NewMockConfig().Build()
 	// We can't easily inject config, but that's okay - this function loads it internally
 	// The test will exercise the code path even if channels list is empty
 
@@ -156,7 +155,7 @@ func TestHandlePullRequestEventWithData_WithBlockedUsers(t *testing.T) {
 func TestHandlePullRequestEventWithData_NoBlockedUsers(t *testing.T) {
 	ctx := context.Background()
 
-	cfg := config.New()
+	cfg := NewMockConfig().Build()
 
 	c := &Coordinator{
 		github:         &mockGitHub{org: "testorg", token: "test-token"},
@@ -224,7 +223,7 @@ func TestHandlePullRequestEventWithData_NoBlockedUsers(t *testing.T) {
 func TestHandlePullRequestEventWithData_MergedPR(t *testing.T) {
 	ctx := context.Background()
 
-	cfg := config.New()
+	cfg := NewMockConfig().Build()
 
 	c := &Coordinator{
 		github:         &mockGitHub{org: "testorg", token: "test-token"},

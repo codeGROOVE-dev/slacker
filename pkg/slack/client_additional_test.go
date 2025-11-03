@@ -244,7 +244,8 @@ func TestIsUserInChannel(t *testing.T) {
 		}
 
 		client := &Client{
-			api: api,
+			api:        api,
+			retryDelay: 1 * time.Millisecond,
 			cache: &apiCache{
 				entries: make(map[string]cacheEntry),
 			},
@@ -375,7 +376,8 @@ func TestChannelHistory(t *testing.T) {
 		}
 
 		client := &Client{
-			api: api,
+			api:        api,
+			retryDelay: 1 * time.Millisecond,
 		}
 
 		_, err := client.ChannelHistory(ctx, "C123", "", "", 100)

@@ -6,6 +6,8 @@ package bot
 import (
 	"context"
 
+	"github.com/codeGROOVE-dev/slacker/pkg/config"
+	"github.com/codeGROOVE-dev/slacker/pkg/github"
 	"github.com/slack-go/slack"
 )
 
@@ -35,7 +37,7 @@ type GitHubClient interface {
 
 // ConfigManager defines configuration operations.
 type ConfigManager interface {
-	Config(org string) (any, bool)
+	Config(org string) (*config.RepoConfig, bool)
 	LoadConfig(ctx context.Context, org string) error
 	ReloadConfig(ctx context.Context, org string) error
 	Domain(org string) string
@@ -49,4 +51,10 @@ type ConfigManager interface {
 type UserMapper interface {
 	SlackHandle(ctx context.Context, githubUsername, organization, domain string) (string, error)
 	FormatUserMentions(ctx context.Context, githubUsernames []string, organization, domain string) string
+}
+
+// PRSearcher defines GitHub PR search operations for polling.
+type PRSearcher interface {
+	ListOpenPRs(ctx context.Context, org string, updatedSinceHours int) ([]github.PRSnapshot, error)
+	ListClosedPRs(ctx context.Context, org string, updatedSinceHours int) ([]github.PRSnapshot, error)
 }

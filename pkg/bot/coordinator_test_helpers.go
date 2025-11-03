@@ -7,6 +7,7 @@ import (
 	"time"
 
 	ghmailto "github.com/codeGROOVE-dev/gh-mailto/pkg/gh-mailto"
+	"github.com/codeGROOVE-dev/slacker/pkg/github"
 	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	"github.com/slack-go/slack"
@@ -430,4 +431,33 @@ type TagInfo struct {
 	ChannelID   string
 	TaggedAt    time.Time
 	WorkspaceID string
+}
+
+// notifyError is a simple error type for testing notification failures.
+type notifyError struct {
+	message string
+}
+
+func (e *notifyError) Error() string {
+	return e.message
+}
+
+// mockPRSearcher implements PRSearcher interface for testing polling logic.
+type mockPRSearcher struct {
+	listOpenPRsFunc   func(ctx context.Context, org string, updatedSinceHours int) ([]github.PRSnapshot, error)
+	listClosedPRsFunc func(ctx context.Context, org string, updatedSinceHours int) ([]github.PRSnapshot, error)
+}
+
+func (m *mockPRSearcher) ListOpenPRs(ctx context.Context, org string, updatedSinceHours int) ([]github.PRSnapshot, error) {
+	if m.listOpenPRsFunc != nil {
+		return m.listOpenPRsFunc(ctx, org, updatedSinceHours)
+	}
+	return nil, errors.New("mock: ListOpenPRs not configured")
+}
+
+func (m *mockPRSearcher) ListClosedPRs(ctx context.Context, org string, updatedSinceHours int) ([]github.PRSnapshot, error) {
+	if m.listClosedPRsFunc != nil {
+		return m.listClosedPRsFunc(ctx, org, updatedSinceHours)
+	}
+	return nil, errors.New("mock: ListClosedPRs not configured")
 }

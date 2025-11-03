@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/prx/pkg/prx"
-	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 	"github.com/slack-go/slack"
 )
@@ -17,7 +16,7 @@ func TestHandlePullRequestEventWithData_ConfigLoadError(t *testing.T) {
 	ctx := context.Background()
 
 	// Config manager that fails to load
-	cfg := config.New()
+	cfg := NewMockConfig().Build()
 
 	c := NewTestCoordinator().
 		WithState(NewMockState().Build()).
@@ -96,7 +95,7 @@ func TestHandlePullRequestEventWithData_WithChannelsAndTaggedUsers(t *testing.T)
 	c := NewTestCoordinator().
 		WithState(NewMockState().Build()).
 		WithSlack(mockSlack).
-		WithConfig(config.New()).
+		WithConfig(NewMockConfig().Build()).
 		WithUserMapper(mapper).
 		Build()
 	c.workspaceName = "test-workspace.slack.com"
@@ -166,7 +165,7 @@ func TestHandlePullRequestEventWithData_NoTaggedUsersWithBlockedUsers(t *testing
 	c := NewTestCoordinator().
 		WithState(NewMockState().Build()).
 		WithSlack(mockSlack).
-		WithConfig(config.New()).
+		WithConfig(NewMockConfig().Build()).
 		WithUserMapper(mapper).
 		Build()
 	c.workspaceName = "test-workspace.slack.com"
@@ -226,7 +225,7 @@ func TestHandlePullRequestEventWithData_DuplicateBlockedUsers(t *testing.T) {
 	c := NewTestCoordinator().
 		WithState(NewMockState().Build()).
 		WithSlack(mockSlack).
-		WithConfig(config.New()).
+		WithConfig(NewMockConfig().Build()).
 		WithUserMapper(NewMockUserMapper().WithDefaultMapping().Build()).
 		Build()
 
@@ -278,7 +277,7 @@ func TestHandlePullRequestEventWithData_ExtractStateFromTurnclient(t *testing.T)
 	c := NewTestCoordinator().
 		WithState(NewMockState().Build()).
 		WithSlack(NewMockSlack().Build()).
-		WithConfig(config.New()).
+		WithConfig(NewMockConfig().Build()).
 		Build()
 
 	tests := []struct {

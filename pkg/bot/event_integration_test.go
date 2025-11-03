@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
-	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 	"github.com/slack-go/slack"
 )
@@ -38,7 +37,7 @@ func TestIntegration_FindOrCreatePRThread_CreateNew(t *testing.T) {
 	c := &Coordinator{
 		slack:         mockSlack,
 		stateStore:    mockState,
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
@@ -152,7 +151,7 @@ func TestIntegration_FindOrCreatePRThread_FindExisting(t *testing.T) {
 	c := &Coordinator{
 		slack:         mockSlack,
 		stateStore:    mockState,
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
@@ -272,7 +271,7 @@ func TestIntegration_FindOrCreatePRThread_ConcurrentCreation(t *testing.T) {
 	c := &Coordinator{
 		slack:         mockSlack,
 		stateStore:    mockState,
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}

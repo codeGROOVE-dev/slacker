@@ -6,7 +6,6 @@ import (
 
 	"github.com/codeGROOVE-dev/prx/pkg/prx"
 	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
-	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
 
@@ -25,7 +24,7 @@ func TestUpdateDMMessagesForPR_MergedPR(t *testing.T) {
 		github:        &mockGitHub{org: "testorg", token: "test-token"},
 		slack:         &mockSlackClient{},
 		stateStore:    mockStore,
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 		userMapper:    &mockUserMapper{},
 		threadCache:   cache.New(),
 	}
@@ -65,7 +64,7 @@ func TestUpdateDMMessagesForPR_ClosedPR(t *testing.T) {
 		github:        &mockGitHub{org: "testorg", token: "test-token"},
 		slack:         &mockSlackClient{},
 		stateStore:    mockStore,
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 		userMapper:    &mockUserMapper{},
 		threadCache:   cache.New(),
 	}
@@ -107,7 +106,7 @@ func TestUpdateDMMessagesForPR_NoDMRecipients(t *testing.T) {
 		github:        &mockGitHub{org: "testorg", token: "test-token"},
 		slack:         &mockSlackClient{},
 		stateStore:    mockStore,
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 		userMapper:    &mockUserMapper{},
 		threadCache:   cache.New(),
 	}
@@ -140,7 +139,7 @@ func TestUpdateDMMessagesForPR_BlockedUsersState(t *testing.T) {
 		github:        &mockGitHub{org: "testorg", token: "test-token"},
 		slack:         &mockSlackClient{},
 		stateStore:    mockStore,
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 		userMapper:    &mockUserMapper{},
 		threadCache:   cache.New(),
 	}
@@ -182,7 +181,7 @@ func TestUpdateDMMessagesForPR_NoBlockedUsers(t *testing.T) {
 		github:        &mockGitHub{org: "testorg", token: "test-token"},
 		slack:         &mockSlackClient{},
 		stateStore:    mockStore,
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 		userMapper:    &mockUserMapper{},
 		threadCache:   cache.New(),
 	}
@@ -221,7 +220,7 @@ func TestUpdateDMMessagesForPR_SystemUserOnly(t *testing.T) {
 		github:        &mockGitHub{org: "testorg", token: "test-token"},
 		slack:         &mockSlackClient{},
 		stateStore:    mockStore,
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 		userMapper:    &mockUserMapper{},
 		threadCache:   cache.New(),
 	}
@@ -264,7 +263,7 @@ func TestUpdateDMMessagesForPR_NilCheckResult(t *testing.T) {
 		github:        &mockGitHub{org: "testorg", token: "test-token"},
 		slack:         &mockSlackClient{},
 		stateStore:    mockStore,
-		configManager: config.New(),
+		configManager: NewMockConfig().Build(),
 		userMapper:    &mockUserMapper{},
 		threadCache:   cache.New(),
 	}

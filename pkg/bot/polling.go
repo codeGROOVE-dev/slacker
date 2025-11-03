@@ -57,10 +57,14 @@ func (c *Coordinator) PollAndReconcile(ctx context.Context) {
 		return
 	}
 
-	gqlClient := github.NewGraphQLClient(ctx, token)
+	searcher := github.NewGraphQLClient(ctx, token)
+	c.pollAndReconcileWithSearcher(ctx, searcher, org)
+}
 
+// pollAndReconcileWithSearcher is the core polling logic, extracted for testability.
+func (c *Coordinator) pollAndReconcileWithSearcher(ctx context.Context, searcher PRSearcher, org string) {
 	// Query all open PRs updated in last 24 hours
-	prs, err := gqlClient.ListOpenPRs(ctx, org, 24)
+	prs, err := searcher.ListOpenPRs(ctx, org, 24)
 	if err != nil {
 		slog.Error("failed to poll open PRs",
 			"org", org,
@@ -119,7 +123,7 @@ func (c *Coordinator) PollAndReconcile(ctx context.Context) {
 	}
 
 	// Query closed/merged PRs in last hour to update existing threads
-	closedPRs, err := gqlClient.ListClosedPRs(ctx, org, 1)
+	closedPRs, err := searcher.ListClosedPRs(ctx, org, 1)
 	if err != nil {
 		slog.Warn("failed to poll closed PRs",
 			"org", org,
