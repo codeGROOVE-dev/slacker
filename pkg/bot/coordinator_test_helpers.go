@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	ghmailto "github.com/codeGROOVE-dev/gh-mailto/pkg/gh-mailto"
@@ -15,6 +16,7 @@ import (
 
 // mockStateStore implements StateStore interface from bot package.
 type mockStateStore struct {
+	mu                sync.Mutex
 	threads           map[string]ThreadInfo
 	dmTimes           map[string]time.Time
 	dmUsers           map[string][]string
@@ -25,6 +27,8 @@ type mockStateStore struct {
 }
 
 func (m *mockStateStore) Thread(owner, repo string, number int, channelID string) (ThreadInfo, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	key := fmt.Sprintf("%s/%s#%d:%s", owner, repo, number, channelID)
 	if m.threads != nil {
 		if info, ok := m.threads[key]; ok {
@@ -35,6 +39,8 @@ func (m *mockStateStore) Thread(owner, repo string, number int, channelID string
 }
 
 func (m *mockStateStore) SaveThread(owner, repo string, number int, channelID string, info ThreadInfo) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.saveThreadErr != nil {
 		return m.saveThreadErr
 	}
@@ -47,6 +53,8 @@ func (m *mockStateStore) SaveThread(owner, repo string, number int, channelID st
 }
 
 func (m *mockStateStore) LastDM(userID, prURL string) (time.Time, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	key := userID + ":" + prURL
 	if m.dmTimes != nil {
 		if t, ok := m.dmTimes[key]; ok {
@@ -57,6 +65,8 @@ func (m *mockStateStore) LastDM(userID, prURL string) (time.Time, bool) {
 }
 
 func (m *mockStateStore) RecordDM(userID, prURL string, sentAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	key := userID + ":" + prURL
 	if m.dmTimes == nil {
 		m.dmTimes = make(map[string]time.Time)
@@ -66,6 +76,8 @@ func (m *mockStateStore) RecordDM(userID, prURL string, sentAt time.Time) error 
 }
 
 func (m *mockStateStore) ListDMUsers(prURL string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.dmUsers != nil {
 		if users, ok := m.dmUsers[prURL]; ok {
 			return users
@@ -75,6 +87,8 @@ func (m *mockStateStore) ListDMUsers(prURL string) []string {
 }
 
 func (m *mockStateStore) WasProcessed(eventKey string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.processedEvents != nil {
 		return m.processedEvents[eventKey]
 	}
@@ -82,6 +96,8 @@ func (m *mockStateStore) WasProcessed(eventKey string) bool {
 }
 
 func (m *mockStateStore) MarkProcessed(eventKey string, _ time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.markProcessedErr != nil {
 		return m.markProcessedErr
 	}
@@ -93,6 +109,8 @@ func (m *mockStateStore) MarkProcessed(eventKey string, _ time.Duration) error {
 }
 
 func (m *mockStateStore) LastNotification(prURL string) time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.lastNotifications != nil {
 		if t, ok := m.lastNotifications[prURL]; ok {
 			return t
@@ -102,6 +120,8 @@ func (m *mockStateStore) LastNotification(prURL string) time.Time {
 }
 
 func (m *mockStateStore) RecordNotification(prURL string, notifiedAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.lastNotifications == nil {
 		m.lastNotifications = make(map[string]time.Time)
 	}
@@ -130,6 +150,7 @@ func (*mockStateStore) Close() error {
 //
 //nolint:govet // fieldalignment optimization would reduce test readability
 type mockSlackClient struct {
+	mu                  sync.Mutex
 	postThreadFunc      func(ctx context.Context, channelID, text string, attachments []slack.Attachment) (string, error)
 	updateMessageFunc   func(ctx context.Context, channelID, timestamp, text string) error
 	updateDMMessageFunc func(ctx context.Context, userID, timestamp, text string) error
@@ -170,11 +191,13 @@ type mockUpdatedDMMessage struct {
 }
 
 func (m *mockSlackClient) PostThread(ctx context.Context, channelID, text string, attachments []slack.Attachment) (string, error) {
+	m.mu.Lock()
 	m.postedMessages = append(m.postedMessages, mockPostedMessage{
 		ChannelID:   channelID,
 		Text:        text,
 		Attachments: attachments,
 	})
+	m.mu.Unlock()
 	if m.postThreadFunc != nil {
 		return m.postThreadFunc(ctx, channelID, text, attachments)
 	}
@@ -182,11 +205,13 @@ func (m *mockSlackClient) PostThread(ctx context.Context, channelID, text string
 }
 
 func (m *mockSlackClient) UpdateMessage(ctx context.Context, channelID, timestamp, text string) error {
+	m.mu.Lock()
 	m.updatedMessages = append(m.updatedMessages, mockUpdatedMessage{
 		ChannelID: channelID,
 		Timestamp: timestamp,
 		Text:      text,
 	})
+	m.mu.Unlock()
 	if m.updateMessageFunc != nil {
 		return m.updateMessageFunc(ctx, channelID, timestamp, text)
 	}
@@ -194,11 +219,13 @@ func (m *mockSlackClient) UpdateMessage(ctx context.Context, channelID, timestam
 }
 
 func (m *mockSlackClient) UpdateDMMessage(ctx context.Context, userID, prURL, text string) error {
+	m.mu.Lock()
 	m.updatedDMMessage = append(m.updatedDMMessage, mockUpdatedDMMessage{
 		UserID: userID,
 		PRURL:  prURL,
 		Text:   text,
 	})
+	m.mu.Unlock()
 	if m.updateDMMessageFunc != nil {
 		return m.updateDMMessageFunc(ctx, userID, prURL, text)
 	}
@@ -363,6 +390,7 @@ func (m *mockUserMapper) FormatUserMentions(ctx context.Context, githubUsers []s
 
 // mockTracker is a simple mock for notification tracking in tests.
 type mockTracker struct {
+	mu              sync.Mutex
 	channelNotified bool
 	userTags        []mockUserTag
 	tagInfoByUser   map[string]TagInfo // Map from slackUserID to TagInfo for testing
@@ -378,10 +406,14 @@ type mockUserTag struct {
 }
 
 func (m *mockTracker) UpdateChannelNotification(workspaceID, owner, repo string, prNumber int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.channelNotified = true
 }
 
 func (m *mockTracker) UpdateUserPRChannelTag(workspaceID, slackUserID, channelID, owner, repo string, prNumber int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.userTags = append(m.userTags, mockUserTag{
 		workspaceID: workspaceID,
 		slackUserID: slackUserID,
@@ -393,6 +425,8 @@ func (m *mockTracker) UpdateUserPRChannelTag(workspaceID, slackUserID, channelID
 }
 
 func (m *mockTracker) LastUserPRChannelTag(workspaceID, slackUserID, owner, repo string, prNumber int) TagInfo {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.tagInfoByUser != nil {
 		if tagInfo, ok := m.tagInfoByUser[slackUserID]; ok {
 			return tagInfo
@@ -403,6 +437,7 @@ func (m *mockTracker) LastUserPRChannelTag(workspaceID, slackUserID, owner, repo
 
 // mockNotifier is a simple mock for notification manager in tests.
 type mockNotifier struct {
+	mu              sync.Mutex
 	Tracker         *mockTracker
 	notifyUserError error
 	notifyCalls     []notifyUserCall
@@ -417,12 +452,14 @@ type notifyUserCall struct {
 
 // NotifyUser mocks the notify.Manager.NotifyUser method.
 func (m *mockNotifier) NotifyUser(ctx context.Context, workspaceID, userID, channelID, channelName string, pr interface{}) error {
+	m.mu.Lock()
 	m.notifyCalls = append(m.notifyCalls, notifyUserCall{
 		workspaceID: workspaceID,
 		userID:      userID,
 		channelID:   channelID,
 		channelName: channelName,
 	})
+	m.mu.Unlock()
 	return m.notifyUserError
 }
 

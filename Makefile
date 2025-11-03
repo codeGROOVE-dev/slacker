@@ -16,7 +16,7 @@ build-registrar:
 
 # Run tests with race detection and coverage
 test:
-	go test -v -race -cover ./...
+	go test -race -cover ./...
 
 # Format code
 fmt:

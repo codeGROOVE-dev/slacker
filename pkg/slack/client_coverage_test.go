@@ -12,6 +12,8 @@ import (
 
 // TestPostThreadReply_ErrorCases tests error handling in PostThreadReply.
 func TestPostThreadReply_ErrorCases(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("channel_not_found", func(t *testing.T) {
@@ -123,6 +125,8 @@ func TestPostThreadReply_ErrorCases(t *testing.T) {
 
 // TestHasRecentDMAboutPR_WithStateStore tests HasRecentDMAboutPR with a state store.
 func TestHasRecentDMAboutPR_WithStateStore(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	prURL := "https://github.com/test/repo/pull/123"
 
@@ -244,6 +248,8 @@ func TestHasRecentDMAboutPR_WithStateStore(t *testing.T) {
 
 // TestSendDirectMessage_Errors tests error handling in SendDirectMessage.
 func TestSendDirectMessage_Errors(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("open_conversation_fails", func(t *testing.T) {
@@ -323,6 +329,8 @@ func TestSendDirectMessage_Errors(t *testing.T) {
 
 // TestSaveDMMessageInfo_WithStore tests SaveDMMessageInfo with a state store.
 func TestSaveDMMessageInfo_WithStore(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("saves_to_store", func(t *testing.T) {
@@ -376,6 +384,8 @@ func TestSaveDMMessageInfo_WithStore(t *testing.T) {
 
 // TestPostThread_Errors tests error handling in PostThread.
 func TestPostThread_Errors(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("channel_not_found_during_check", func(t *testing.T) {
@@ -495,6 +505,8 @@ func TestPostThread_Errors(t *testing.T) {
 
 // TestUpdateMessage_EdgeCases tests edge cases in UpdateMessage.
 func TestUpdateMessage_EdgeCases(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("message_not_found", func(t *testing.T) {

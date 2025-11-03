@@ -15,6 +15,8 @@ import (
 
 // TestResolveChannelID_ChannelIDInput tests when input is already a channel ID.
 func TestResolveChannelID_ChannelIDInput(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	// No API calls should be made
@@ -36,6 +38,8 @@ func TestResolveChannelID_ChannelIDInput(t *testing.T) {
 
 // TestResolveChannelID_HashPrefix tests when input has # prefix.
 func TestResolveChannelID_HashPrefix(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	api := &mockSlackAPI{
@@ -69,6 +73,8 @@ func TestResolveChannelID_HashPrefix(t *testing.T) {
 
 // TestResolveChannelID_CacheTypeMismatch tests handling of wrong cache type.
 func TestResolveChannelID_CacheTypeMismatch(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	callCount := 0
@@ -111,6 +117,8 @@ func TestResolveChannelID_CacheTypeMismatch(t *testing.T) {
 
 // TestResolveChannelID_FallbackToPublicOnly tests fallback to public channels only.
 func TestResolveChannelID_FallbackToPublicOnly(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	callCount := 0
@@ -155,6 +163,8 @@ func TestResolveChannelID_FallbackToPublicOnly(t *testing.T) {
 
 // TestResolveChannelID_EmptyChannelName tests empty channel name handling.
 func TestResolveChannelID_EmptyChannelName(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	api := &mockSlackAPI{}
@@ -175,6 +185,8 @@ func TestResolveChannelID_EmptyChannelName(t *testing.T) {
 
 // TestHandleBlockAction_RefreshButton tests the refresh_dashboard action.
 func TestHandleBlockAction_RefreshButton(t *testing.T) {
+	t.Parallel()
+
 	handlerDone := make(chan struct{})
 	var capturedTeamID, capturedUserID string
 
@@ -226,6 +238,8 @@ func TestHandleBlockAction_RefreshButton(t *testing.T) {
 
 // TestHandleBlockAction_RefreshButtonNoHandler tests refresh with no handler registered.
 func TestHandleBlockAction_RefreshButtonNoHandler(t *testing.T) {
+	t.Parallel()
+
 	client := &Client{
 		homeViewHandler: nil, // No handler
 	}
@@ -257,6 +271,8 @@ func TestHandleBlockAction_RefreshButtonNoHandler(t *testing.T) {
 
 // TestHandleBlockAction_RefreshButtonHandlerError tests error handling in refresh.
 func TestHandleBlockAction_RefreshButtonHandlerError(t *testing.T) {
+	t.Parallel()
+
 	handlerDone := make(chan struct{})
 
 	client := &Client{
@@ -296,6 +312,8 @@ func TestHandleBlockAction_RefreshButtonHandlerError(t *testing.T) {
 
 // TestHandleBlockAction_UnhandledAction tests handling of unknown action IDs.
 func TestHandleBlockAction_UnhandledAction(t *testing.T) {
+	t.Parallel()
+
 	client := &Client{
 		homeViewHandler: func(ctx context.Context, teamID, userID string) error {
 			t.Error("handler should not be called for unhandled action")
@@ -330,6 +348,8 @@ func TestHandleBlockAction_UnhandledAction(t *testing.T) {
 
 // TestHandleBlockAction_MultipleActions tests handling multiple actions in one callback.
 func TestHandleBlockAction_MultipleActions(t *testing.T) {
+	t.Parallel()
+
 	handlerCalls := make(chan struct{}, 2) // Buffer for 2 calls
 
 	client := &Client{
@@ -385,6 +405,8 @@ func TestHandleBlockAction_MultipleActions(t *testing.T) {
 
 // TestHandleBlockAction_EmptyActions tests handling of empty actions list.
 func TestHandleBlockAction_EmptyActions(t *testing.T) {
+	t.Parallel()
+
 	client := &Client{
 		homeViewHandler: func(ctx context.Context, teamID, userID string) error {
 			t.Error("handler should not be called for empty actions")
@@ -415,6 +437,8 @@ func TestHandleBlockAction_EmptyActions(t *testing.T) {
 
 // TestResolveChannelID_Pagination tests channel resolution with multiple pages.
 func TestResolveChannelID_Pagination(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	callCount := 0
@@ -472,6 +496,8 @@ func TestResolveChannelID_Pagination(t *testing.T) {
 
 // TestResolveChannelID_PaginationError tests error during pagination.
 func TestResolveChannelID_PaginationError(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	callCount := 0
@@ -513,6 +539,8 @@ func TestResolveChannelID_PaginationError(t *testing.T) {
 
 // TestResolveChannelID_ChannelNotFound tests when channel doesn't exist.
 func TestResolveChannelID_ChannelNotFound(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	api := &mockSlackAPI{
@@ -548,6 +576,8 @@ func TestResolveChannelID_ChannelNotFound(t *testing.T) {
 
 // TestResolveChannelID_BothFallbacksFail tests when both public+private and public-only fail.
 func TestResolveChannelID_BothFallbacksFail(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	callCount := 0
@@ -581,6 +611,8 @@ func TestResolveChannelID_BothFallbacksFail(t *testing.T) {
 
 // TestInteractionsHandler_ViewSubmission tests handling of view submission interactions.
 func TestInteractionsHandler_ViewSubmission(t *testing.T) {
+	t.Parallel()
+
 	client := &Client{
 		signingSecret: "test-secret",
 	}
@@ -612,6 +644,8 @@ func TestInteractionsHandler_ViewSubmission(t *testing.T) {
 
 // TestInteractionsHandler_UnknownType tests handling of unknown interaction types.
 func TestInteractionsHandler_UnknownType(t *testing.T) {
+	t.Parallel()
+
 	client := &Client{
 		signingSecret: "test-secret",
 	}
@@ -638,6 +672,8 @@ func TestInteractionsHandler_UnknownType(t *testing.T) {
 
 // TestInteractionsHandler_MissingPayload tests error handling for missing payload.
 func TestInteractionsHandler_MissingPayload(t *testing.T) {
+	t.Parallel()
+
 	client := &Client{
 		signingSecret: "test-secret",
 	}
@@ -656,6 +692,8 @@ func TestInteractionsHandler_MissingPayload(t *testing.T) {
 
 // TestInteractionsHandler_InvalidJSON tests error handling for invalid JSON.
 func TestInteractionsHandler_InvalidJSON(t *testing.T) {
+	t.Parallel()
+
 	client := &Client{
 		signingSecret: "test-secret",
 	}

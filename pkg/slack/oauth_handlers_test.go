@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/slack-go/slack"
 )
@@ -38,6 +39,8 @@ func (m *mockOAuthExchanger) ExchangeCode(ctx context.Context, clientID, clientS
 
 // TestHandleCallback_MissingCode tests when code parameter is missing.
 func TestHandleCallback_MissingCode(t *testing.T) {
+	t.Parallel()
+
 	handler := &OAuthHandler{
 		clientID:     "test-client-id",
 		clientSecret: "test-secret",
@@ -62,6 +65,8 @@ func TestHandleCallback_MissingCode(t *testing.T) {
 
 // TestHandleCallback_ShortCode tests OAuth code logging with short value.
 func TestHandleCallback_ShortCode(t *testing.T) {
+	t.Parallel()
+
 	handler := &OAuthHandler{
 		clientID:     "test-client-id",
 		clientSecret: "test-secret",
@@ -70,7 +75,10 @@ func TestHandleCallback_ShortCode(t *testing.T) {
 	}
 
 	// Use very short code (< 10 chars) to test min() edge case in logging
-	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=abc", nil)
+	// Use context with short timeout to avoid waiting for retries
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=abc", nil).WithContext(ctx)
 	w := httptest.NewRecorder()
 
 	handler.HandleCallback(w, req)
@@ -84,6 +92,8 @@ func TestHandleCallback_ShortCode(t *testing.T) {
 
 // TestHandleCallback_OAuthError tests when OAuth returns an error.
 func TestHandleCallback_OAuthError(t *testing.T) {
+	t.Parallel()
+
 	handler := &OAuthHandler{
 		clientID:     "test-client-id",
 		clientSecret: "test-secret",
@@ -109,6 +119,8 @@ func TestHandleCallback_OAuthError(t *testing.T) {
 
 // TestHandleCallback_StateMismatch tests CSRF protection.
 func TestHandleCallback_StateMismatch(t *testing.T) {
+	t.Parallel()
+
 	handler := &OAuthHandler{
 		clientID:     "test-client-id",
 		clientSecret: "test-secret",
@@ -137,6 +149,8 @@ func TestHandleCallback_StateMismatch(t *testing.T) {
 
 // TestHandleCallback_StateMismatchShortValue tests state mismatch with short strings.
 func TestHandleCallback_StateMismatchShortValue(t *testing.T) {
+	t.Parallel()
+
 	handler := &OAuthHandler{
 		clientID:     "test-client-id",
 		clientSecret: "test-secret",
@@ -166,6 +180,8 @@ func TestHandleCallback_StateMismatchShortValue(t *testing.T) {
 
 // TestHandleCallback_MissingStateCookie tests when state param exists but cookie doesn't.
 func TestHandleCallback_MissingStateCookie(t *testing.T) {
+	t.Parallel()
+
 	handler := &OAuthHandler{
 		clientID:     "test-client-id",
 		clientSecret: "test-secret",
@@ -191,6 +207,8 @@ func TestHandleCallback_MissingStateCookie(t *testing.T) {
 
 // TestHandleCallback_StateMatchSuccess tests successful state verification.
 func TestHandleCallback_StateMatchSuccess(t *testing.T) {
+	t.Parallel()
+
 	handler := &OAuthHandler{
 		clientID:     "test-client-id",
 		clientSecret: "test-secret",
@@ -198,7 +216,10 @@ func TestHandleCallback_StateMatchSuccess(t *testing.T) {
 		store:        &mockWorkspaceStore{},
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test-code&state=matching-state", nil)
+	// Use context with short timeout to avoid waiting for retries
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test-code&state=matching-state", nil).WithContext(ctx)
 	req.AddCookie(&http.Cookie{
 		Name:  "oauth_state",
 		Value: "matching-state",
@@ -220,6 +241,8 @@ func TestHandleCallback_StateMatchSuccess(t *testing.T) {
 
 // TestHandleCallback_CookieDeletion tests that state cookie is cleared after verification.
 func TestHandleCallback_CookieDeletion(t *testing.T) {
+	t.Parallel()
+
 	handler := &OAuthHandler{
 		clientID:     "test-client-id",
 		clientSecret: "test-secret",
@@ -227,7 +250,10 @@ func TestHandleCallback_CookieDeletion(t *testing.T) {
 		store:        &mockWorkspaceStore{},
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test-code&state=matching-state", nil)
+	// Use context with short timeout to avoid waiting for retries
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test-code&state=matching-state", nil).WithContext(ctx)
 	req.AddCookie(&http.Cookie{
 		Name:  "oauth_state",
 		Value: "matching-state",
@@ -270,6 +296,8 @@ func TestHandleCallback_CookieDeletion(t *testing.T) {
 
 // TestHandleCallback_NoStateParam tests direct installation without state.
 func TestHandleCallback_NoStateParam(t *testing.T) {
+	t.Parallel()
+
 	handler := &OAuthHandler{
 		clientID:     "test-client-id",
 		clientSecret: "test-secret",
@@ -277,7 +305,10 @@ func TestHandleCallback_NoStateParam(t *testing.T) {
 		store:        &mockWorkspaceStore{},
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test-code", nil)
+	// Use context with short timeout to avoid waiting for retries
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test-code", nil).WithContext(ctx)
 	// No state parameter, no cookie
 	w := httptest.NewRecorder()
 
@@ -295,6 +326,8 @@ func TestHandleCallback_NoStateParam(t *testing.T) {
 
 // TestHandleCallback_StoreWorkspaceError tests workspace storage failure.
 func TestHandleCallback_StoreWorkspaceError(t *testing.T) {
+	t.Parallel()
+
 	// Create mocks - OAuth succeeds but storage fails
 	mockExchanger := &mockOAuthExchanger{
 		exchangeFunc: func(ctx context.Context, clientID, clientSecret, code string) (*slack.OAuthV2Response, error) {
@@ -343,6 +376,8 @@ func TestHandleCallback_StoreWorkspaceError(t *testing.T) {
 
 // TestHandleCallback_OAuthNotOk tests OAuth response with Ok: false.
 func TestHandleCallback_OAuthNotOk(t *testing.T) {
+	t.Parallel()
+
 	mockExchanger := &mockOAuthExchanger{
 		exchangeFunc: func(ctx context.Context, clientID, clientSecret, code string) (*slack.OAuthV2Response, error) {
 			return &slack.OAuthV2Response{
@@ -378,6 +413,8 @@ func TestHandleCallback_OAuthNotOk(t *testing.T) {
 
 // TestHandleCallback_SuccessfulFlow tests complete OAuth success flow.
 func TestHandleCallback_SuccessfulFlow(t *testing.T) {
+	t.Parallel()
+
 	var storedMetadata *WorkspaceMetadata
 	var storedToken string
 
@@ -452,6 +489,8 @@ func TestHandleCallback_SuccessfulFlow(t *testing.T) {
 
 // TestWriteSuccessPage tests HTML success page rendering.
 func TestWriteSuccessPage(t *testing.T) {
+	t.Parallel()
+
 	handler := &OAuthHandler{}
 
 	w := httptest.NewRecorder()
@@ -482,6 +521,8 @@ func TestWriteSuccessPage(t *testing.T) {
 
 // TestWriteSuccessPage_EmptyWorkspaceName tests with empty workspace name.
 func TestWriteSuccessPage_EmptyWorkspaceName(t *testing.T) {
+	t.Parallel()
+
 	handler := &OAuthHandler{}
 
 	w := httptest.NewRecorder()
@@ -499,6 +540,8 @@ func TestWriteSuccessPage_EmptyWorkspaceName(t *testing.T) {
 
 // TestWriteInstallPage tests HTML install page rendering.
 func TestWriteInstallPage(t *testing.T) {
+	t.Parallel()
+
 	handler := &OAuthHandler{}
 
 	authURL := "https://slack.com/oauth/v2/authorize?client_id=test&scope=test"
@@ -530,6 +573,8 @@ func TestWriteInstallPage(t *testing.T) {
 
 // TestWriteInstallPage_EmptyAuthURL tests with empty auth URL.
 func TestWriteInstallPage_EmptyAuthURL(t *testing.T) {
+	t.Parallel()
+
 	handler := &OAuthHandler{}
 
 	w := httptest.NewRecorder()
@@ -547,6 +592,8 @@ func TestWriteInstallPage_EmptyAuthURL(t *testing.T) {
 
 // TestWriteInstallPage_SpecialCharactersInURL tests URL with special characters.
 func TestWriteInstallPage_SpecialCharactersInURL(t *testing.T) {
+	t.Parallel()
+
 	handler := &OAuthHandler{}
 
 	authURL := "https://slack.com/oauth?param1=value1&param2=value2&redirect_uri=https://example.com/callback"

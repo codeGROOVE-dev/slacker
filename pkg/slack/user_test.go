@@ -10,6 +10,8 @@ import (
 )
 
 func TestUserInfo(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("success", func(t *testing.T) {
@@ -55,6 +57,8 @@ func TestUserInfo(t *testing.T) {
 }
 
 func TestUserPresence(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("active", func(t *testing.T) {
@@ -122,6 +126,8 @@ func TestUserPresence(t *testing.T) {
 }
 
 func TestIsUserActive(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("active", func(t *testing.T) {
@@ -180,6 +186,8 @@ func TestIsUserActive(t *testing.T) {
 }
 
 func TestUserTimezone(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("has_timezone", func(t *testing.T) {
@@ -308,6 +316,8 @@ func TestUserTimezone(t *testing.T) {
 }
 
 func TestWorkspaceInfo(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("success", func(t *testing.T) {
@@ -497,6 +507,8 @@ func TestWorkspaceInfo(t *testing.T) {
 }
 
 func TestAPICache(t *testing.T) {
+	t.Parallel()
+
 	cache := &apiCache{
 		entries: make(map[string]cacheEntry),
 	}

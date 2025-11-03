@@ -10,6 +10,8 @@ import (
 
 // TestPostThreadReply tests posting a reply to a thread.
 func TestPostThreadReply(t *testing.T) {
+	t.Parallel()
+
 	mockSlack := slacktest.New()
 	defer mockSlack.Close()
 
@@ -46,6 +48,8 @@ func TestPostThreadReply(t *testing.T) {
 
 // TestHasRecentDMAboutPR_NoRecent tests when no recent DM exists.
 func TestHasRecentDMAboutPR_NoRecent(t *testing.T) {
+	t.Parallel()
+
 	mockSlack := slacktest.New()
 	defer mockSlack.Close()
 
@@ -70,6 +74,8 @@ func TestHasRecentDMAboutPR_NoRecent(t *testing.T) {
 
 // TestSaveDMMessageInfo tests saving DM message information.
 func TestSaveDMMessageInfo(t *testing.T) {
+	t.Parallel()
+
 	mockSlack := slacktest.New()
 	defer mockSlack.Close()
 

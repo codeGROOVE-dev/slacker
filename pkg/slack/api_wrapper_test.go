@@ -11,6 +11,8 @@ import (
 
 // TestSlackAPIWrapperIntegration tests the actual slackAPIWrapper with a mock HTTP server.
 func TestSlackAPIWrapperIntegration(t *testing.T) {
+	t.Parallel()
+
 	// Create a mock HTTP server that responds to Slack API calls
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Return simple successful responses for all endpoints

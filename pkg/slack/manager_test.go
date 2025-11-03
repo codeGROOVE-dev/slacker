@@ -7,6 +7,8 @@ import (
 
 // TestManagerSetStateStore tests Manager.SetStateStore.
 func TestManagerSetStateStore(t *testing.T) {
+	t.Parallel()
+
 	manager := NewManager("test-signing-secret")
 	mockStore := &mockStateStore{}
 
@@ -31,6 +33,8 @@ func TestManagerSetStateStore(t *testing.T) {
 
 // TestManagerSetHomeViewHandler tests Manager.SetHomeViewHandler.
 func TestManagerSetHomeViewHandler(t *testing.T) {
+	t.Parallel()
+
 	manager := NewManager("test-signing-secret")
 
 	// Create a client and add to manager's cache
@@ -67,6 +71,8 @@ func TestManagerSetHomeViewHandler(t *testing.T) {
 
 // TestManagerInvalidateCache tests Manager.InvalidateCache.
 func TestManagerInvalidateCache(t *testing.T) {
+	t.Parallel()
+
 	manager := NewManager("test-signing-secret")
 
 	// Create a client and metadata and add to manager's cache
@@ -100,6 +106,8 @@ func TestManagerInvalidateCache(t *testing.T) {
 
 // TestManagerListWorkspaces tests Manager.ListWorkspaces.
 func TestManagerListWorkspaces(t *testing.T) {
+	t.Parallel()
+
 	manager := NewManager("test-signing-secret")
 
 	// Add some metadata to cache
@@ -136,6 +144,8 @@ func TestManagerListWorkspaces(t *testing.T) {
 
 // TestManagerListWorkspacesEmpty tests Manager.ListWorkspaces with no cached workspaces.
 func TestManagerListWorkspacesEmpty(t *testing.T) {
+	t.Parallel()
+
 	manager := NewManager("test-signing-secret")
 
 	workspaces := manager.ListWorkspaces()

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 )
@@ -24,6 +25,8 @@ func generateValidSignature(secret, timestamp, body string) string {
 
 // TestEventsHandler_URLVerification tests the URL verification challenge.
 func TestEventsHandler_URLVerification(t *testing.T) {
+	t.Parallel()
+
 	challenge := "test-challenge-string"
 	body := map[string]interface{}{
 		"type":      "url_verification",
@@ -64,6 +67,8 @@ func TestEventsHandler_URLVerification(t *testing.T) {
 
 // TestEventsHandler_InvalidSignature tests signature verification failure.
 func TestEventsHandler_InvalidSignature(t *testing.T) {
+	t.Parallel()
+
 	body := []byte(`{"type":"url_verification","challenge":"test"}`)
 
 	client := &Client{
@@ -87,6 +92,8 @@ func TestEventsHandler_InvalidSignature(t *testing.T) {
 
 // TestEventsHandler_ReadBodyError tests when body reading fails.
 func TestEventsHandler_ReadBodyError(t *testing.T) {
+	t.Parallel()
+
 	client := &Client{
 		signingSecret: "test-secret",
 		cache: &apiCache{
@@ -114,6 +121,8 @@ func (e *errorReader) Read(p []byte) (n int, err error) {
 
 // TestEventsHandler_ParseEventError tests handling of malformed event JSON.
 func TestEventsHandler_ParseEventError(t *testing.T) {
+	t.Parallel()
+
 	body := []byte(`{invalid json`)
 
 	client := &Client{
@@ -139,6 +148,8 @@ func TestEventsHandler_ParseEventError(t *testing.T) {
 
 // TestEventsHandler_URLVerificationUnmarshalError tests challenge unmarshal error.
 func TestEventsHandler_URLVerificationUnmarshalError(t *testing.T) {
+	t.Parallel()
+
 	// Create a URL verification event but with malformed challenge field
 	body := []byte(`{"type":"url_verification","challenge":123}`)
 
@@ -166,8 +177,12 @@ func TestEventsHandler_URLVerificationUnmarshalError(t *testing.T) {
 
 // TestEventsHandler_AppHomeOpened tests app_home_opened event handling.
 func TestEventsHandler_AppHomeOpened(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
 	handlerCalled := false
 	var capturedTeamID, capturedUserID string
+	done := make(chan bool, 1)
 
 	client := &Client{
 		signingSecret: "test-secret",
@@ -179,9 +194,12 @@ func TestEventsHandler_AppHomeOpened(t *testing.T) {
 
 	// Set up home view handler
 	client.SetHomeViewHandler(func(ctx context.Context, teamID, userID string) error {
+		mu.Lock()
 		handlerCalled = true
 		capturedTeamID = teamID
 		capturedUserID = userID
+		mu.Unlock()
+		done <- true
 		return nil
 	})
 
@@ -213,9 +231,16 @@ func TestEventsHandler_AppHomeOpened(t *testing.T) {
 		t.Errorf("Expected status 200, got %d", w.Code)
 	}
 
-	// Give goroutine time to execute
-	time.Sleep(100 * time.Millisecond)
+	// Wait for handler to complete
+	select {
+	case <-done:
+		// Handler completed
+	case <-time.After(1 * time.Second):
+		t.Fatal("Timeout waiting for handler to be called")
+	}
 
+	mu.Lock()
+	defer mu.Unlock()
 	if !handlerCalled {
 		t.Error("Expected home view handler to be called")
 	}
@@ -229,6 +254,8 @@ func TestEventsHandler_AppHomeOpened(t *testing.T) {
 
 // TestEventsHandler_MessageEvent tests message event handling.
 func TestEventsHandler_MessageEvent(t *testing.T) {
+	t.Parallel()
+
 	client := &Client{
 		signingSecret: "test-secret",
 		teamID:        "T123",
@@ -268,6 +295,8 @@ func TestEventsHandler_MessageEvent(t *testing.T) {
 
 // TestEventsHandler_AppMentionEvent tests app_mention event handling.
 func TestEventsHandler_AppMentionEvent(t *testing.T) {
+	t.Parallel()
+
 	client := &Client{
 		signingSecret: "test-secret",
 		teamID:        "T123",
@@ -307,6 +336,8 @@ func TestEventsHandler_AppMentionEvent(t *testing.T) {
 
 // TestEventsHandler_AppHomeOpenedNoHandler tests when no handler is registered.
 func TestEventsHandler_AppHomeOpenedNoHandler(t *testing.T) {
+	t.Parallel()
+
 	client := &Client{
 		signingSecret: "test-secret",
 		teamID:        "T123",

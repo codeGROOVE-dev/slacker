@@ -11,6 +11,8 @@ import (
 )
 
 func TestUpdateDMMessage(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("no_state_store", func(t *testing.T) {
@@ -28,6 +30,8 @@ func TestUpdateDMMessage(t *testing.T) {
 }
 
 func TestSearchMessages(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("success", func(t *testing.T) {
@@ -83,6 +87,8 @@ func TestSearchMessages(t *testing.T) {
 }
 
 func TestAPI(t *testing.T) {
+	t.Parallel()
+
 	t.Run("wrapper_returns_raw_client", func(t *testing.T) {
 		rawClient := slack.New("test-token")
 		wrapper := newSlackAPIWrapper(rawClient)
@@ -112,6 +118,8 @@ func TestAPI(t *testing.T) {
 }
 
 func TestResolveChannelID(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("cached_channel", func(t *testing.T) {
@@ -194,6 +202,8 @@ func TestResolveChannelID(t *testing.T) {
 }
 
 func TestIsUserInChannel(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("user_in_channel", func(t *testing.T) {
@@ -259,6 +269,8 @@ func TestIsUserInChannel(t *testing.T) {
 }
 
 func TestPublishHomeView(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("success", func(t *testing.T) {
@@ -307,6 +319,8 @@ func TestPublishHomeView(t *testing.T) {
 }
 
 func TestChannelHistory(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("success", func(t *testing.T) {
@@ -412,6 +426,8 @@ func (m *programmableMockStateStore) SaveDMMessage(userID, prURL string, info st
 }
 
 func TestUpdateDMMessage_Complete(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	prURL := "https://github.com/test/repo/pull/123"
 

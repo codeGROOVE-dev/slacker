@@ -9,6 +9,8 @@ import (
 
 // TestSetTeamID tests the SetTeamID setter.
 func TestSetTeamID(t *testing.T) {
+	t.Parallel()
+
 	client := &Client{}
 
 	testID := "T12345"
@@ -21,6 +23,8 @@ func TestSetTeamID(t *testing.T) {
 
 // TestSetStateStore tests the SetStateStore setter.
 func TestSetStateStore(t *testing.T) {
+	t.Parallel()
+
 	client := &Client{}
 	mockStore := &mockStateStore{}
 
@@ -33,6 +37,8 @@ func TestSetStateStore(t *testing.T) {
 
 // TestSetManager tests the SetManager setter.
 func TestSetManager(t *testing.T) {
+	t.Parallel()
+
 	client := &Client{}
 	manager := &Manager{}
 
@@ -45,6 +51,8 @@ func TestSetManager(t *testing.T) {
 
 // TestInvalidateWorkspaceCache tests cache invalidation.
 func TestInvalidateWorkspaceCache(t *testing.T) {
+	t.Parallel()
+
 	// Test with nil manager (should not panic)
 	client := &Client{teamID: "T123"}
 	client.invalidateWorkspaceCache() // Should not panic
@@ -83,6 +91,8 @@ func TestInvalidateWorkspaceCache(t *testing.T) {
 
 // TestInvalidateChannel tests channel cache invalidation.
 func TestInvalidateChannel(t *testing.T) {
+	t.Parallel()
+
 	client := &Client{
 		cache: &apiCache{
 			entries: make(map[string]cacheEntry),
@@ -110,6 +120,8 @@ func TestInvalidateChannel(t *testing.T) {
 
 // TestCacheSetAndGet tests basic cache operations.
 func TestCacheSetAndGet(t *testing.T) {
+	t.Parallel()
+
 	cache := &apiCache{
 		entries: make(map[string]cacheEntry),
 	}
@@ -134,6 +146,8 @@ func TestCacheSetAndGet(t *testing.T) {
 
 // TestCacheInvalidate tests cache invalidation.
 func TestCacheInvalidate(t *testing.T) {
+	t.Parallel()
+
 	cache := &apiCache{
 		entries: make(map[string]cacheEntry),
 	}
@@ -160,6 +174,8 @@ func TestCacheInvalidate(t *testing.T) {
 
 // TestCacheGetExpired tests cache expiration.
 func TestCacheGetExpired(t *testing.T) {
+	t.Parallel()
+
 	cache := &apiCache{
 		entries: make(map[string]cacheEntry),
 	}

@@ -9,6 +9,8 @@ import (
 )
 
 func TestSlackAPIWrapper(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("RawClient", func(t *testing.T) {
