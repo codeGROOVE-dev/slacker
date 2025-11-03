@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/slacker/pkg/notify"
-	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
@@ -38,170 +38,14 @@ type prContext struct {
 	Number   int
 }
 
-// ThreadCache manages PR thread IDs for a workspace.
-//
-//nolint:govet // Field order optimized for logical grouping over memory alignment
-type ThreadCache struct {
-	mu           sync.RWMutex
-	creationLock sync.Mutex            // Prevents concurrent creation of the same PR thread
-	prThreads    map[string]ThreadInfo // "owner/repo#123" -> thread info
-	creating     map[string]bool       // Track PRs currently being created
-}
+// ThreadInfo is an alias to cache.ThreadInfo for backward compatibility.
+type ThreadInfo = cache.ThreadInfo
 
-// ThreadInfo is an alias to state.ThreadInfo to avoid duplication.
-type ThreadInfo = state.ThreadInfo
+// ThreadCache is an alias to cache.ThreadCache for backward compatibility.
+type ThreadCache = cache.ThreadCache
 
-// CommitPREntry caches recent commit→PR mappings for fast lookup.
-type CommitPREntry struct {
-	PRNumber  int
-	HeadSHA   string
-	UpdatedAt time.Time
-}
-
-// CommitPRCache provides in-memory caching of commit SHA → PR mappings.
-// This allows quick lookup when check events arrive with just a commit SHA,
-// avoiding expensive GitHub API calls for recently-seen PRs.
-type CommitPRCache struct {
-	mu      sync.RWMutex
-	entries map[string][]CommitPREntry // "owner/repo" -> recent PRs with commits
-}
-
-// Get retrieves thread info for a PR.
-func (tc *ThreadCache) Get(prKey string) (ThreadInfo, bool) {
-	tc.mu.RLock()
-	defer tc.mu.RUnlock()
-	info, exists := tc.prThreads[prKey]
-	return info, exists
-}
-
-// Set stores thread info for a PR.
-func (tc *ThreadCache) Set(prKey string, info ThreadInfo) {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	info.UpdatedAt = time.Now()
-	tc.prThreads[prKey] = info
-}
-
-// Cleanup removes entries older than the specified age.
-// This prevents unbounded memory growth for closed/merged PRs.
-func (tc *ThreadCache) Cleanup(maxAge time.Duration) {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-
-	cutoff := time.Now().Add(-maxAge)
-	for key, info := range tc.prThreads {
-		if info.UpdatedAt.Before(cutoff) {
-			delete(tc.prThreads, key)
-		}
-	}
-}
-
-// RecordPR records a PR's head commit SHA for commit→PR lookups.
-// Entries are kept for 10 minutes to handle check events that arrive shortly after PR events.
-func (cpc *CommitPRCache) RecordPR(owner, repo string, prNumber int, headSHA string) {
-	if headSHA == "" {
-		return // Skip empty commits
-	}
-
-	cpc.mu.Lock()
-	defer cpc.mu.Unlock()
-
-	repoKey := owner + "/" + repo
-	now := time.Now()
-
-	// Initialize map if needed
-	if cpc.entries == nil {
-		cpc.entries = make(map[string][]CommitPREntry)
-	}
-
-	// Add new entry
-	entry := CommitPREntry{
-		PRNumber:  prNumber,
-		HeadSHA:   headSHA,
-		UpdatedAt: now,
-	}
-
-	// Get existing entries for this repo
-	entries := cpc.entries[repoKey]
-
-	// Check if this exact PR+commit combination already exists - update timestamp if so
-	found := false
-	for i := range entries {
-		if entries[i].PRNumber == prNumber && entries[i].HeadSHA == headSHA {
-			entries[i].UpdatedAt = now // Refresh timestamp
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		entries = append(entries, entry)
-	}
-
-	// Update the map with the modified entries before filtering
-	cpc.entries[repoKey] = entries
-
-	// Keep only entries from last 10 minutes (check events usually arrive within seconds)
-	cutoff := now.Add(-10 * time.Minute)
-	filtered := make([]CommitPREntry, 0, len(entries))
-	for i := range entries {
-		if entries[i].UpdatedAt.After(cutoff) {
-			filtered = append(filtered, entries[i])
-		}
-	}
-
-	cpc.entries[repoKey] = filtered
-}
-
-// FindPRsForCommit finds PRs in a repo that match the given commit SHA.
-// Returns PR numbers if found in recent cache (last 10 minutes), nil otherwise.
-func (cpc *CommitPRCache) FindPRsForCommit(owner, repo, commitSHA string) []int {
-	if commitSHA == "" {
-		return nil
-	}
-
-	cpc.mu.RLock()
-	defer cpc.mu.RUnlock()
-
-	repoKey := owner + "/" + repo
-	entries, exists := cpc.entries[repoKey]
-	if !exists {
-		return nil
-	}
-
-	// Check which PRs have this commit
-	var prNumbers []int
-	for i := range entries {
-		if entries[i].HeadSHA == commitSHA {
-			prNumbers = append(prNumbers, entries[i].PRNumber)
-		}
-	}
-
-	return prNumbers
-}
-
-// MostRecentPR returns the most recently updated PR number for a repo from the cache.
-// Returns 0 if no recent PRs are cached for this repo.
-func (cpc *CommitPRCache) MostRecentPR(owner, repo string) int {
-	cpc.mu.RLock()
-	defer cpc.mu.RUnlock()
-
-	repoKey := owner + "/" + repo
-	entries, exists := cpc.entries[repoKey]
-	if !exists || len(entries) == 0 {
-		return 0
-	}
-
-	// Find the entry with the most recent UpdatedAt timestamp
-	mostRecent := entries[0]
-	for i := 1; i < len(entries); i++ {
-		if entries[i].UpdatedAt.After(mostRecent.UpdatedAt) {
-			mostRecent = entries[i]
-		}
-	}
-
-	return mostRecent.PRNumber
-}
+// CommitPRCache is an alias to cache.CommitPRCache for backward compatibility.
+type CommitPRCache = cache.CommitPRCache
 
 // Coordinator coordinates between GitHub, Slack, and notifications for a single org.
 //
@@ -215,7 +59,7 @@ type Coordinator struct {
 	github           GitHubClient
 	configManager    *config.Manager
 	notifier         *notify.Manager
-	userMapper       *usermapping.Service
+	userMapper       UserMapper
 	threadCache      *ThreadCache   // In-memory cache for fast lookups
 	commitPRCache    *CommitPRCache // Maps commit SHAs to PR numbers for check events
 	eventSemaphore   chan struct{}  // Limits concurrent event processing (prevents overwhelming APIs)
@@ -246,20 +90,15 @@ func New(
 	stateStore StateStore,
 ) *Coordinator {
 	c := &Coordinator{
-		slack:         slackClient,
-		github:        githubClient,
-		configManager: configManager,
-		notifier:      notifier,
-		userMapper:    usermapping.New(slackClient.API(), githubClient.InstallationToken(ctx)),
-		sprinklerURL:  sprinklerURL,
-		stateStore:    stateStore,
-		threadCache: &ThreadCache{
-			prThreads: make(map[string]ThreadInfo),
-			creating:  make(map[string]bool),
-		},
-		commitPRCache: &CommitPRCache{
-			entries: make(map[string][]CommitPREntry),
-		},
+		slack:          slackClient,
+		github:         githubClient,
+		configManager:  configManager,
+		notifier:       notifier,
+		userMapper:     usermapping.New(slackClient.API(), githubClient.InstallationToken(ctx)),
+		sprinklerURL:   sprinklerURL,
+		stateStore:     stateStore,
+		threadCache:    cache.New(),
+		commitPRCache:  cache.NewCommitPRCache(),
 		eventSemaphore: make(chan struct{}, 10), // Allow 10 concurrent events per org
 	}
 
@@ -378,11 +217,8 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 
 	// Prevent concurrent creation of the same PR thread in same channel
 	// Lock on cacheKey (with channel) to allow parallel creation in different channels
-	c.threadCache.creationLock.Lock()
-	// Check if another goroutine is already creating this thread in this channel
-	if c.threadCache.creating[cacheKey] {
-		c.threadCache.creationLock.Unlock()
-		// Wait for the other goroutine to finish (up to 30 seconds)
+	if !c.threadCache.MarkCreating(cacheKey) {
+		// Another goroutine is already creating this thread
 		slog.Info("another goroutine is creating this PR thread, waiting for completion",
 			"pr", cacheKey)
 		deadline := time.Now().Add(30 * time.Second)
@@ -396,37 +232,39 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 				return threadInfo.ThreadTS, false, "", nil
 			}
 			// Check if the other goroutine finished (even if it failed)
-			c.threadCache.creationLock.Lock()
-			stillCreating := c.threadCache.creating[cacheKey]
-			c.threadCache.creationLock.Unlock()
-			if !stillCreating {
+			if !c.threadCache.IsCreating(cacheKey) {
 				// Other goroutine finished but didn't cache (likely failed)
-				// Proceed to try creating ourselves
+				// Try to mark as creating ourselves
+				if !c.threadCache.MarkCreating(cacheKey) {
+					// Someone else started again, keep waiting
+					continue
+				}
+				// We successfully marked it, break out to create
 				break
 			}
 		}
-		slog.Warn("timed out waiting for concurrent thread creation, will try creating ourselves",
-			"pr", cacheKey)
-		c.threadCache.creationLock.Lock()
+		if c.threadCache.IsCreating(cacheKey) {
+			slog.Warn("timed out waiting for concurrent thread creation, will try creating ourselves",
+				"pr", cacheKey)
+			// Try to take over creation
+			if !c.threadCache.MarkCreating(cacheKey) {
+				// Still being created, give up
+				return "", false, "", fmt.Errorf("timed out waiting for thread creation")
+			}
+		}
 	}
-	// Double-check cache while holding lock (another goroutine might have just finished)
+
+	// Double-check cache after marking as creating
 	if threadInfo, exists := c.threadCache.Get(cacheKey); exists {
-		c.threadCache.creationLock.Unlock()
-		slog.Debug("found PR thread in cache during lock acquisition",
+		c.threadCache.UnmarkCreating(cacheKey)
+		slog.Debug("found PR thread in cache after marking as creating",
 			"pr", cacheKey,
 			"thread_ts", threadInfo.ThreadTS)
 		return threadInfo.ThreadTS, false, "", nil
 	}
-	// Mark as creating
-	c.threadCache.creating[cacheKey] = true
-	c.threadCache.creationLock.Unlock()
 
 	// Ensure we clean up the creating flag
-	defer func() {
-		c.threadCache.creationLock.Lock()
-		delete(c.threadCache.creating, cacheKey)
-		c.threadCache.creationLock.Unlock()
-	}()
+	defer c.threadCache.UnmarkCreating(cacheKey)
 
 	// CRITICAL: Perform one final cross-instance check RIGHT before the expensive operations
 	// This handles the case where another instance (during rolling deployment) just created
@@ -853,7 +691,10 @@ func (c *Coordinator) sendDMNotificationsToSlackUsers(
 
 	for slackUserID := range slackUsers {
 		// Get tag info to determine which channel the user was tagged in
-		tagInfo := c.notifier.Tracker.LastUserPRChannelTag(workspaceID, slackUserID, owner, repo, prNumber)
+		var tagInfo notify.TagInfo
+		if c.notifier != nil && c.notifier.Tracker != nil {
+			tagInfo = c.notifier.Tracker.LastUserPRChannelTag(workspaceID, slackUserID, owner, repo, prNumber)
+		}
 
 		// For channel name lookup (needed for config), we need to resolve the channel ID back to name
 		// This is optional - if we can't resolve it, NotifyUser will use defaults
@@ -865,30 +706,32 @@ func (c *Coordinator) sendDMNotificationsToSlackUsers(
 		}
 
 		// Send notification using smart delay logic
-		prInfo := notify.PRInfo{
-			Owner:   owner,
-			Repo:    repo,
-			Number:  prNumber,
-			Title:   event.PullRequest.Title,
-			Author:  event.PullRequest.User.Login,
-			State:   prState,
-			HTMLURL: event.PullRequest.HTMLURL,
-		}
-		// Add workflow state and next actions if available
-		if checkResult != nil {
-			prInfo.WorkflowState = checkResult.Analysis.WorkflowState
-			prInfo.NextAction = checkResult.Analysis.NextAction
-		}
+		if c.notifier != nil {
+			prInfo := notify.PRInfo{
+				Owner:   owner,
+				Repo:    repo,
+				Number:  prNumber,
+				Title:   event.PullRequest.Title,
+				Author:  event.PullRequest.User.Login,
+				State:   prState,
+				HTMLURL: event.PullRequest.HTMLURL,
+			}
+			// Add workflow state and next actions if available
+			if checkResult != nil {
+				prInfo.WorkflowState = checkResult.Analysis.WorkflowState
+				prInfo.NextAction = checkResult.Analysis.NextAction
+			}
 
-		err := c.notifier.NotifyUser(ctx, workspaceID, slackUserID, tagInfo.ChannelID, channelName, prInfo)
-		if err != nil {
-			slog.Warn("failed to notify user",
-				logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-				"slack_user", slackUserID,
-				"error", err)
-			failedCount++
-		} else {
-			sentCount++
+			err := c.notifier.NotifyUser(ctx, workspaceID, slackUserID, tagInfo.ChannelID, channelName, prInfo)
+			if err != nil {
+				slog.Warn("failed to notify user",
+					logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+					"slack_user", slackUserID,
+					"error", err)
+				failedCount++
+			} else {
+				sentCount++
+			}
 		}
 	}
 
@@ -950,32 +793,34 @@ func (c *Coordinator) sendDMNotificationsToGitHubUsers(
 		}
 
 		// Send immediate DM (no channel tag delay logic since no channels were notified)
-		prInfo := notify.PRInfo{
-			Owner:   owner,
-			Repo:    repo,
-			Number:  prNumber,
-			Title:   event.PullRequest.Title,
-			Author:  event.PullRequest.User.Login,
-			State:   prState,
-			HTMLURL: event.PullRequest.HTMLURL,
-		}
-		// Add workflow state and next actions if available
-		if checkResult != nil {
-			prInfo.WorkflowState = checkResult.Analysis.WorkflowState
-			prInfo.NextAction = checkResult.Analysis.NextAction
-		}
+		if c.notifier != nil {
+			prInfo := notify.PRInfo{
+				Owner:   owner,
+				Repo:    repo,
+				Number:  prNumber,
+				Title:   event.PullRequest.Title,
+				Author:  event.PullRequest.User.Login,
+				State:   prState,
+				HTMLURL: event.PullRequest.HTMLURL,
+			}
+			// Add workflow state and next actions if available
+			if checkResult != nil {
+				prInfo.WorkflowState = checkResult.Analysis.WorkflowState
+				prInfo.NextAction = checkResult.Analysis.NextAction
+			}
 
-		// Send immediate DM (pass empty channelID and channelName since no channels were notified)
-		err = c.notifier.NotifyUser(ctx, workspaceID, slackUserID, "", "", prInfo)
-		if err != nil {
-			slog.Warn("failed to send immediate DM",
-				logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-				"github_user", githubUser,
-				"slack_user", slackUserID,
-				"error", err)
-			failedCount++
-		} else {
-			sentCount++
+			// Send immediate DM (pass empty channelID and channelName since no channels were notified)
+			err = c.notifier.NotifyUser(ctx, workspaceID, slackUserID, "", "", prInfo)
+			if err != nil {
+				slog.Warn("failed to send immediate DM",
+					logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+					"github_user", githubUser,
+					"slack_user", slackUserID,
+					"error", err)
+				failedCount++
+			} else {
+				sentCount++
+			}
 		}
 	}
 
@@ -1476,7 +1321,9 @@ func (c *Coordinator) processPRForChannel(
 	}
 
 	// Track that we notified users in this channel for DM delay logic
-	c.notifier.Tracker.UpdateChannelNotification(workspaceID, owner, repo, prNumber)
+	if c.notifier != nil && c.notifier.Tracker != nil {
+		c.notifier.Tracker.UpdateChannelNotification(workspaceID, owner, repo, prNumber)
+	}
 
 	// Track user tags in channel for DM delay logic and collect successfully tagged Slack users
 	taggedUsers := make(map[string]bool)
@@ -1491,7 +1338,9 @@ func (c *Coordinator) processPRForChannel(
 		for _, githubUser := range blockedUsers {
 			slackUserID, err := c.userMapper.SlackHandle(lookupCtx, githubUser, owner, domain)
 			if err == nil && slackUserID != "" {
-				c.notifier.Tracker.UpdateUserPRChannelTag(workspaceID, slackUserID, channelID, owner, repo, prNumber)
+				if c.notifier != nil && c.notifier.Tracker != nil {
+					c.notifier.Tracker.UpdateUserPRChannelTag(workspaceID, slackUserID, channelID, owner, repo, prNumber)
+				}
 				taggedUsers[slackUserID] = true
 				slog.Debug("tracked user tag in channel",
 					"workspace", workspaceID,

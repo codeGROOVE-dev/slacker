@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"time"
 
+	ghmailto "github.com/codeGROOVE-dev/gh-mailto/pkg/gh-mailto"
+	"github.com/codeGROOVE-dev/slacker/pkg/state"
+	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	"github.com/slack-go/slack"
 )
 
@@ -105,6 +108,19 @@ func (m *mockStateStore) RecordNotification(prURL string, notifiedAt time.Time) 
 	return nil
 }
 
+// notify.Store interface methods for DM queue management.
+func (*mockStateStore) QueuePendingDM(dm state.PendingDM) error {
+	return nil // No-op for tests
+}
+
+func (*mockStateStore) GetPendingDMs(before time.Time) ([]state.PendingDM, error) {
+	return nil, nil // Return empty list for tests
+}
+
+func (*mockStateStore) RemovePendingDM(id string) error {
+	return nil // No-op for tests
+}
+
 func (*mockStateStore) Close() error {
 	return nil
 }
@@ -129,8 +145,9 @@ type mockSlackClient struct {
 	workspaceInfoErr bool
 
 	// Tracking for test assertions
-	postedMessages  []mockPostedMessage
-	updatedMessages []mockUpdatedMessage
+	postedMessages   []mockPostedMessage
+	updatedMessages  []mockUpdatedMessage
+	updatedDMMessage []mockUpdatedDMMessage
 }
 
 type mockPostedMessage struct {
@@ -143,6 +160,12 @@ type mockUpdatedMessage struct {
 	ChannelID string
 	Timestamp string
 	Text      string
+}
+
+type mockUpdatedDMMessage struct {
+	UserID string
+	PRURL  string
+	Text   string
 }
 
 func (m *mockSlackClient) PostThread(ctx context.Context, channelID, text string, attachments []slack.Attachment) (string, error) {
@@ -169,9 +192,14 @@ func (m *mockSlackClient) UpdateMessage(ctx context.Context, channelID, timestam
 	return nil
 }
 
-func (m *mockSlackClient) UpdateDMMessage(ctx context.Context, userID, timestamp, text string) error {
+func (m *mockSlackClient) UpdateDMMessage(ctx context.Context, userID, prURL, text string) error {
+	m.updatedDMMessage = append(m.updatedDMMessage, mockUpdatedDMMessage{
+		UserID: userID,
+		PRURL:  prURL,
+		Text:   text,
+	})
 	if m.updateDMMessageFunc != nil {
-		return m.updateDMMessageFunc(ctx, userID, timestamp, text)
+		return m.updateDMMessageFunc(ctx, userID, prURL, text)
 	}
 	return nil
 }
@@ -230,4 +258,176 @@ func (m *mockSlackClient) API() *slack.Client {
 		return m.apiFunc()
 	}
 	return nil
+}
+
+// newMockUserMapper creates a usermapping.Service for testing.
+// Since we can't inject mocks into private fields, we use a real Service with nil Slack client.
+// The tests won't call methods that need the Slack client.
+func newMockUserMapper(_ *mockSlackClient) *usermapping.Service {
+	return usermapping.New(nil, "test-token")
+}
+
+// mockSlackAPIForUserMapping implements usermapping.SlackAPI interface.
+type mockSlackAPIForUserMapping struct{}
+
+func (*mockSlackAPIForUserMapping) GetUserByEmailContext(ctx context.Context, email string) (*slack.User, error) {
+	// Return a mock user for any email
+	return &slack.User{
+		ID:   "U" + email[:min(len(email), 5)],
+		Name: "testuser",
+		Profile: slack.UserProfile{
+			Email: email,
+		},
+	}, nil
+}
+
+func (*mockSlackAPIForUserMapping) GetUserInfo(userID string) (*slack.User, error) {
+	return &slack.User{
+		ID:   userID,
+		Name: "testuser",
+	}, nil
+}
+
+// mockGitHubEmailLookup implements usermapping.GitHubEmailLookup interface.
+type mockGitHubEmailLookup struct{}
+
+func (*mockGitHubEmailLookup) Lookup(ctx context.Context, username, organization string) (*ghmailto.Result, error) {
+	// Return a mock result with a test email
+	return &ghmailto.Result{
+		Addresses: []ghmailto.Address{
+			{
+				Email:   username + "@test.com",
+				Methods: []string{"mock"},
+			},
+		},
+	}, nil
+}
+
+func (*mockGitHubEmailLookup) Guess(ctx context.Context, username, organization string, opts ghmailto.GuessOptions) (*ghmailto.GuessResult, error) {
+	return &ghmailto.GuessResult{
+		Username:       username,
+		Guesses:        []ghmailto.Address{},
+		FoundAddresses: []ghmailto.Address{},
+	}, nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// mockUserMapper is a simple mock for user mapping in tests.
+type mockUserMapper struct {
+	slackHandleFunc func(ctx context.Context, githubUser, org, domain string) (string, error)
+	mapping         map[string]string // GitHub username -> Slack user ID
+	failLookups     bool              // If true, all lookups fail
+}
+
+func (m *mockUserMapper) SlackHandle(ctx context.Context, githubUser, org, domain string) (string, error) {
+	if m.slackHandleFunc != nil {
+		return m.slackHandleFunc(ctx, githubUser, org, domain)
+	}
+	if m.failLookups {
+		return "", errors.New("user mapping failed")
+	}
+	if m.mapping != nil {
+		if slackID, ok := m.mapping[githubUser]; ok {
+			return slackID, nil
+		}
+		return "", nil // Not found in mapping
+	}
+	// Default: return a simple mock Slack user ID based on GitHub username
+	if githubUser == "_system" {
+		return "", nil // Skip _system
+	}
+	return "U" + githubUser, nil
+}
+
+func (m *mockUserMapper) FormatUserMentions(ctx context.Context, githubUsers []string, owner, domain string) string {
+	mentions := ""
+	for i, user := range githubUsers {
+		slackID, _ := m.SlackHandle(ctx, user, owner, domain)
+		if slackID == "" {
+			continue
+		}
+		if i > 0 && mentions != "" {
+			mentions += ", "
+		}
+		mentions += "<@" + slackID + ">"
+	}
+	return mentions
+}
+
+// mockTracker is a simple mock for notification tracking in tests.
+type mockTracker struct {
+	channelNotified bool
+	userTags        []mockUserTag
+	tagInfoByUser   map[string]TagInfo // Map from slackUserID to TagInfo for testing
+}
+
+type mockUserTag struct {
+	workspaceID string
+	slackUserID string
+	channelID   string
+	owner       string
+	repo        string
+	prNumber    int
+}
+
+func (m *mockTracker) UpdateChannelNotification(workspaceID, owner, repo string, prNumber int) {
+	m.channelNotified = true
+}
+
+func (m *mockTracker) UpdateUserPRChannelTag(workspaceID, slackUserID, channelID, owner, repo string, prNumber int) {
+	m.userTags = append(m.userTags, mockUserTag{
+		workspaceID: workspaceID,
+		slackUserID: slackUserID,
+		channelID:   channelID,
+		owner:       owner,
+		repo:        repo,
+		prNumber:    prNumber,
+	})
+}
+
+func (m *mockTracker) LastUserPRChannelTag(workspaceID, slackUserID, owner, repo string, prNumber int) TagInfo {
+	if m.tagInfoByUser != nil {
+		if tagInfo, ok := m.tagInfoByUser[slackUserID]; ok {
+			return tagInfo
+		}
+	}
+	return TagInfo{}
+}
+
+// mockNotifier is a simple mock for notification manager in tests.
+type mockNotifier struct {
+	Tracker         *mockTracker
+	notifyUserError error
+	notifyCalls     []notifyUserCall
+}
+
+type notifyUserCall struct {
+	workspaceID string
+	userID      string
+	channelID   string
+	channelName string
+}
+
+// NotifyUser mocks the notify.Manager.NotifyUser method.
+func (m *mockNotifier) NotifyUser(ctx context.Context, workspaceID, userID, channelID, channelName string, pr interface{}) error {
+	m.notifyCalls = append(m.notifyCalls, notifyUserCall{
+		workspaceID: workspaceID,
+		userID:      userID,
+		channelID:   channelID,
+		channelName: channelName,
+	})
+	return m.notifyUserError
+}
+
+// TagInfo matches the one in pkg/notify for test compatibility.
+type TagInfo struct {
+	ChannelID   string
+	TaggedAt    time.Time
+	WorkspaceID string
 }

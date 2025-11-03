@@ -3,6 +3,8 @@ package bot
 import (
 	"testing"
 	"time"
+
+	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 )
 
 func TestCoordinator_saveThread(t *testing.T) {
@@ -13,11 +15,8 @@ func TestCoordinator_saveThread(t *testing.T) {
 
 	// Create coordinator with mock
 	c := &Coordinator{
-		stateStore: mockStore,
-		threadCache: &ThreadCache{
-			prThreads: make(map[string]ThreadInfo),
-			creating:  make(map[string]bool),
-		},
+		stateStore:  mockStore,
+		threadCache: cache.New(),
 	}
 
 	// Test saving thread

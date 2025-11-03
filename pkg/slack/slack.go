@@ -64,6 +64,7 @@ type Client struct {
 	cache             *apiCache
 	manager           *Manager                                               // Reference to manager for cache invalidation
 	homeViewHandler   func(ctx context.Context, teamID, userID string) error // Callback for app_home_opened events
+	retryDelay        time.Duration                                          // Base delay for retries (default: 2s, can be overridden for tests)
 }
 
 // set stores a value in the cache with TTL.
@@ -309,6 +310,12 @@ func (c *Client) UpdateMessage(ctx context.Context, channelID, timestamp, text s
 		slack.MsgOptionDisableLinkUnfurl(),
 	}
 
+	// Use configured retry delay, default to 2s if not set
+	delay := c.retryDelay
+	if delay == 0 {
+		delay = 2 * time.Second
+	}
+
 	err := retry.Do(
 		func() error {
 			_, _, _, err := c.api.UpdateMessageContext(ctx, channelID, timestamp, options...)
@@ -329,10 +336,10 @@ func (c *Client) UpdateMessage(ctx context.Context, channelID, timestamp, text s
 			return nil
 		},
 		retry.Attempts(5),
-		retry.Delay(2*time.Second),
+		retry.Delay(delay),
 		retry.MaxDelay(2*time.Minute),
 		retry.DelayType(retry.BackOffDelay),
-		retry.MaxJitter(time.Second),
+		retry.MaxJitter(delay/2),
 		retry.LastErrorOnly(true),
 		retry.Context(ctx),
 	)

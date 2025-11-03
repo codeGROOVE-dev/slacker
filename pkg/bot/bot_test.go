@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/slack-go/slack"
 )
@@ -70,14 +71,6 @@ func TestNew(t *testing.T) {
 
 	if coordinator.threadCache == nil {
 		t.Error("thread cache not initialized")
-	}
-
-	if coordinator.threadCache.prThreads == nil {
-		t.Error("thread cache prThreads map not initialized")
-	}
-
-	if coordinator.threadCache.creating == nil {
-		t.Error("thread cache creating map not initialized")
 	}
 
 	if coordinator.eventSemaphore == nil {
@@ -189,7 +182,7 @@ func TestSaveThread(t *testing.T) {
 		stateStore:     mockState,
 		configManager:  configMgr,
 		notifier:       nil, // notifier not needed for this test
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -243,7 +236,7 @@ func TestSaveThread_PersistenceError(t *testing.T) {
 		stateStore:     mockState,
 		configManager:  configMgr,
 		notifier:       nil,
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -274,10 +267,7 @@ func TestSaveThread_PersistenceError(t *testing.T) {
 }
 
 func TestThreadCache_Set(t *testing.T) {
-	cache := &ThreadCache{
-		prThreads: make(map[string]ThreadInfo),
-		creating:  make(map[string]bool),
-	}
+	threadCache := cache.New()
 
 	threadInfo := ThreadInfo{
 		ChannelID:   "C123456",
@@ -286,9 +276,9 @@ func TestThreadCache_Set(t *testing.T) {
 		LastState:   "awaiting_review",
 	}
 
-	cache.Set("testorg/testrepo#42", threadInfo)
+	threadCache.Set("testorg/testrepo#42", threadInfo)
 
-	retrieved, found := cache.Get("testorg/testrepo#42")
+	retrieved, found := threadCache.Get("testorg/testrepo#42")
 	if !found {
 		t.Error("expected to find thread in cache")
 	}

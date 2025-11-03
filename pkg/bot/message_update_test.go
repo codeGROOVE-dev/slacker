@@ -2,6 +2,8 @@ package bot
 
 import (
 	"testing"
+
+	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 )
 
 // TestMessageComparison verifies that message comparison logic works correctly.
@@ -108,10 +110,7 @@ func TestMessageComparison(t *testing.T) {
 
 // TestCachedMessageText verifies that message text is properly cached and retrieved.
 func TestCachedMessageText(t *testing.T) {
-	cache := &ThreadCache{
-		prThreads: make(map[string]ThreadInfo),
-		creating:  make(map[string]bool),
-	}
+	threadCache := cache.New()
 
 	tests := []struct {
 		name        string
@@ -155,10 +154,10 @@ func TestCachedMessageText(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.expectFound {
-				cache.Set(tt.cacheKey, tt.threadInfo)
+				threadCache.Set(tt.cacheKey, tt.threadInfo)
 			}
 
-			info, found := cache.Get(tt.cacheKey)
+			info, found := threadCache.Get(tt.cacheKey)
 			if found != tt.expectFound {
 				t.Errorf("cache.Get() found=%v, want %v", found, tt.expectFound)
 			}

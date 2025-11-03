@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -35,6 +36,7 @@ type Client struct {
 	organization      string
 	installationID    int64
 	tokenMutex        sync.RWMutex
+	baseURL           string // Optional: override GitHub API base URL for testing
 }
 
 // refreshingTokenSource implements oauth2.TokenSource that automatically refreshes tokens.
@@ -132,6 +134,15 @@ func (c *Client) authenticate(ctx context.Context) error {
 	tc.Transport = &userAgentTransport{base: tc.Transport}
 	appClient := github.NewClient(tc)
 
+	// Override base URL if set (for testing)
+	if c.baseURL != "" {
+		var err error
+		appClient.BaseURL, err = url.Parse(c.baseURL + "/")
+		if err != nil {
+			return fmt.Errorf("invalid base URL: %w", err)
+		}
+	}
+
 	// Get installation token with retry.
 	var token *github.InstallationToken
 	err = retry.Do(
@@ -210,6 +221,15 @@ func (c *Client) authenticate(ctx context.Context) error {
 	tc.Transport = &userAgentTransport{base: tc.Transport}
 	c.client = github.NewClient(tc)
 
+	// Override base URL if set (for testing)
+	if c.baseURL != "" {
+		var err error
+		c.client.BaseURL, err = url.Parse(c.baseURL + "/")
+		if err != nil {
+			return fmt.Errorf("invalid base URL: %w", err)
+		}
+	}
+
 	// Store the token with expiry (GitHub tokens expire after 1 hour).
 	// For security, refresh every 30 minutes instead of waiting until near expiry.
 	c.tokenMutex.Lock()
@@ -268,308 +288,6 @@ func (c *Client) createJWT() (string, error) {
 	}
 
 	return tokenString, nil
-}
-
-// PR gets pull request details with retry logic.
-func (c *Client) PR(ctx context.Context, owner, repo string, number int) (*github.PullRequest, error) {
-	// Validate inputs.
-	if owner == "" || repo == "" {
-		return nil, fmt.Errorf("invalid owner or repo: owner=%q, repo=%q", owner, repo)
-	}
-	if number <= 0 {
-		return nil, fmt.Errorf("invalid PR number: %d", number)
-	}
-
-	slog.Info("fetching PR", "owner", owner, "repo", repo, "number", number)
-
-	var pr *github.PullRequest
-	var resp *github.Response
-
-	err := retry.Do(
-		func() error {
-			var err error
-			pr, resp, err = c.client.PullRequests.Get(ctx, owner, repo, number)
-			if err != nil {
-				if resp != nil && resp.StatusCode == http.StatusNotFound {
-					// Don't retry on 404
-					return retry.Unrecoverable(err)
-				}
-				slog.Warn("failed to get PR, retrying",
-					"owner", owner, "repo", repo, "number", number, "error", err)
-				return err
-			}
-			return nil
-		},
-		retry.Attempts(5),
-		retry.Delay(time.Second),
-		retry.MaxDelay(2*time.Minute),
-		retry.DelayType(retry.BackOffDelay),
-		retry.MaxJitter(time.Second),
-		retry.LastErrorOnly(true),
-		retry.Context(ctx),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get PR after retries: %w", err)
-	}
-	return pr, nil
-}
-
-// PRReviews gets reviews for a pull request with retry logic.
-func (c *Client) PRReviews(ctx context.Context, owner, repo string, number int) ([]*github.PullRequestReview, error) {
-	// Validate inputs.
-	if owner == "" || repo == "" {
-		return nil, fmt.Errorf("invalid owner or repo: owner=%q, repo=%q", owner, repo)
-	}
-	if number <= 0 {
-		return nil, fmt.Errorf("invalid PR number: %d", number)
-	}
-
-	slog.Info("fetching PR reviews", "owner", owner, "repo", repo, "number", number)
-
-	var reviews []*github.PullRequestReview
-
-	err := retry.Do(
-		func() error {
-			var err error
-			reviews, _, err = c.client.PullRequests.ListReviews(ctx, owner, repo, number, nil)
-			if err != nil {
-				slog.Warn("failed to get reviews, retrying",
-					"owner", owner, "repo", repo, "number", number, "error", err)
-				return err
-			}
-			return nil
-		},
-		retry.Attempts(5),
-		retry.Delay(time.Second),
-		retry.MaxDelay(2*time.Minute),
-		retry.DelayType(retry.BackOffDelay),
-		retry.MaxJitter(time.Second),
-		retry.LastErrorOnly(true),
-		retry.Context(ctx),
-	)
-	if err != nil {
-		slog.Error("failed to get PR reviews after retries, returning empty list",
-			"owner", owner, "repo", repo, "number", number, "error", err)
-		return []*github.PullRequestReview{}, nil // Graceful degradation
-	}
-	return reviews, nil
-}
-
-// PRChecks gets check runs for a pull request with retry logic.
-func (c *Client) PRChecks(ctx context.Context, owner, repo string, number int) (*github.ListCheckRunsResults, error) {
-	// Validate inputs.
-	if owner == "" || repo == "" {
-		return nil, fmt.Errorf("invalid owner or repo: owner=%q, repo=%q", owner, repo)
-	}
-	if number <= 0 {
-		return nil, fmt.Errorf("invalid PR number: %d", number)
-	}
-
-	slog.Info("fetching PR checks", "owner", owner, "repo", repo, "number", number)
-
-	pr, err := c.PR(ctx, owner, repo, number)
-	if err != nil {
-		return nil, err
-	}
-
-	var checkRuns *github.ListCheckRunsResults
-
-	err = retry.Do(
-		func() error {
-			var err error
-			checkRuns, _, err = c.client.Checks.ListCheckRunsForRef(
-				ctx,
-				owner,
-				repo,
-				pr.GetHead().GetSHA(),
-				&github.ListCheckRunsOptions{},
-			)
-			if err != nil {
-				slog.Warn("failed to get checks, retrying",
-					"owner", owner, "repo", repo, "number", number, "error", err)
-				return err
-			}
-			return nil
-		},
-		retry.Attempts(5),
-		retry.Delay(time.Second),
-		retry.MaxDelay(2*time.Minute),
-		retry.DelayType(retry.BackOffDelay),
-		retry.MaxJitter(time.Second),
-		retry.LastErrorOnly(true),
-		retry.Context(ctx),
-	)
-	if err != nil {
-		slog.Error("failed to get check runs after retries, returning empty result",
-			"owner", owner, "repo", repo, "number", number, "error", err)
-		// Return an empty result instead of nil for graceful degradation
-		return &github.ListCheckRunsResults{
-			CheckRuns: []*github.CheckRun{},
-		}, nil
-	}
-
-	return checkRuns, nil
-}
-
-// PRState determines the current state of a PR.
-func (c *Client) PRState(ctx context.Context, owner, repo string, number int) (state string, blockedOn []string, err error) {
-	pr, err := c.PR(ctx, owner, repo, number)
-	if err != nil {
-		return "", nil, err
-	}
-
-	// Validate PR is not nil
-	if pr == nil {
-		return "", nil, errors.New("PR is nil")
-	}
-	// Check if merged or closed.
-	if pr.GetMerged() {
-		return "merged", nil, nil // Merged
-	}
-	if pr.GetState() == "closed" {
-		return "face_palm", nil, nil // Closed but not merged
-	}
-
-	// Get check runs.
-	checks, err := c.PRChecks(ctx, owner, repo, number)
-	if err != nil {
-		slog.Warn("failed to get checks for PR state",
-			"owner", owner, "repo", repo, "number", number, "error", err)
-	}
-
-	// Analyze check status.
-	var checksRunning, checksFailed bool
-	if checks != nil {
-		for _, check := range checks.CheckRuns {
-			switch check.GetStatus() {
-			case "in_progress", "queued", "pending":
-				checksRunning = true
-			case "completed":
-				if check.GetConclusion() != "success" && check.GetConclusion() != "skipped" {
-					checksFailed = true
-				}
-			default:
-				// Unknown check status, log for debugging
-				slog.Debug("unknown check status", "status", check.GetStatus())
-			}
-		}
-	}
-
-	// Get reviews.
-	reviews, err := c.PRReviews(ctx, owner, repo, number)
-	if err != nil {
-		slog.Warn("failed to get reviews for PR state",
-			"owner", owner, "repo", repo, "number", number, "error", err)
-	}
-
-	// Check review status.
-	hasApproval := false
-	needsChanges := false
-	reviewers := make(map[string]bool)
-	for _, review := range reviews {
-		if review.GetUser() != nil {
-			reviewers[review.GetUser().GetLogin()] = true
-		}
-		switch review.GetState() {
-		case "APPROVED":
-			hasApproval = true
-		case "CHANGES_REQUESTED":
-			needsChanges = true
-		default:
-			// Other review states (COMMENTED, PENDING, DISMISSED, etc.)
-			slog.Debug("other review state", "state", review.GetState())
-		}
-	}
-
-	// Determine state and who it's blocked on.
-	// Priority order: running tests > broken tests > needs changes > approved > waiting
-	if checksRunning {
-		return "test_tube", nil, nil // Tests running, no one blocked
-	}
-
-	author := pr.GetUser().GetLogin()
-
-	if checksFailed {
-		return "broken_heart", []string{author}, nil // Tests broken, blocked on author
-	}
-
-	if needsChanges {
-		return "carpentry_saw", []string{author}, nil // Changes requested, blocked on author
-	}
-
-	if hasApproval {
-		return "check", []string{author}, nil // Approved, author can merge
-	}
-
-	// Waiting for review - collect all requested reviewers
-	for _, reviewer := range pr.RequestedReviewers {
-		blockedOn = append(blockedOn, reviewer.GetLogin())
-	}
-	for _, team := range pr.RequestedTeams {
-		blockedOn = append(blockedOn, "team:"+team.GetSlug())
-	}
-
-	return "hourglass", blockedOn, nil
-}
-
-// PRReviewers gets all reviewers (requested and completed) for a PR.
-func (c *Client) PRReviewers(ctx context.Context, owner, repo string, number int) ([]string, error) {
-	var allReviewers []string
-	reviewerSet := make(map[string]bool) // Use set to avoid duplicates
-
-	slog.Debug("fetching PR reviewers",
-		"owner", owner,
-		"repo", repo,
-		"pr_number", number)
-
-	// Get PR details to get requested reviewers
-	pr, err := c.PR(ctx, owner, repo, number)
-	if err != nil {
-		slog.Error("failed to get PR details for reviewers",
-			"owner", owner,
-			"repo", repo,
-			"pr_number", number,
-			"error", err)
-		return nil, err
-	}
-
-	// Add requested reviewers
-	for _, reviewer := range pr.RequestedReviewers {
-		if reviewer.GetLogin() != "" {
-			reviewerSet[reviewer.GetLogin()] = true
-		}
-	}
-
-	// Get reviews to find completed reviewers
-	reviews, err := c.PRReviews(ctx, owner, repo, number)
-	if err != nil {
-		slog.Warn("failed to get PR reviews, continuing with requested reviewers only",
-			"owner", owner,
-			"repo", repo,
-			"pr_number", number,
-			"error", err)
-	} else {
-		// Add reviewers who have already reviewed
-		for _, review := range reviews {
-			if review.GetUser() != nil && review.GetUser().GetLogin() != "" {
-				reviewerSet[review.GetUser().GetLogin()] = true
-			}
-		}
-	}
-
-	// Convert set to slice
-	for reviewer := range reviewerSet {
-		allReviewers = append(allReviewers, reviewer)
-	}
-
-	slog.Debug("collected PR reviewers",
-		"owner", owner,
-		"repo", repo,
-		"pr_number", number,
-		"reviewers", allReviewers,
-		"reviewer_count", len(allReviewers))
-
-	return allReviewers, nil
 }
 
 // PRInfo contains simplified PR information.
@@ -731,7 +449,8 @@ type Manager struct {
 	privateKey            *rsa.PrivateKey
 	clients               map[string]*Client // org -> client
 	appID                 string
-	allowPersonalAccounts bool // Allow processing personal accounts (default: false for DoS protection)
+	allowPersonalAccounts bool   // Allow processing personal accounts (default: false for DoS protection)
+	baseURL               string // Optional: override GitHub API base URL for testing
 	mu                    sync.RWMutex
 }
 
@@ -792,6 +511,15 @@ func (m *Manager) RefreshInstallations(ctx context.Context) error {
 	tc := oauth2.NewClient(ctx, ts)
 	tc.Transport = &userAgentTransport{base: tc.Transport}
 	appClient := github.NewClient(tc)
+
+	// Override base URL if set (for testing)
+	if m.baseURL != "" {
+		var err error
+		appClient.BaseURL, err = url.Parse(m.baseURL + "/")
+		if err != nil {
+			return fmt.Errorf("invalid base URL: %w", err)
+		}
+	}
 
 	// List all installations with retry.
 	var installations []*github.Installation
@@ -864,6 +592,7 @@ func (m *Manager) RefreshInstallations(ctx context.Context) error {
 			appID:          m.appID,
 			privateKey:     m.privateKey,
 			installationID: inst.GetID(),
+			baseURL:        m.baseURL, // Propagate baseURL for testing
 		}
 
 		// Use a timeout context for each org authentication to ensure

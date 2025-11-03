@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/sprinkler/pkg/client"
 )
@@ -65,8 +66,8 @@ func TestLookupPRsForCheckEvent_Success(t *testing.T) {
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{},
 		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
-		commitPRCache:  &CommitPRCache{entries: make(map[string][]CommitPREntry)},
+		threadCache:    cache.New(),
+		commitPRCache:  cache.NewCommitPRCache(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -103,8 +104,8 @@ func TestLookupPRsForCheckEvent_NoCommitSHA(t *testing.T) {
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{},
 		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
-		commitPRCache:  &CommitPRCache{entries: make(map[string][]CommitPREntry)},
+		threadCache:    cache.New(),
+		commitPRCache:  cache.NewCommitPRCache(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -137,8 +138,8 @@ func TestLookupPRsForCheckEvent_InvalidURL(t *testing.T) {
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{},
 		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
-		commitPRCache:  &CommitPRCache{entries: make(map[string][]CommitPREntry)},
+		threadCache:    cache.New(),
+		commitPRCache:  cache.NewCommitPRCache(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -174,8 +175,8 @@ func TestLookupPRsForCheckEvent_NoPRsFound(t *testing.T) {
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{},
 		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
-		commitPRCache:  &CommitPRCache{entries: make(map[string][]CommitPREntry)},
+		threadCache:    cache.New(),
+		commitPRCache:  cache.NewCommitPRCache(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -245,7 +246,7 @@ func TestHandleSprinklerEvent_Deduplication(t *testing.T) {
 		slack:          &mockSlackClient{},
 		stateStore:     mockState,
 		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -289,7 +290,7 @@ func TestHandleSprinklerEvent_PullRequestWithNumber(t *testing.T) {
 		slack:          &mockSlackClient{},
 		stateStore:     mockState,
 		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -341,8 +342,8 @@ func TestHandleSprinklerEvent_CheckEventWithCommit(t *testing.T) {
 		slack:          &mockSlackClient{},
 		stateStore:     mockState,
 		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
-		commitPRCache:  &CommitPRCache{entries: make(map[string][]CommitPREntry)},
+		threadCache:    cache.New(),
+		commitPRCache:  cache.NewCommitPRCache(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -380,8 +381,8 @@ func TestLookupPRsForCheckEvent_GitHubAPIFailure(t *testing.T) {
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
 		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
-		commitPRCache:  &CommitPRCache{entries: make(map[string][]CommitPREntry)},
+		threadCache:    cache.New(),
+		commitPRCache:  cache.NewCommitPRCache(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -410,7 +411,7 @@ func TestLookupPRsForCheckEvent_InvalidURLFormat(t *testing.T) {
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
 		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -460,7 +461,7 @@ func TestHandleSprinklerEvent_MissingURL(t *testing.T) {
 		slack:          &mockSlackClient{},
 		stateStore:     mockState,
 		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -491,7 +492,7 @@ func TestHandleSprinklerEvent_InvalidPRURL(t *testing.T) {
 		slack:          &mockSlackClient{},
 		stateStore:     mockState,
 		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -746,7 +747,7 @@ func TestHandleSprinklerEvent_DatabaseError(t *testing.T) {
 		slack:          &mockSlackClient{},
 		stateStore:     mockState,
 		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 

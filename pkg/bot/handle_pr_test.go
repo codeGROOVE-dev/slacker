@@ -1,6 +1,8 @@
 package bot
 
 import (
+	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
+
 	"context"
 	"testing"
 	"time"
@@ -21,7 +23,7 @@ func TestHandlePullRequestFromSprinkler_NoToken(t *testing.T) {
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
 		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -43,7 +45,7 @@ func TestHandlePullRequestReviewFromSprinkler_NoToken(t *testing.T) {
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
 		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 	"github.com/slack-go/slack"
@@ -16,13 +17,10 @@ import (
 // testCoordinator creates a coordinator with mocks for testing.
 func testCoordinator(mockState *mockStateStore) *Coordinator {
 	return &Coordinator{
-		slack:         &mockSlackClient{},
-		stateStore:    mockState,
-		configManager: config.New(),
-		threadCache: &ThreadCache{
-			prThreads: make(map[string]ThreadInfo),
-			creating:  make(map[string]bool),
-		},
+		slack:          &mockSlackClient{},
+		stateStore:     mockState,
+		configManager:  config.New(),
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 }

@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 	"context"
 	"testing"
 	"time"
@@ -177,7 +178,7 @@ func TestProcessEvent_CheckEventWithPR(t *testing.T) {
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
 		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -225,7 +226,7 @@ func TestProcessEvent_PullRequestReview(t *testing.T) {
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
 		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -255,7 +256,7 @@ func TestProcessEvent_PullRequest(t *testing.T) {
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
 		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
@@ -286,7 +287,7 @@ func TestProcessEvent_PullRequestCodeGROOVE(t *testing.T) {
 		slack:          &mockSlackClient{},
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
 		configManager:  config.New(),
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
 

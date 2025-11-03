@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
@@ -18,7 +19,7 @@ func TestSendDMNotificationsToSlackUsers_EmptyUserList(t *testing.T) {
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
 		configManager:  config.New(),
 		notifier:       nil, // Can be nil for empty user list test
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 		workspaceName:  "test-workspace.slack.com",
 	}
@@ -67,7 +68,7 @@ func TestSendDMNotificationsToGitHubUsers_EmptyUserList(t *testing.T) {
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
 		configManager:  config.New(),
 		notifier:       nil, // Can be nil for empty user list test
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 		workspaceName:  "test-workspace.slack.com",
 	}
@@ -121,7 +122,7 @@ func TestUpdateDMMessagesForPR_MergedPRNoDMRecipients(t *testing.T) {
 		stateStore:     mockState,
 		configManager:  config.New(),
 		notifier:       nil,
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 		workspaceName:  "test-workspace.slack.com",
 	}
@@ -149,7 +150,7 @@ func TestUpdateDMMessagesForPR_NonTerminalStateNoBlockedUsers(t *testing.T) {
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
 		configManager:  config.New(),
 		notifier:       nil,
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 		workspaceName:  "test-workspace.slack.com",
 	}
@@ -181,7 +182,7 @@ func TestUpdateDMMessagesForPR_NonTerminalStateNilCheckResult(t *testing.T) {
 		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
 		configManager:  config.New(),
 		notifier:       nil,
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 		workspaceName:  "test-workspace.slack.com",
 	}
@@ -214,7 +215,7 @@ func TestUpdateDMMessagesForPR_ClosedPRNoDMRecipients(t *testing.T) {
 		stateStore:     mockState,
 		configManager:  config.New(),
 		notifier:       nil,
-		threadCache:    &ThreadCache{prThreads: make(map[string]ThreadInfo), creating: make(map[string]bool)},
+		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 		workspaceName:  "test-workspace.slack.com",
 	}
@@ -231,4 +232,176 @@ func TestUpdateDMMessagesForPR_ClosedPRNoDMRecipients(t *testing.T) {
 	// Should return early - no DM recipients found for closed PR
 	c.updateDMMessagesForPR(ctx, prInfo)
 	// Test passes if it returns without panicking
+}
+// TestUpdateDMMessagesForPR_MergedWithRecipients tests DM updates for merged PR with recipients.
+func TestUpdateDMMessagesForPR_MergedWithRecipients(t *testing.T) {
+	ctx := context.Background()
+
+	prURL := "https://github.com/testorg/testrepo/pull/42"
+	mockSlack := &mockSlackClient{}
+	mockState := &mockStateStore{
+		dmUsers: map[string][]string{
+			prURL: {"U123", "U456"},
+		},
+	}
+
+	c := &Coordinator{
+		slack:         mockSlack,
+		stateStore:    mockState,
+		configManager: config.New(),
+	}
+
+	prInfo := prUpdateInfo{
+		owner:    "testorg",
+		repo:     "testrepo",
+		number:   42,
+		title:    "Test PR",
+		author:   "testauthor",
+		state:    "merged",
+		url:      prURL,
+		checkRes: nil,
+	}
+
+	c.updateDMMessagesForPR(ctx, prInfo)
+
+	// Verify DMs were updated
+	if len(mockSlack.updatedDMMessage) != 2 {
+		t.Errorf("expected 2 DM updates, got %d", len(mockSlack.updatedDMMessage))
+	}
+}
+
+// TestUpdateDMMessagesForPR_ClosedWithRecipients tests DM updates for closed PR.
+func TestUpdateDMMessagesForPR_ClosedWithRecipients(t *testing.T) {
+	ctx := context.Background()
+
+	prURL := "https://github.com/testorg/testrepo/pull/42"
+	mockSlack := &mockSlackClient{}
+	mockState := &mockStateStore{
+		dmUsers: map[string][]string{
+			prURL: {"U789"},
+		},
+	}
+
+	c := &Coordinator{
+		slack:         mockSlack,
+		stateStore:    mockState,
+		configManager: config.New(),
+	}
+
+	prInfo := prUpdateInfo{
+		owner:    "testorg",
+		repo:     "testrepo",
+		number:   42,
+		title:    "Test PR",
+		author:   "testauthor",
+		state:    "closed",
+		url:      prURL,
+		checkRes: nil,
+	}
+
+	c.updateDMMessagesForPR(ctx, prInfo)
+
+	// Verify DM was updated
+	if len(mockSlack.updatedDMMessage) != 1 {
+		t.Errorf("expected 1 DM update, got %d", len(mockSlack.updatedDMMessage))
+	}
+
+	if len(mockSlack.updatedDMMessage) > 0 {
+		dm := mockSlack.updatedDMMessage[0]
+		if dm.UserID != "U789" {
+			t.Errorf("expected UserID U789, got %s", dm.UserID)
+		}
+		if dm.PRURL != prURL {
+			t.Errorf("expected PRURL %s, got %s", prURL, dm.PRURL)
+		}
+	}
+}
+
+// TestUpdateDMMessagesForPR_WithBlockedUsers tests updates for non-terminal state with blocked users.
+func TestUpdateDMMessagesForPR_WithBlockedUsers(t *testing.T) {
+	ctx := context.Background()
+
+	prURL := "https://github.com/testorg/testrepo/pull/42"
+	mockSlack := &mockSlackClient{}
+	mockState := &mockStateStore{}
+
+	c := &Coordinator{
+		slack:         mockSlack,
+		stateStore:    mockState,
+		configManager: config.New(),
+		userMapper:    &mockUserMapper{},
+	}
+
+	checkResult := &turn.CheckResponse{
+		Analysis: turn.Analysis{
+			WorkflowState: "awaiting_review",
+			NextAction: map[string]turn.Action{
+				"alice": {Kind: "review"},
+			},
+		},
+	}
+
+	prInfo := prUpdateInfo{
+		owner:    "testorg",
+		repo:     "testrepo",
+		number:   42,
+		title:    "Test PR",
+		author:   "testauthor",
+		state:    "awaiting_review",
+		url:      prURL,
+		checkRes: checkResult,
+	}
+
+	c.updateDMMessagesForPR(ctx, prInfo)
+
+	// Should update DM for blocked user (alice)
+	if len(mockSlack.updatedDMMessage) == 0 {
+		t.Error("expected at least one DM update for blocked user")
+	}
+}
+
+// TestUpdateDMMessagesForPR_SkipsSystemUser tests that _system user is skipped.
+func TestUpdateDMMessagesForPR_SkipsSystemUser(t *testing.T) {
+	ctx := context.Background()
+
+	prURL := "https://github.com/testorg/testrepo/pull/42"
+	mockSlack := &mockSlackClient{}
+	mockState := &mockStateStore{}
+
+	c := &Coordinator{
+		slack:         mockSlack,
+		stateStore:    mockState,
+		configManager: config.New(),
+		userMapper:    &mockUserMapper{},
+	}
+
+	checkResult := &turn.CheckResponse{
+		Analysis: turn.Analysis{
+			WorkflowState: "awaiting_review",
+			NextAction: map[string]turn.Action{
+				"_system": {Kind: "review"}, // Should be skipped
+				"alice":   {Kind: "review"},
+			},
+		},
+	}
+
+	prInfo := prUpdateInfo{
+		owner:    "testorg",
+		repo:     "testrepo",
+		number:   42,
+		title:    "Test PR",
+		author:   "testauthor",
+		state:    "awaiting_review",
+		url:      prURL,
+		checkRes: checkResult,
+	}
+
+	c.updateDMMessagesForPR(ctx, prInfo)
+
+	// Should only update for alice, not _system
+	for _, dm := range mockSlack.updatedDMMessage {
+		if dm.UserID == "U_system" {
+			t.Error("should not send DM to _system user")
+		}
+	}
 }

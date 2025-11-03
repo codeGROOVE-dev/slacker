@@ -12,6 +12,30 @@ import (
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
 
+// makePollEventKey creates an event key for poll-based PR processing.
+// This is a pure function that can be easily tested.
+func makePollEventKey(prURL string, updatedAt time.Time) string {
+	return fmt.Sprintf("poll:%s:%s", prURL, updatedAt.Format(time.RFC3339))
+}
+
+// makeClosedPREventKey creates an event key for closed/merged PR updates.
+// This is a pure function that can be easily tested.
+func makeClosedPREventKey(prURL, state string, updatedAt time.Time) string {
+	return fmt.Sprintf("poll_closed:%s:%s:%s", prURL, state, updatedAt.Format(time.RFC3339))
+}
+
+// formatPRIdentifier creates a human-readable PR identifier.
+// This is a pure function that can be easily tested.
+func formatPRIdentifier(owner, repo string, prNumber int) string {
+	return fmt.Sprintf("%s/%s#%d", owner, repo, prNumber)
+}
+
+// makeReconcileEventKey creates an event key for startup reconciliation.
+// This is a pure function that can be easily tested.
+func makeReconcileEventKey(prURL string, updatedAt time.Time) string {
+	return fmt.Sprintf("reconcile:%s:%s", prURL, updatedAt.Format(time.RFC3339))
+}
+
 // PollAndReconcile checks all open PRs and ensures notifications are sent.
 // This runs every 5 minutes as a safety net to catch anything sprinkler missed.
 func (c *Coordinator) PollAndReconcile(ctx context.Context) {
@@ -58,12 +82,12 @@ func (c *Coordinator) PollAndReconcile(ctx context.Context) {
 		pr := &prs[i]
 
 		// Create event key for this PR update to prevent duplicate processing
-		eventKey := fmt.Sprintf("poll:%s:%s", pr.URL, pr.UpdatedAt.Format(time.RFC3339))
+		eventKey := makePollEventKey(pr.URL, pr.UpdatedAt)
 
 		// Skip if already processed (by webhook or previous poll)
 		if c.stateStore.WasProcessed(eventKey) {
 			slog.Debug("skipping PR - already processed",
-				"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+				"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 				"pr_updated", pr.UpdatedAt)
 			successCount++ // Count as success (already handled)
 			continue
@@ -72,14 +96,14 @@ func (c *Coordinator) PollAndReconcile(ctx context.Context) {
 		// Check if we need to notify about this PR
 		if err := c.reconcilePR(ctx, pr); err != nil {
 			slog.Warn("failed to reconcile PR",
-				"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+				"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 				"error", err)
 			errorCount++
 		} else {
 			// Mark as processed
 			if err := c.stateStore.MarkProcessed(eventKey, 24*time.Hour); err != nil {
 				slog.Warn("failed to mark poll event as processed",
-					"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+					"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 					"error", err)
 			}
 			successCount++
@@ -114,12 +138,12 @@ func (c *Coordinator) PollAndReconcile(ctx context.Context) {
 			pr := &closedPRs[i]
 
 			// Create event key for this PR state change
-			eventKey := fmt.Sprintf("poll_closed:%s:%s:%s", pr.URL, pr.State, pr.UpdatedAt.Format(time.RFC3339))
+			eventKey := makeClosedPREventKey(pr.URL, pr.State, pr.UpdatedAt)
 
 			// Skip if already processed
 			if c.stateStore.WasProcessed(eventKey) {
 				slog.Debug("skipping closed PR - already processed",
-					"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+					"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 					"state", pr.State)
 				closedSuccessCount++
 				continue
@@ -128,7 +152,7 @@ func (c *Coordinator) PollAndReconcile(ctx context.Context) {
 			// Update thread for this closed/merged PR
 			if err := c.updateClosedPRThread(ctx, pr); err != nil {
 				slog.Warn("failed to update closed PR thread",
-					"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+					"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 					"state", pr.State,
 					"error", err)
 				closedErrorCount++
@@ -136,7 +160,7 @@ func (c *Coordinator) PollAndReconcile(ctx context.Context) {
 				// Mark as processed
 				if err := c.stateStore.MarkProcessed(eventKey, 24*time.Hour); err != nil {
 					slog.Warn("failed to mark closed PR event as processed",
-						"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+						"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 						"error", err)
 				}
 				closedSuccessCount++
@@ -170,7 +194,7 @@ func (c *Coordinator) PollAndReconcile(ctx context.Context) {
 // This is called both from polling and startup reconciliation.
 func (c *Coordinator) reconcilePR(ctx context.Context, pr *github.PRSnapshot) error {
 	slog.Debug("reconciling PR",
-		"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+		"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 		"updated_at", pr.UpdatedAt)
 
 	// Get GitHub token for turnclient
@@ -187,17 +211,16 @@ func (c *Coordinator) reconcilePR(ctx context.Context, pr *github.PRSnapshot) er
 	turnClient.SetAuthToken(token)
 
 	// Check PR state with turnclient
-	prURL := pr.URL
 	checkCtx, checkCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer checkCancel()
 
-	checkResult, err := turnClient.Check(checkCtx, prURL, pr.Owner, pr.UpdatedAt)
+	checkResult, err := turnClient.Check(checkCtx, pr.URL, pr.Owner, pr.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("turnclient check failed: %w", err)
 	}
 
 	slog.Debug("turnclient analysis complete",
-		"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+		"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 		"pr_state", checkResult.PullRequest.State,
 		"pr_draft", checkResult.PullRequest.Draft,
 		"pr_merged", checkResult.PullRequest.Merged,
@@ -229,7 +252,7 @@ func (c *Coordinator) reconcilePR(ctx context.Context, pr *github.PRSnapshot) er
 			} `json:"user"`
 			Number int `json:"number"`
 		}{
-			HTMLURL:   prURL,
+			HTMLURL:   pr.URL,
 			Title:     pr.Title,
 			CreatedAt: pr.CreatedAt,
 			User: struct {
@@ -248,9 +271,23 @@ func (c *Coordinator) reconcilePR(ctx context.Context, pr *github.PRSnapshot) er
 	return nil
 }
 
+// isChannelResolutionFailed determines if channel ID resolution failed.
+// Returns true if the resolved ID indicates failure (matches original name or is stripped hash).
+func isChannelResolutionFailed(channelName, resolvedID string) bool {
+	// If resolved ID matches the input channel name, resolution failed
+	if resolvedID == channelName {
+		return true
+	}
+	// If channel name starts with # and resolved ID is the name with # stripped, resolution failed
+	if channelName != "" && channelName[0] == '#' && resolvedID == channelName[1:] {
+		return true
+	}
+	return false
+}
+
 // updateClosedPRThread updates Slack threads for a closed or merged PR.
 func (c *Coordinator) updateClosedPRThread(ctx context.Context, pr *github.PRSnapshot) error {
-	prKey := fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
+	prKey := formatPRIdentifier(pr.Owner, pr.Repo, pr.Number)
 	slog.Debug("updating thread for closed/merged PR",
 		"pr", prKey,
 		"state", pr.State)
@@ -269,7 +306,7 @@ func (c *Coordinator) updateClosedPRThread(ctx context.Context, pr *github.PRSna
 		id := c.slack.ResolveChannelID(ctx, ch)
 
 		// Check if channel resolution failed (returns original name if not found)
-		if id == ch || (ch != "" && ch[0] == '#' && id == ch[1:]) {
+		if isChannelResolutionFailed(ch, id) {
 			slog.Warn("could not resolve channel for closed PR thread update",
 				"workspace", c.workspaceName,
 				"pr", prKey,
@@ -348,31 +385,57 @@ func (c *Coordinator) updateClosedPRThread(ctx context.Context, pr *github.PRSna
 	return nil
 }
 
+// emojiForPRState returns the appropriate emoji for a PR state.
+// This is a pure function that can be easily tested.
+func emojiForPRState(state string) (string, error) {
+	switch state {
+	case "MERGED":
+		return ":rocket:", nil
+	case "CLOSED":
+		return ":x:", nil
+	default:
+		return "", fmt.Errorf("unexpected PR state: %s", state)
+	}
+}
+
+// replaceEmojiPrefix replaces the emoji prefix in a message.
+// This is a pure function that can be easily tested.
+// Format: ":emoji: Title • repo#123 by @user"
+func replaceEmojiPrefix(text, newEmoji string) string {
+	i := strings.Index(text, " ")
+	if i == -1 {
+		return newEmoji + " " + text
+	}
+	return newEmoji + text[i:]
+}
+
 // updateThreadForClosedPR updates a single thread's message to reflect closed/merged state.
 func (c *Coordinator) updateThreadForClosedPR(ctx context.Context, pr *github.PRSnapshot, channelID string, info ThreadInfo) error {
-	var emoji string
-	switch pr.State {
-	case "MERGED":
-		emoji = ":rocket:"
-	case "CLOSED":
-		emoji = ":x:"
-	default:
-		return fmt.Errorf("unexpected PR state: %s", pr.State)
+	emoji, err := emojiForPRState(pr.State)
+	if err != nil {
+		return err
 	}
 
-	// Replace emoji prefix in message (format: ":emoji: Title • repo#123 by @user")
-	text := info.MessageText
-	if i := strings.Index(text, " "); i == -1 {
-		text = emoji + " " + text
-	} else {
-		text = emoji + text[i:]
-	}
+	text := replaceEmojiPrefix(info.MessageText, emoji)
 
 	if err := c.slack.UpdateMessage(ctx, channelID, info.ThreadTS, text); err != nil {
 		return fmt.Errorf("failed to update message: %w", err)
 	}
 
 	return nil
+}
+
+// shouldReconcilePR determines if a PR should be reconciled based on notification history.
+// Returns (reason, shouldReconcile). This is a pure function that can be easily tested.
+func shouldReconcilePR(prUpdatedAt, lastNotified time.Time) (string, bool) {
+	switch {
+	case lastNotified.IsZero():
+		return "never_notified", true
+	case prUpdatedAt.After(lastNotified):
+		return "updated_since_last_notification", true
+	default:
+		return "already_notified", false
+	}
 }
 
 // StartupReconciliation runs once at startup to catch up on any missed notifications.
@@ -425,13 +488,13 @@ func (c *Coordinator) StartupReconciliation(ctx context.Context) {
 
 		// Create event key for this PR update (same format as webhook events)
 		// This prevents processing the same update twice if a webhook was already received
-		eventKey := fmt.Sprintf("reconcile:%s:%s", pr.URL, pr.UpdatedAt.Format(time.RFC3339))
+		eventKey := makeReconcileEventKey(pr.URL, pr.UpdatedAt)
 
 		// Check if we already processed this exact PR update (via webhook or previous reconciliation)
 		if c.stateStore.WasProcessed(eventKey) {
 			skippedCount++
 			slog.Debug("skipping PR - already processed this update",
-				"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+				"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 				"pr_updated", pr.UpdatedAt,
 				"event_key", eventKey)
 			continue
@@ -441,23 +504,18 @@ func (c *Coordinator) StartupReconciliation(ctx context.Context) {
 		lastNotified := c.stateStore.LastNotification(pr.URL)
 
 		// Determine if we should notify
-		var reason string
-		switch {
-		case lastNotified.IsZero():
-			reason = "never_notified"
-		case pr.UpdatedAt.After(lastNotified):
-			reason = "updated_since_last_notification"
-		default:
+		reason, shouldNotify := shouldReconcilePR(pr.UpdatedAt, lastNotified)
+		if !shouldNotify {
 			skippedCount++
 			slog.Debug("skipping PR - already notified and not updated",
-				"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+				"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 				"last_notified", lastNotified,
 				"pr_updated", pr.UpdatedAt)
 			continue
 		}
 
 		slog.Info("startup reconciliation - processing PR",
-			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+			"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 			"reason", reason,
 			"last_notified", lastNotified,
 			"pr_updated", pr.UpdatedAt)
@@ -465,7 +523,7 @@ func (c *Coordinator) StartupReconciliation(ctx context.Context) {
 		// Process this PR
 		if err := c.reconcilePR(ctx, pr); err != nil {
 			slog.Warn("startup reconciliation - failed to process PR",
-				"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+				"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 				"error", err)
 			errorCount++
 		} else {
@@ -473,13 +531,13 @@ func (c *Coordinator) StartupReconciliation(ctx context.Context) {
 			// Mark as processed to prevent duplicate processing
 			if err := c.stateStore.MarkProcessed(eventKey, 24*time.Hour); err != nil {
 				slog.Warn("failed to mark reconciliation event as processed",
-					"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+					"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 					"error", err)
 			}
 			// Record that we notified
 			if err := c.stateStore.RecordNotification(pr.URL, time.Now()); err != nil {
 				slog.Warn("failed to record notification",
-					"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+					"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 					"error", err)
 			}
 		}
