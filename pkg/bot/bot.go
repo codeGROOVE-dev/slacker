@@ -152,7 +152,6 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 	Number  int    `json:"number"`
 }, checkResult *turn.CheckResponse,
 ) (threadTS string, wasNewlyCreated bool, currentMessageText string, err error) {
-	// Use cache key that includes channel ID to support multiple channels per PR
 	cacheKey := fmt.Sprintf("%s/%s#%d:%s", owner, repo, prNumber, channelID)
 
 	slog.Debug("finding or creating PR thread",
@@ -160,7 +159,36 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 		logFieldChannel, channelID,
 		"pr_state", prState)
 
-	// Check cache first (quick read lock)
+	// Try to find existing thread
+	threadTS, messageText, found := c.findPRThread(ctx, cacheKey, channelID, owner, repo, prNumber, prState, pullRequest)
+	if found {
+		return threadTS, false, messageText, nil
+	}
+
+	// Thread not found - create new one with concurrent creation prevention
+	threadInfo, wasCreated, err := c.createPRThreadWithLocking(ctx, channelID, owner, repo, prNumber, prState, pullRequest, checkResult)
+	if err != nil {
+		return "", false, "", err
+	}
+
+	return threadInfo.ThreadTS, wasCreated, threadInfo.MessageText, nil
+}
+
+// findPRThread searches for an existing PR thread in cache and Slack.
+// Returns (threadTS, messageText, found).
+func (c *Coordinator) findPRThread(
+	ctx context.Context, cacheKey, channelID, owner, repo string, prNumber int, prState string,
+	pullRequest struct {
+		CreatedAt time.Time `json:"created_at"`
+		User      struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		HTMLURL string `json:"html_url"`
+		Title   string `json:"title"`
+		Number  int    `json:"number"`
+	},
+) (threadTS, messageText string, found bool) {
+	// Check cache first
 	if threadInfo, exists := c.threadCache.Get(cacheKey); exists {
 		slog.Debug("found PR thread in cache",
 			"pr", cacheKey,
@@ -168,14 +196,14 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 			logFieldChannel, channelID,
 			"cached_state", threadInfo.LastState,
 			"has_cached_message_text", threadInfo.MessageText != "")
-		return threadInfo.ThreadTS, false, threadInfo.MessageText, nil
+		return threadInfo.ThreadTS, threadInfo.MessageText, true
 	}
 
-	// Not in cache - search Slack for existing thread before trying to create
+	// Search Slack for existing thread
 	prURL := fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, prNumber)
 	searchFrom := pullRequest.CreatedAt
 	if searchFrom.IsZero() || time.Since(searchFrom) > 30*24*time.Hour {
-		searchFrom = time.Now().AddDate(0, 0, -30) // 30 days fallback
+		searchFrom = time.Now().AddDate(0, 0, -30)
 		slog.Debug("using 30-day fallback for thread search",
 			"pr", cacheKey,
 			"pr_created_at_available", !pullRequest.CreatedAt.IsZero(),
@@ -187,98 +215,89 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 			"search_window_days", int(time.Since(searchFrom).Hours()/24))
 	}
 
-	initialSearchTS, initialSearchText := c.searchForPRThread(ctx, channelID, prURL, searchFrom)
-	if initialSearchTS != "" {
+	threadTS, messageText = c.searchForPRThread(ctx, channelID, prURL, searchFrom)
+	if threadTS != "" {
 		slog.Info("found existing PR thread via initial search",
 			"pr", cacheKey,
-			"thread_ts", initialSearchTS,
+			"thread_ts", threadTS,
 			logFieldChannel, channelID,
-			"current_message_preview", initialSearchText[:min(100, len(initialSearchText))])
+			"current_message_preview", messageText[:min(100, len(messageText))])
 
-		// Save the found thread (cache + persist)
+		// Save the found thread
 		c.saveThread(ctx, owner, repo, prNumber, channelID, cache.ThreadInfo{
-			ThreadTS:    initialSearchTS,
+			ThreadTS:    threadTS,
 			ChannelID:   channelID,
 			LastState:   prState,
-			MessageText: initialSearchText,
+			MessageText: messageText,
 		})
-		return initialSearchTS, false, initialSearchText, nil
+		return threadTS, messageText, true
 	}
 
-	// Prevent concurrent creation of the same PR thread in same channel
-	// Lock on cacheKey (with channel) to allow parallel creation in different channels
+	return "", "", false
+}
+
+// createPRThreadWithLocking creates a new PR thread with concurrent creation prevention.
+// Returns (threadInfo, wasCreated, error).
+// wasCreated is true if a new thread was created, false if an existing thread was found.
+func (c *Coordinator) createPRThreadWithLocking(
+	ctx context.Context, channelID, owner, repo string, prNumber int, prState string,
+	pullRequest struct {
+		CreatedAt time.Time `json:"created_at"`
+		User      struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		HTMLURL string `json:"html_url"`
+		Title   string `json:"title"`
+		Number  int    `json:"number"`
+	},
+	checkResult *turn.CheckResponse,
+) (threadInfo cache.ThreadInfo, wasCreated bool, err error) {
+	cacheKey := fmt.Sprintf("%s/%s#%d:%s", owner, repo, prNumber, channelID)
+	// Prevent concurrent creation within this instance
 	if !c.threadCache.MarkCreating(cacheKey) {
-		// Another goroutine is already creating this thread
-		slog.Info("another goroutine is creating this PR thread, waiting for completion",
-			"pr", cacheKey)
-		deadline := time.Now().Add(30 * time.Second)
-		for time.Now().Before(deadline) {
-			time.Sleep(500 * time.Millisecond)
-			if threadInfo, exists := c.threadCache.Get(cacheKey); exists {
-				slog.Info("found PR thread after waiting for concurrent creation",
-					"pr", cacheKey,
-					"thread_ts", threadInfo.ThreadTS,
-					"waited", time.Since(time.Now().Add(-30*time.Second)))
-				return threadInfo.ThreadTS, false, "", nil
-			}
-			// Check if the other goroutine finished (even if it failed)
-			if !c.threadCache.IsCreating(cacheKey) {
-				// Other goroutine finished but didn't cache (likely failed)
-				// Try to mark as creating ourselves
-				if !c.threadCache.MarkCreating(cacheKey) {
-					// Someone else started again, keep waiting
-					continue
-				}
-				// We successfully marked it, break out to create
-				break
-			}
+		// Wait for another goroutine to finish
+		threadTS, messageText, shouldProceed := c.waitForConcurrentCreation(cacheKey)
+		if !shouldProceed {
+			// Thread was found - not newly created
+			return cache.ThreadInfo{
+				ThreadTS:    threadTS,
+				MessageText: messageText,
+			}, false, nil
 		}
-		if c.threadCache.IsCreating(cacheKey) {
-			slog.Warn("timed out waiting for concurrent thread creation, will try creating ourselves",
-				"pr", cacheKey)
-			// Try to take over creation
-			if !c.threadCache.MarkCreating(cacheKey) {
-				// Still being created, give up
-				return "", false, "", errors.New("timed out waiting for thread creation")
-			}
-		}
+		// If shouldProceed is true, we've successfully marked as creating and should continue
 	}
 
-	// Double-check cache after marking as creating
-	if threadInfo, exists := c.threadCache.Get(cacheKey); exists {
+	// Double-check cache after acquiring lock
+	if info, exists := c.threadCache.Get(cacheKey); exists {
 		c.threadCache.UnmarkCreating(cacheKey)
 		slog.Debug("found PR thread in cache after marking as creating",
 			"pr", cacheKey,
-			"thread_ts", threadInfo.ThreadTS)
-		return threadInfo.ThreadTS, false, "", nil
+			"thread_ts", info.ThreadTS)
+		return info, false, nil
 	}
 
-	// Ensure we clean up the creating flag
 	defer c.threadCache.UnmarkCreating(cacheKey)
 
-	// CRITICAL: Perform one final cross-instance check RIGHT before the expensive operations
-	// This handles the case where another instance (during rolling deployment) just created
-	// a thread while we were acquiring the lock. The creating flag only prevents races within
-	// this instance - we need to check Slack itself to catch threads from other instances.
-	// Add a small delay to let any concurrent creates from other instances complete their Slack API call.
+	// Cross-instance race prevention check
+	prURL := fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, prNumber)
 	time.Sleep(100 * time.Millisecond)
-	crossInstanceCheckTS, crossInstanceText := c.searchForPRThread(ctx, channelID, prURL, pullRequest.CreatedAt)
-	if crossInstanceCheckTS != "" {
+	crossInstanceTS, crossInstanceText := c.searchForPRThread(ctx, channelID, prURL, pullRequest.CreatedAt)
+	if crossInstanceTS != "" {
 		slog.Info("found thread created by another instance (cross-instance race avoided)",
 			"pr", cacheKey,
-			"thread_ts", crossInstanceCheckTS,
+			"thread_ts", crossInstanceTS,
 			logFieldChannel, channelID,
 			"current_message_preview", crossInstanceText[:min(100, len(crossInstanceText))],
 			"note", "this prevented duplicate thread creation during rolling deployment")
 
-		// Save it and return (cache + persist)
-		c.saveThread(ctx, owner, repo, prNumber, channelID, cache.ThreadInfo{
-			ThreadTS:    crossInstanceCheckTS,
+		info := cache.ThreadInfo{
+			ThreadTS:    crossInstanceTS,
 			ChannelID:   channelID,
 			LastState:   prState,
 			MessageText: crossInstanceText,
-		})
-		return crossInstanceCheckTS, false, crossInstanceText, nil
+		}
+		c.saveThread(ctx, owner, repo, prNumber, channelID, info)
+		return info, false, nil
 	}
 
 	// Create new thread
@@ -286,21 +305,21 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 		"pr", cacheKey,
 		logFieldChannel, channelID,
 		"pr_state", prState,
-		"pr_created_at", pullRequest.CreatedAt.Format(time.RFC3339),
-		"search_window_used", searchFrom.Format(time.RFC3339))
+		"pr_created_at", pullRequest.CreatedAt.Format(time.RFC3339))
 
 	newThreadTS, newMessageText, err := c.createPRThread(ctx, channelID, owner, repo, prNumber, prState, pullRequest, checkResult)
 	if err != nil {
-		return "", false, "", fmt.Errorf("failed to create PR thread: %w", err)
+		return cache.ThreadInfo{}, false, fmt.Errorf("failed to create PR thread: %w", err)
 	}
 
-	// Save the new thread (cache + persist)
-	c.saveThread(ctx, owner, repo, prNumber, channelID, cache.ThreadInfo{
+	// Save the new thread
+	info := cache.ThreadInfo{
 		ThreadTS:    newThreadTS,
 		ChannelID:   channelID,
 		LastState:   prState,
 		MessageText: newMessageText,
-	})
+	}
+	c.saveThread(ctx, owner, repo, prNumber, channelID, info)
 
 	slog.Info("created and cached new PR thread",
 		"pr", cacheKey,
@@ -311,7 +330,48 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 		"creation_successful", true,
 		"note", "if you see duplicate threads, check if another instance created one during the same time window")
 
-	return newThreadTS, true, newMessageText, nil
+	return info, true, nil
+}
+
+// waitForConcurrentCreation waits for another goroutine to finish creating the thread.
+// Returns (threadTS, messageText, shouldProceed) where shouldProceed indicates whether caller should create.
+func (c *Coordinator) waitForConcurrentCreation(cacheKey string) (threadTS, messageText string, shouldProceed bool) {
+	slog.Info("another goroutine is creating this PR thread, waiting for completion", "pr", cacheKey)
+
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
+
+		if threadInfo, exists := c.threadCache.Get(cacheKey); exists {
+			slog.Info("found PR thread after waiting for concurrent creation",
+				"pr", cacheKey,
+				"thread_ts", threadInfo.ThreadTS,
+				"waited", time.Since(time.Now().Add(-30*time.Second)))
+			return threadInfo.ThreadTS, threadInfo.MessageText, false
+		}
+
+		// Check if the other goroutine finished
+		if !c.threadCache.IsCreating(cacheKey) {
+			// Other goroutine finished but didn't cache - try to create ourselves
+			if c.threadCache.MarkCreating(cacheKey) {
+				// Successfully marked - caller should proceed with creation
+				return "", "", true
+			}
+			// Someone else marked it first, continue waiting
+			continue
+		}
+	}
+
+	// Timeout - try one last time to mark as creating
+	if c.threadCache.IsCreating(cacheKey) {
+		slog.Warn("timed out waiting for concurrent thread creation", "pr", cacheKey)
+		if c.threadCache.MarkCreating(cacheKey) {
+			return "", "", true
+		}
+	}
+
+	// Failed to acquire lock - return empty to avoid creation
+	return "", "", false
 }
 
 // searchForPRThread searches for an existing PR thread in a channel using channel history.
@@ -1215,8 +1275,6 @@ func (c *Coordinator) processChannelsInParallel(
 
 // processPRForChannel handles PR processing for a single channel (extracted from the main loop).
 // Returns a map of Slack user IDs that were successfully tagged in this channel.
-//
-//nolint:maintidx // Core PR processing logic with necessary complexity for handling notifications
 func (c *Coordinator) processPRForChannel(
 	ctx context.Context, prCtx prContext, channelName, workspaceID string,
 ) map[string]bool {
@@ -1240,26 +1298,10 @@ func (c *Coordinator) processPRForChannel(
 		return nil
 	}
 
-	// Resolve channel name to ID for API calls
-	channelID := c.slack.ResolveChannelID(ctx, channelName)
-	if channelID == channelName || (channelName != "" && channelName[0] == '#' && channelID == channelName[1:]) {
-		slog.Warn("could not resolve channel for PR processing",
-			"workspace", c.workspaceName,
-			logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-			"channel", channelName,
-			"action_required", "verify channel exists and bot has access")
+	// Resolve and validate channel
+	channelID, channelDisplay, ok := c.resolveAndValidateChannel(ctx, channelName, owner, repo, prNumber)
+	if !ok {
 		return nil
-	}
-
-	// For display purposes, show both name and ID
-	var channelDisplay string
-	switch {
-	case channelID != channelName:
-		channelDisplay = fmt.Sprintf("#%s (%s)", channelName, channelID)
-	case channelName != "" && channelName[0] == 'C':
-		channelDisplay = channelID
-	default:
-		channelDisplay = fmt.Sprintf("#%s (unresolved)", channelName)
 	}
 
 	slog.Debug("processing PR for individual channel",
@@ -1270,16 +1312,14 @@ func (c *Coordinator) processPRForChannel(
 		"pr_state", prState,
 		"action", event.Action)
 
+	// Get old state from cache
 	oldState := ""
-
-	// Check cache for existing thread info to get old state
 	prKey := fmt.Sprintf("%s/%s#%d", owner, repo, prNumber)
 	if threadInfo, exists := c.threadCache.Get(prKey); exists && threadInfo.ChannelID == channelID {
 		oldState = threadInfo.LastState
 	}
 
-	// Find or create thread for this PR in this channel
-	// Convert to the expected struct format
+	// Find or create thread
 	pullRequestStruct := struct {
 		CreatedAt time.Time `json:"created_at"`
 		User      struct {
@@ -1311,115 +1351,17 @@ func (c *Coordinator) processPRForChannel(
 		return nil
 	}
 
-	// Track that we notified users in this channel for DM delay logic
+	// Track channel notification
 	if c.notifier != nil && c.notifier.Tracker != nil {
 		c.notifier.Tracker.UpdateChannelNotification(workspaceID, owner, repo, prNumber)
 	}
 
-	// Track user tags in channel for DM delay logic and collect successfully tagged Slack users
-	taggedUsers := make(map[string]bool)
-	blockedUsers := c.extractBlockedUsersFromTurnclient(checkResult)
-	domain := c.configManager.Domain(owner)
-	if len(blockedUsers) > 0 {
-		// Record tags for blocked users synchronously to prevent race with DM sending
-		// Generous timeout: GitHub email lookup (~5-10s) + Slack API lookups (~5-10s)
-		lookupCtx, lookupCancel := context.WithTimeout(ctx, 30*time.Second)
-		defer lookupCancel()
+	// Track user tags
+	taggedUsers := c.trackUserTagsForDMDelay(ctx, workspaceID, channelID, channelDisplay, owner, repo, prNumber, checkResult)
 
-		for _, githubUser := range blockedUsers {
-			slackUserID, err := c.userMapper.SlackHandle(lookupCtx, githubUser, owner, domain)
-			if err == nil && slackUserID != "" {
-				if c.notifier != nil && c.notifier.Tracker != nil {
-					c.notifier.Tracker.UpdateUserPRChannelTag(workspaceID, slackUserID, channelID, owner, repo, prNumber)
-				}
-				taggedUsers[slackUserID] = true
-				slog.Debug("tracked user tag in channel",
-					"workspace", workspaceID,
-					"github_user", githubUser,
-					"slack_user", slackUserID,
-					"channel", channelDisplay,
-					"channel_id", channelID,
-					"pr", fmt.Sprintf(prFormatString, owner, repo, prNumber))
-			}
-		}
-	}
-
-	// Build what the message SHOULD be based on current PR state
-	// Then compare to what it IS - update if different
+	// Update message if needed
 	if !wasNewlyCreated {
-		domain := c.configManager.Domain(owner)
-		params := notify.MessageParams{
-			CheckResult: checkResult,
-			Owner:       owner,
-			Repo:        repo,
-			PRNumber:    prNumber,
-			Title:       event.PullRequest.Title,
-			Author:      event.PullRequest.User.Login,
-			HTMLURL:     event.PullRequest.HTMLURL,
-			Domain:      domain,
-			UserMapper:  c.userMapper,
-		}
-		expectedText := notify.FormatChannelMessageBase(ctx, params) + notify.FormatNextActionsSuffix(ctx, params)
-
-		// Compare expected vs actual - update if different
-		if currentText != expectedText {
-			slog.Info("updating message - content changed",
-				"workspace", c.workspaceName,
-				logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-				"channel", channelDisplay,
-				"channel_id", channelID,
-				"thread_ts", threadTS,
-				"pr_state", prState,
-				"old_state", oldState,
-				"current_message_preview", currentText[:min(100, len(currentText))],
-				"expected_message_preview", expectedText[:min(100, len(expectedText))])
-
-			if err := c.slack.UpdateMessage(ctx, channelID, threadTS, expectedText); err != nil {
-				slog.Error("failed to update PR message",
-					"workspace", c.workspaceName,
-					logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-					"channel", channelDisplay,
-					"channel_id", channelID,
-					"thread_ts", threadTS,
-					"error", err,
-					"impact", "message_update_skipped_will_retry_via_polling",
-					"next_poll_in", "5m")
-			} else {
-				// Save updated thread info (cache + persist)
-				c.saveThread(ctx, owner, repo, prNumber, channelID, cache.ThreadInfo{
-					ThreadTS:    threadTS,
-					ChannelID:   channelID,
-					LastState:   prState,
-					MessageText: expectedText,
-				})
-				slog.Info("successfully updated PR message",
-					"workspace", c.workspaceName,
-					logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-					"channel", channelDisplay,
-					"channel_id", channelID,
-					"thread_ts", threadTS,
-					"pr_state", prState)
-
-				// Also update DM messages for blocked users
-				c.updateDMMessagesForPR(ctx, prUpdateInfo{
-					owner:    owner,
-					repo:     repo,
-					number:   prNumber,
-					title:    event.PullRequest.Title,
-					author:   event.PullRequest.User.Login,
-					state:    prState,
-					url:      event.PullRequest.HTMLURL,
-					checkRes: checkResult,
-				})
-			}
-		} else {
-			slog.Debug("message already matches expected content, no update needed",
-				"workspace", c.workspaceName,
-				logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-				"channel", channelDisplay,
-				"thread_ts", threadTS,
-				"pr_state", prState)
-		}
+		c.updateMessageIfNeeded(ctx, channelID, channelDisplay, threadTS, oldState, currentText, prState, owner, repo, prNumber, event, checkResult)
 	}
 
 	slog.Info("successfully processed PR in channel",
@@ -1434,6 +1376,162 @@ func (c *Coordinator) processPRForChannel(
 		"users_tagged", len(taggedUsers))
 
 	return taggedUsers
+}
+
+// resolveAndValidateChannel resolves channel name to ID and creates display string.
+// Returns (channelID, channelDisplay, ok).
+func (c *Coordinator) resolveAndValidateChannel(
+	ctx context.Context, channelName, owner, repo string, prNumber int,
+) (channelID, channelDisplay string, ok bool) {
+	channelID = c.slack.ResolveChannelID(ctx, channelName)
+	if channelID == channelName || (channelName != "" && channelName[0] == '#' && channelID == channelName[1:]) {
+		slog.Warn("could not resolve channel for PR processing",
+			"workspace", c.workspaceName,
+			logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+			"channel", channelName,
+			"action_required", "verify channel exists and bot has access")
+		return "", "", false
+	}
+
+	switch {
+	case channelID != channelName:
+		channelDisplay = fmt.Sprintf("#%s (%s)", channelName, channelID)
+	case channelName != "" && channelName[0] == 'C':
+		channelDisplay = channelID
+	default:
+		channelDisplay = fmt.Sprintf("#%s (unresolved)", channelName)
+	}
+
+	return channelID, channelDisplay, true
+}
+
+// trackUserTagsForDMDelay tracks user tags in channel for DM delay logic.
+func (c *Coordinator) trackUserTagsForDMDelay(
+	ctx context.Context, workspaceID, channelID, channelDisplay, owner, repo string, prNumber int,
+	checkResult *turn.CheckResponse,
+) map[string]bool {
+	taggedUsers := make(map[string]bool)
+	blockedUsers := c.extractBlockedUsersFromTurnclient(checkResult)
+	if len(blockedUsers) == 0 {
+		return taggedUsers
+	}
+
+	domain := c.configManager.Domain(owner)
+	// Record tags synchronously to prevent race with DM sending
+	lookupCtx, lookupCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer lookupCancel()
+
+	for _, githubUser := range blockedUsers {
+		slackUserID, err := c.userMapper.SlackHandle(lookupCtx, githubUser, owner, domain)
+		if err == nil && slackUserID != "" {
+			if c.notifier != nil && c.notifier.Tracker != nil {
+				c.notifier.Tracker.UpdateUserPRChannelTag(workspaceID, slackUserID, channelID, owner, repo, prNumber)
+			}
+			taggedUsers[slackUserID] = true
+			slog.Debug("tracked user tag in channel",
+				"workspace", workspaceID,
+				"github_user", githubUser,
+				"slack_user", slackUserID,
+				"channel", channelDisplay,
+				"channel_id", channelID,
+				"pr", fmt.Sprintf(prFormatString, owner, repo, prNumber))
+		}
+	}
+
+	return taggedUsers
+}
+
+// updateMessageIfNeeded builds the expected message and updates if different from current.
+//
+//nolint:revive // Function complexity justified by comprehensive message update logic
+func (c *Coordinator) updateMessageIfNeeded(ctx context.Context, channelID, channelDisplay, threadTS, oldState, currentText, prState, owner, repo string, prNumber int, event struct {
+	Action      string `json:"action"`
+	PullRequest struct {
+		HTMLURL   string    `json:"html_url"`
+		Title     string    `json:"title"`
+		CreatedAt time.Time `json:"created_at"`
+		User      struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Number int `json:"number"`
+	} `json:"pull_request"`
+	Number int `json:"number"`
+}, checkResult *turn.CheckResponse,
+) {
+	domain := c.configManager.Domain(owner)
+	params := notify.MessageParams{
+		CheckResult: checkResult,
+		Owner:       owner,
+		Repo:        repo,
+		PRNumber:    prNumber,
+		Title:       event.PullRequest.Title,
+		Author:      event.PullRequest.User.Login,
+		HTMLURL:     event.PullRequest.HTMLURL,
+		Domain:      domain,
+		UserMapper:  c.userMapper,
+	}
+	expectedText := notify.FormatChannelMessageBase(ctx, params) + notify.FormatNextActionsSuffix(ctx, params)
+
+	if currentText == expectedText {
+		slog.Debug("message already matches expected content, no update needed",
+			"workspace", c.workspaceName,
+			logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+			"channel", channelDisplay,
+			"thread_ts", threadTS,
+			"pr_state", prState)
+		return
+	}
+
+	slog.Info("updating message - content changed",
+		"workspace", c.workspaceName,
+		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+		"channel", channelDisplay,
+		"channel_id", channelID,
+		"thread_ts", threadTS,
+		"pr_state", prState,
+		"old_state", oldState,
+		"current_message_preview", currentText[:min(100, len(currentText))],
+		"expected_message_preview", expectedText[:min(100, len(expectedText))])
+
+	if err := c.slack.UpdateMessage(ctx, channelID, threadTS, expectedText); err != nil {
+		slog.Error("failed to update PR message",
+			"workspace", c.workspaceName,
+			logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+			"channel", channelDisplay,
+			"channel_id", channelID,
+			"thread_ts", threadTS,
+			"error", err,
+			"impact", "message_update_skipped_will_retry_via_polling",
+			"next_poll_in", "5m")
+		return
+	}
+
+	// Save updated thread info
+	c.saveThread(ctx, owner, repo, prNumber, channelID, cache.ThreadInfo{
+		ThreadTS:    threadTS,
+		ChannelID:   channelID,
+		LastState:   prState,
+		MessageText: expectedText,
+	})
+	slog.Info("successfully updated PR message",
+		"workspace", c.workspaceName,
+		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+		"channel", channelDisplay,
+		"channel_id", channelID,
+		"thread_ts", threadTS,
+		"pr_state", prState)
+
+	// Also update DM messages for blocked users
+	c.updateDMMessagesForPR(ctx, prUpdateInfo{
+		owner:    owner,
+		repo:     repo,
+		number:   prNumber,
+		title:    event.PullRequest.Title,
+		author:   event.PullRequest.User.Login,
+		state:    prState,
+		url:      event.PullRequest.HTMLURL,
+		checkRes: checkResult,
+	})
 }
 
 // handlePullRequestFromSprinkler handles pull request events from sprinkler by fetching PR data from GitHub API.

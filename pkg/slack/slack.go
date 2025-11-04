@@ -1266,14 +1266,69 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 	slog.Debug("channel not in cache, fetching from Slack API", "channel", channelName)
 
 	// Try to find the channel - first try public and private channels
+	channels, cursor, err := c.fetchConversationsWithRetry(ctx, []string{"public_channel", "private_channel"}, "")
+	if err != nil {
+		slog.Warn("failed to get public+private conversations, trying public only",
+			"error", err,
+			"error_type", fmt.Sprintf("%T", err),
+			"channel", channelName)
+
+		// Fallback: try public channels only (might not have private channel permissions)
+		channels, cursor, err = c.fetchConversationsWithRetry(ctx, []string{"public_channel"}, "")
+		if err != nil {
+			slog.Error("failed to get conversations for channel resolution",
+				"error", err,
+				"error_type", fmt.Sprintf("%T", err),
+				"error_string", err.Error(),
+				"channel", channelName,
+				"attempted_types", []string{"public_channel", "private_channel"},
+				"fallback_types", []string{"public_channel"},
+				"api_method", "GetConversationsContext")
+			return channelName // Return original name if we can't resolve
+		}
+		slog.Debug("successfully retrieved public channels only", "channel", channelName, "count", len(channels))
+	}
+
+	// Search through initial page
+	if resolvedID, found := c.searchChannelsForName(channels, channelName, cacheKey); found {
+		return resolvedID
+	}
+
+	// If we have more pages, search them too
+	for cursor != "" {
+		channels, cursor, err = c.fetchConversationsWithRetry(ctx, []string{"public_channel", "private_channel"}, cursor)
+		if err != nil {
+			slog.Warn("failed to get additional conversations for channel resolution", "error", err)
+			break
+		}
+
+		if resolvedID, found := c.searchChannelsForName(channels, channelName, cacheKey); found {
+			return resolvedID
+		}
+	}
+
+	slog.Warn("could not resolve channel name to ID",
+		"channel", channelName,
+		"team_id", c.teamID)
+	// Cache the failure for SHORT time (user might create channel or fix typo)
+	c.cache.set(cacheKey, channelName, 45*time.Second)
+	slog.Info("caching channel resolution failure briefly to allow for channel creation",
+		"channel", channelName, "cache_ttl", "45s")
+	return channelName // Return original if not found
+}
+
+// fetchConversationsWithRetry fetches conversations with retry logic.
+func (c *Client) fetchConversationsWithRetry(ctx context.Context, types []string, cursor string) ([]slack.Channel, string, error) {
 	var channels []slack.Channel
-	var cursor string
+	var nextCursor string
+
 	err := retry.Do(
 		func() error {
 			var err error
-			channels, cursor, err = c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
-				Types: []string{"public_channel", "private_channel"},
-				Limit: 200,
+			channels, nextCursor, err = c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
+				Types:  types,
+				Limit:  200,
+				Cursor: cursor,
 			})
 			if err != nil {
 				if isRateLimitError(err) {
@@ -1291,111 +1346,22 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 		retry.LastErrorOnly(true),
 		retry.Context(ctx),
 	)
-	if err != nil {
-		slog.Warn("failed to get public+private conversations, trying public only",
-			"error", err,
-			"error_type", fmt.Sprintf("%T", err),
-			"channel", channelName)
 
-		// Fallback: try public channels only (might not have private channel permissions)
-		err = retry.Do(
-			func() error {
-				var err error
-				channels, cursor, err = c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
-					Types: []string{"public_channel"},
-					Limit: 200,
-				})
-				if err != nil {
-					if isRateLimitError(err) {
-						return err // Retry
-					}
-					return retry.Unrecoverable(err)
-				}
-				return nil
-			},
-			retry.Attempts(5),
-			retry.Delay(c.getRetryDelay()),
-			retry.MaxDelay(2*time.Minute),
-			retry.DelayType(retry.BackOffDelay),
-			retry.MaxJitter(time.Second),
-			retry.LastErrorOnly(true),
-			retry.Context(ctx),
-		)
-		if err != nil {
-			slog.Error("failed to get conversations for channel resolution",
-				"error", err,
-				"error_type", fmt.Sprintf("%T", err),
-				"error_string", err.Error(),
-				"channel", channelName,
-				"attempted_types", []string{"public_channel", "private_channel"},
-				"fallback_types", []string{"public_channel"},
-				"api_method", "GetConversationsContext")
-			return channelName // Return original name if we can't resolve
-		}
-		slog.Debug("successfully retrieved public channels only", "channel", channelName, "count", len(channels))
-	}
+	return channels, nextCursor, err
+}
 
-	// Search through channels
+// searchChannelsForName searches a list of channels for a matching name and caches the result.
+// Returns (channelID, found).
+func (c *Client) searchChannelsForName(channels []slack.Channel, channelName, cacheKey string) (string, bool) {
 	for i := range channels {
-		channel := &channels[i]
-		if channel.Name == channelName {
-			slog.Debug("resolved channel name to ID", "name", channelName, "id", channel.ID)
+		if channels[i].Name == channelName {
+			slog.Debug("resolved channel name to ID", "name", channelName, "id", channels[i].ID)
 			// Cache the successful resolution for 1 hour (channels are stable, invalidated by events)
-			c.cache.set(cacheKey, channel.ID, time.Hour)
-			return channel.ID
+			c.cache.set(cacheKey, channels[i].ID, time.Hour)
+			return channels[i].ID, true
 		}
 	}
-
-	// If we have more pages, search them too
-	for cursor != "" {
-		err = retry.Do(
-			func() error {
-				var err error
-				channels, cursor, err = c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
-					Types:  []string{"public_channel", "private_channel"},
-					Limit:  200,
-					Cursor: cursor,
-				})
-				if err != nil {
-					if isRateLimitError(err) {
-						return err // Retry
-					}
-					return retry.Unrecoverable(err)
-				}
-				return nil
-			},
-			retry.Attempts(5),
-			retry.Delay(c.getRetryDelay()),
-			retry.MaxDelay(2*time.Minute),
-			retry.DelayType(retry.BackOffDelay),
-			retry.MaxJitter(time.Second),
-			retry.LastErrorOnly(true),
-			retry.Context(ctx),
-		)
-		if err != nil {
-			slog.Warn("failed to get additional conversations for channel resolution", "error", err)
-			break
-		}
-
-		for i := range channels {
-			channel := &channels[i]
-			if channel.Name == channelName {
-				slog.Debug("resolved channel name to ID", "name", channelName, "id", channel.ID)
-				// Cache the successful resolution for 1 hour (channels are stable, invalidated by events)
-				c.cache.set(cacheKey, channel.ID, time.Hour)
-				return channel.ID
-			}
-		}
-	}
-
-	slog.Warn("could not resolve channel name to ID",
-		"channel", channelName,
-		"team_id", c.teamID)
-	// Cache the failure for SHORT time (user might create channel or fix typo)
-	c.cache.set(cacheKey, channelName, 45*time.Second)
-	slog.Info("caching channel resolution failure briefly to allow for channel creation",
-		"channel", channelName, "cache_ttl", "45s")
-	return channelName // Return original if not found
+	return "", false
 }
 
 // IsUserInChannel checks if a specific user is a member of the specified channel.

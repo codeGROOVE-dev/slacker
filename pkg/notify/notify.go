@@ -665,8 +665,6 @@ func PrefixForAnalysis(workflowState string, nextActions map[string]turn.Action)
 // NotifyUser sends a smart notification to a user about a PR using the configured logic.
 // Implements delayed DM logic: if user was tagged in channel, delay by configured time.
 // If user is not in channel where tagged, send DM immediately.
-//
-//nolint:revive,maintidx // function length acceptable for complex notification logic
 func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID, channelName string, pr PRInfo) error {
 	slog.Info("evaluating notification for user",
 		"user", userID,
@@ -696,161 +694,203 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 		"last_channel_tag", tagInfo.Timestamp,
 		"tag_channel_id", tagInfo.ChannelID)
 
-	// Check if user is active on Slack.
-	isActive := slackClient.IsUserActive(ctx, userID)
+	// Check early exit conditions
+	if m.shouldSkipForInactiveUser(ctx, slackClient, userID, pr) {
+		return nil
+	}
+
+	if m.shouldSkipForAntiSpam(userID, lastDM, pr) {
+		return nil
+	}
+
+	// Evaluate whether to delay DM based on channel tag
+	shouldQueue, shouldSkip := m.evaluateDMDelay(ctx, slackClient, tagInfo, userID, channelName, pr)
+	if shouldSkip {
+		return nil
+	}
+	if shouldQueue {
+		return m.queueDM(ctx, tagInfo, userID, channelName, workspaceID, pr)
+	}
+
+	// Prepare and send the DM
+	message, action := formatDMMessage(pr)
+	return m.sendOrUpdateDM(ctx, slackClient, userID, workspaceID, message, action, pr)
+}
+
+// shouldSkipForInactiveUser checks if the user is active on Slack.
+func (*Manager) shouldSkipForInactiveUser(ctx context.Context, slackClient SlackClient, userID string, pr PRInfo) bool {
+	active := slackClient.IsUserActive(ctx, userID)
 	slog.Debug("checking user activity status",
 		"user", userID,
-		"is_active", isActive)
+		"is_active", active)
 
-	if !isActive {
+	if !active {
 		slog.Info("deferring notification - user not active on Slack",
 			"user", userID,
 			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
 			"will_retry_when_active", true)
-		return nil
+		return true
 	}
+	return false
+}
 
-	// Avoid spamming - don't send DM if we recently sent one
-	timeSinceLastDM := time.Since(lastDM)
-	antiSpamDelay := 1 * time.Minute
+// shouldSkipForAntiSpam checks if we recently sent a DM to avoid spamming.
+func (*Manager) shouldSkipForAntiSpam(userID string, lastDM time.Time, pr PRInfo) bool {
+	since := time.Since(lastDM)
+	delay := 1 * time.Minute
 
 	slog.Debug("checking anti-spam protection",
 		"user", userID,
-		"time_since_last_dm", timeSinceLastDM,
-		"anti_spam_delay", antiSpamDelay,
-		"will_block", timeSinceLastDM < antiSpamDelay)
+		"time_since_last_dm", since,
+		"anti_spam_delay", delay,
+		"will_block", since < delay)
 
-	if timeSinceLastDM < antiSpamDelay {
+	if since < delay {
 		slog.Info("skipping DM - anti-spam protection active",
 			"user", userID,
 			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
-			"time_since_last_dm", timeSinceLastDM,
-			"anti_spam_delay", antiSpamDelay,
-			"time_until_next_allowed", antiSpamDelay-timeSinceLastDM)
-		return nil
+			"time_since_last_dm", since,
+			"anti_spam_delay", delay,
+			"time_until_next_allowed", delay-since)
+		return true
 	}
+	return false
+}
 
-	// Check if we should delay this DM based on channel tag timing
-	if !tagInfo.Timestamp.IsZero() {
-		// User was tagged in a channel - use the ACTUAL channel they were tagged in
-		taggedChannelID := tagInfo.ChannelID
-
-		// Check if they're in that specific channel
-		userInChannel := slackClient.IsUserInChannel(ctx, taggedChannelID, userID)
-
-		// Get configured delay for this channel/org (we need channel name for config lookup)
-		// If channelName wasn't provided, we can't look up config - use default
-		delayMins := defaultReminderDMDelayMinutes
-		if channelName != "" {
-			delayMins = m.configManager.ReminderDMDelay(pr.Owner, channelName)
-		}
-
-		slog.Debug("evaluating follow-up reminder delay",
-			"user", userID,
-			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
-			"user_in_channel", userInChannel,
-			"channel_tag_time", tagInfo.Timestamp,
-			"tagged_channel_id", taggedChannelID,
-			"configured_delay_mins", delayMins)
-
-		if delayMins == 0 {
-			slog.Info("follow-up reminders disabled for this channel - skipping DM",
-				"user", userID,
-				"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
-				"channel", channelName,
-				"channel_id", taggedChannelID)
-			return nil
-		}
-
-		if userInChannel {
-			// User is in the channel - apply delay
-			timeSinceTag := time.Since(tagInfo.Timestamp)
-			delayDuration := time.Duration(delayMins) * time.Minute
-
-			if timeSinceTag < delayDuration {
-				// Queue this DM to be sent later
-				sendAfter := tagInfo.Timestamp.Add(delayDuration)
-
-				// Serialize NextAction map to JSON
-				nextActionsJSON, err := json.Marshal(pr.NextAction)
-				if err != nil {
-					slog.Error("failed to serialize next actions for pending DM",
-						"user", userID,
-						"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
-						"error", err)
-					nextActionsJSON = []byte("{}")
-				}
-
-				pendingDM := state.PendingDM{
-					ID:            uuid.New().String(),
-					WorkspaceID:   workspaceID,
-					UserID:        userID,
-					PROwner:       pr.Owner,
-					PRRepo:        pr.Repo,
-					PRNumber:      pr.Number,
-					PRURL:         pr.HTMLURL,
-					PRTitle:       pr.Title,
-					PRAuthor:      pr.Author,
-					PRState:       pr.State,
-					WorkflowState: pr.WorkflowState,
-					NextActions:   string(nextActionsJSON),
-					ChannelID:     taggedChannelID,
-					ChannelName:   channelName,
-					QueuedAt:      time.Now(),
-					SendAfter:     sendAfter,
-				}
-
-				if err := m.store.QueuePendingDM(ctx, &pendingDM); err != nil {
-					slog.Error("failed to queue pending DM",
-						"user", userID,
-						"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
-						"error", err)
-					return fmt.Errorf("failed to queue pending DM: %w", err)
-				}
-
-				slog.Info("queued DM for later delivery",
-					"user", userID,
-					"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
-					"channel_id", taggedChannelID,
-					"time_since_tag", timeSinceTag,
-					"configured_delay", delayDuration,
-					"send_after", sendAfter,
-					"time_until_dm", delayDuration-timeSinceTag,
-					"dm_id", pendingDM.ID)
-				return nil
-			}
-
-			slog.Info("sending delayed follow-up DM - user was tagged but delay elapsed",
-				"user", userID,
-				"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
-				"channel_id", taggedChannelID,
-				"time_since_tag", timeSinceTag,
-				"configured_delay", delayDuration)
-		} else {
-			// User is NOT in the channel - send DM immediately
-			slog.Info("sending immediate DM - user not in channel where tagged",
-				"user", userID,
-				"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
-				"channel_id", taggedChannelID)
-		}
-	} else {
+// evaluateDMDelay determines if a DM should be queued or skipped based on channel tag timing.
+// Returns (shouldQueue, shouldSkip).
+func (m *Manager) evaluateDMDelay(
+	ctx context.Context, slackClient SlackClient, tagInfo TagInfo, userID, channelName string, pr PRInfo,
+) (shouldQueue, shouldSkip bool) {
+	if tagInfo.Timestamp.IsZero() {
 		slog.Debug("no channel tag found - sending DM without delay",
 			"user", userID,
 			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number))
+		return false, false
 	}
 
-	// Format notification message using same style as channel messages
+	ch := tagInfo.ChannelID
+	inChannel := slackClient.IsUserInChannel(ctx, ch, userID)
+
+	// Get configured delay for this channel/org
+	mins := defaultReminderDMDelayMinutes
+	if channelName != "" {
+		mins = m.configManager.ReminderDMDelay(pr.Owner, channelName)
+	}
+
+	slog.Debug("evaluating follow-up reminder delay",
+		"user", userID,
+		"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+		"user_in_channel", inChannel,
+		"channel_tag_time", tagInfo.Timestamp,
+		"tagged_channel_id", ch,
+		"configured_delay_mins", mins)
+
+	if mins == 0 {
+		slog.Info("follow-up reminders disabled for this channel - skipping DM",
+			"user", userID,
+			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+			"channel", channelName,
+			"channel_id", ch)
+		return false, true
+	}
+
+	if inChannel {
+		since := time.Since(tagInfo.Timestamp)
+		delay := time.Duration(mins) * time.Minute
+
+		if since < delay {
+			// Should queue for later delivery
+			return true, false
+		}
+
+		slog.Info("sending delayed follow-up DM - user was tagged but delay elapsed",
+			"user", userID,
+			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+			"channel_id", ch,
+			"time_since_tag", since,
+			"configured_delay", delay)
+	} else {
+		slog.Info("sending immediate DM - user not in channel where tagged",
+			"user", userID,
+			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+			"channel_id", ch)
+	}
+
+	return false, false
+}
+
+// queueDM queues a DM to be sent after the configured delay.
+func (m *Manager) queueDM(ctx context.Context, tagInfo TagInfo, userID, channelName, workspaceID string, pr PRInfo) error {
+	mins := defaultReminderDMDelayMinutes
+	if channelName != "" {
+		mins = m.configManager.ReminderDMDelay(pr.Owner, channelName)
+	}
+
+	delay := time.Duration(mins) * time.Minute
+	sendAfter := tagInfo.Timestamp.Add(delay)
+	since := time.Since(tagInfo.Timestamp)
+
+	// Serialize NextAction map to JSON
+	actionsJSON, err := json.Marshal(pr.NextAction)
+	if err != nil {
+		slog.Error("failed to serialize next actions for pending DM",
+			"user", userID,
+			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+			"error", err)
+		actionsJSON = []byte("{}")
+	}
+
+	dm := state.PendingDM{
+		ID:            uuid.New().String(),
+		WorkspaceID:   workspaceID,
+		UserID:        userID,
+		PROwner:       pr.Owner,
+		PRRepo:        pr.Repo,
+		PRNumber:      pr.Number,
+		PRURL:         pr.HTMLURL,
+		PRTitle:       pr.Title,
+		PRAuthor:      pr.Author,
+		PRState:       pr.State,
+		WorkflowState: pr.WorkflowState,
+		NextActions:   string(actionsJSON),
+		ChannelID:     tagInfo.ChannelID,
+		ChannelName:   channelName,
+		QueuedAt:      time.Now(),
+		SendAfter:     sendAfter,
+	}
+
+	if err := m.store.QueuePendingDM(ctx, &dm); err != nil {
+		slog.Error("failed to queue pending DM",
+			"user", userID,
+			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+			"error", err)
+		return fmt.Errorf("failed to queue pending DM: %w", err)
+	}
+
+	slog.Info("queued DM for later delivery",
+		"user", userID,
+		"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+		"channel_id", tagInfo.ChannelID,
+		"time_since_tag", since,
+		"configured_delay", delay,
+		"send_after", sendAfter,
+		"time_until_dm", delay-since,
+		"dm_id", dm.ID)
+	return nil
+}
+
+// formatDMMessage formats the notification message and returns it along with the action string.
+func formatDMMessage(pr PRInfo) (message, action string) {
 	// Determine emoji prefix based on workflow state and next actions
 	var prefix string
 	if pr.WorkflowState != "" {
 		prefix = PrefixForAnalysis(pr.WorkflowState, pr.NextAction)
 	} else {
-		// Fallback to state if workflow state not available
 		prefix = PrefixForState(pr.State)
 	}
 
-	// Format: :emoji: Title <url|repo#123> · author → action
-	var action string
+	// Determine action text based on state
 	switch pr.State {
 	case "newly_published":
 		action = "newly published"
@@ -866,8 +906,8 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 		action = "attention needed"
 	}
 
-	// Use same compact format as channel messages
-	message := fmt.Sprintf(
+	// Format: :emoji: Title <url|repo#123> · author → action
+	message = fmt.Sprintf(
 		"%s %s <%s|%s#%d> · %s → %s",
 		prefix,
 		pr.Title,
@@ -878,6 +918,11 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 		action,
 	)
 
+	return message, action
+}
+
+// sendOrUpdateDM attempts to update an existing DM or sends a new one.
+func (m *Manager) sendOrUpdateDM(ctx context.Context, slackClient SlackClient, userID, workspaceID, message, action string, pr PRInfo) error {
 	slog.Info("sending DM notification to user",
 		"user", userID,
 		"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
@@ -885,11 +930,9 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 		"action_required", action,
 		"message", message)
 
-	// Try to update existing DM first (if one exists in our state store)
-	// UpdateDMMessage returns ErrNoDMToUpdate if no DM exists
+	// Try to update existing DM first
 	updateErr := slackClient.UpdateDMMessage(ctx, userID, pr.HTMLURL, message)
 	if updateErr == nil {
-		// Successfully updated existing DM
 		slog.Info("successfully updated existing DM with new PR state",
 			"user", userID,
 			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
@@ -898,9 +941,7 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 		return nil
 	}
 
-	// Check if it's because no DM exists (expected case for first notification)
 	if !errors.Is(updateErr, slack.ErrNoDMToUpdate) {
-		// Actual error occurred during update - log warning but continue to send new DM
 		slog.Warn("failed to update existing DM, will send new one",
 			"user", userID,
 			"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
@@ -912,7 +953,7 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 		"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
 		"reason", "DM not in state store or too old")
 
-	// Check if we recently sent a DM about this PR (prevents duplicates during rolling deployments)
+	// Check for recent DMs to prevent duplicates
 	hasRecent, err := slackClient.HasRecentDMAboutPR(ctx, userID, pr.HTMLURL)
 	if err != nil {
 		slog.Warn("failed to check for recent DM, will send anyway to avoid false negative",
@@ -931,7 +972,7 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 		return nil
 	}
 
-	// Send DM to user.
+	// Send new DM
 	dmChannelID, messageTS, err := slackClient.SendDirectMessage(ctx, userID, message)
 	if err != nil {
 		slog.Error("failed to send DM notification",
@@ -942,10 +983,10 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 		return fmt.Errorf("failed to send notification: %w", err)
 	}
 
-	// Update last DM notification time.
+	// Update tracking
 	m.Tracker.UpdateDMNotification(workspaceID, userID)
 
-	// Save DM message info for future updates
+	// Save DM info for future updates
 	if err := slackClient.SaveDMMessageInfo(ctx, userID, pr.HTMLURL, dmChannelID, messageTS, message); err != nil {
 		slog.Warn("failed to save DM message info",
 			"user", userID,
