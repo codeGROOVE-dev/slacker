@@ -12,12 +12,11 @@ import (
 
 // TestPostThreadReply_ErrorCases tests error handling in PostThreadReply.
 func TestPostThreadReply_ErrorCases(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
-	ctx := context.Background()
-
 	t.Run("channel_not_found", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			postMessageFunc: func(ctx context.Context, channelID string, options ...slack.MsgOption) (string, string, error) {
 				return "", "", errors.New("channel_not_found")
 			},
@@ -35,7 +34,7 @@ func TestPostThreadReply_ErrorCases(t *testing.T) {
 	})
 
 	t.Run("not_in_channel", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			postMessageFunc: func(ctx context.Context, channelID string, options ...slack.MsgOption) (string, string, error) {
 				return "", "", errors.New("not_in_channel")
 			},
@@ -53,7 +52,7 @@ func TestPostThreadReply_ErrorCases(t *testing.T) {
 	})
 
 	t.Run("thread_not_found", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			postMessageFunc: func(ctx context.Context, channelID string, options ...slack.MsgOption) (string, string, error) {
 				return "", "", errors.New("thread_not_found")
 			},
@@ -72,7 +71,7 @@ func TestPostThreadReply_ErrorCases(t *testing.T) {
 
 	t.Run("rate_limit_retry", func(t *testing.T) {
 		callCount := 0
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			postMessageFunc: func(ctx context.Context, channelID string, options ...slack.MsgOption) (string, string, error) {
 				callCount++
 				if callCount == 1 {
@@ -98,7 +97,7 @@ func TestPostThreadReply_ErrorCases(t *testing.T) {
 
 	t.Run("retryable_error", func(t *testing.T) {
 		callCount := 0
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			postMessageFunc: func(ctx context.Context, channelID string, options ...slack.MsgOption) (string, string, error) {
 				callCount++
 				if callCount < 3 {
@@ -125,9 +124,9 @@ func TestPostThreadReply_ErrorCases(t *testing.T) {
 
 // TestHasRecentDMAboutPR_WithStateStore tests HasRecentDMAboutPR with a state store.
 func TestHasRecentDMAboutPR_WithStateStore(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
-	ctx := context.Background()
 	prURL := "https://github.com/test/repo/pull/123"
 
 	t.Run("with_recent_dm", func(t *testing.T) {
@@ -142,7 +141,7 @@ func TestHasRecentDMAboutPR_WithStateStore(t *testing.T) {
 			},
 		}
 
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			openConversationFunc: func(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error) {
 				return &slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "D123"}}}, false, false, nil
 			},
@@ -180,7 +179,7 @@ func TestHasRecentDMAboutPR_WithStateStore(t *testing.T) {
 	})
 
 	t.Run("open_conversation_error", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			openConversationFunc: func(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error) {
 				return nil, false, false, errors.New("api error")
 			},
@@ -197,7 +196,7 @@ func TestHasRecentDMAboutPR_WithStateStore(t *testing.T) {
 	})
 
 	t.Run("bot_info_error", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			openConversationFunc: func(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error) {
 				return &slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "D123"}}}, false, false, nil
 			},
@@ -218,7 +217,7 @@ func TestHasRecentDMAboutPR_WithStateStore(t *testing.T) {
 	})
 
 	t.Run("conversation_history_error", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			openConversationFunc: func(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error) {
 				return &slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "D123"}}}, false, false, nil
 			},
@@ -248,12 +247,11 @@ func TestHasRecentDMAboutPR_WithStateStore(t *testing.T) {
 
 // TestSendDirectMessage_Errors tests error handling in SendDirectMessage.
 func TestSendDirectMessage_Errors(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
-	ctx := context.Background()
-
 	t.Run("open_conversation_fails", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			openConversationFunc: func(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error) {
 				return nil, false, false, errors.New("api error")
 			},
@@ -271,7 +269,7 @@ func TestSendDirectMessage_Errors(t *testing.T) {
 	})
 
 	t.Run("post_message_fails", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			openConversationFunc: func(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error) {
 				return &slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "D123"}}}, false, false, nil
 			},
@@ -293,7 +291,7 @@ func TestSendDirectMessage_Errors(t *testing.T) {
 
 	t.Run("rate_limit_during_send", func(t *testing.T) {
 		callCount := 0
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			openConversationFunc: func(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error) {
 				return &slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "D123"}}}, false, false, nil
 			},
@@ -325,13 +323,13 @@ func TestSendDirectMessage_Errors(t *testing.T) {
 			t.Errorf("expected 2 calls (1 retry), got %d", callCount)
 		}
 	})
+	//nolint:tparallel // Tests share resources, cannot run subtests in parallel
 }
 
 // TestSaveDMMessageInfo_WithStore tests SaveDMMessageInfo with a state store.
 func TestSaveDMMessageInfo_WithStore(t *testing.T) {
-	t.Parallel()
-
 	ctx := context.Background()
+	t.Parallel()
 
 	t.Run("saves_to_store", func(t *testing.T) {
 		mockStore := &programmableMockStateStore{
@@ -379,17 +377,17 @@ func TestSaveDMMessageInfo_WithStore(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error from state store")
 		}
+		//nolint:tparallel // Tests share resources, cannot run subtests in parallel
 	})
 }
 
 // TestPostThread_Errors tests error handling in PostThread.
 func TestPostThread_Errors(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
-	ctx := context.Background()
-
 	t.Run("channel_not_found_during_check", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getConversationInfoFunc: func(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error) {
 				return nil, errors.New("channel_not_found")
 			},
@@ -414,7 +412,7 @@ func TestPostThread_Errors(t *testing.T) {
 	})
 
 	t.Run("bot_not_in_channel", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getConversationInfoFunc: func(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error) {
 				return &slack.Channel{}, nil
 			},
@@ -442,7 +440,7 @@ func TestPostThread_Errors(t *testing.T) {
 	})
 
 	t.Run("post_with_not_in_channel_error", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getUsersInConversationFunc: func(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error) {
 				return []string{"UBOT"}, "", nil
 			},
@@ -468,7 +466,7 @@ func TestPostThread_Errors(t *testing.T) {
 
 	t.Run("post_with_rate_limit", func(t *testing.T) {
 		callCount := 0
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getUsersInConversationFunc: func(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error) {
 				return []string{"UBOT"}, "", nil
 			},
@@ -499,18 +497,18 @@ func TestPostThread_Errors(t *testing.T) {
 		}
 		if callCount != 2 {
 			t.Errorf("expected 2 calls (1 retry), got %d", callCount)
+			//nolint:tparallel // Tests share resources, cannot run subtests in parallel
 		}
 	})
 }
 
 // TestUpdateMessage_EdgeCases tests edge cases in UpdateMessage.
 func TestUpdateMessage_EdgeCases(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
-	ctx := context.Background()
-
 	t.Run("message_not_found", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			updateMessageFunc: func(ctx context.Context, channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error) {
 				return "", "", "", errors.New("message_not_found")
 			},
@@ -529,7 +527,7 @@ func TestUpdateMessage_EdgeCases(t *testing.T) {
 
 	t.Run("rate_limit_on_update", func(t *testing.T) {
 		callCount := 0
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			updateMessageFunc: func(ctx context.Context, channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error) {
 				callCount++
 				if callCount == 1 {

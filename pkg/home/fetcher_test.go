@@ -122,12 +122,11 @@ func TestSortPRs(t *testing.T) {
 
 // TestFetchUserPRs_InputValidation tests input validation for username and org names.
 func TestFetchUserPRs_InputValidation(t *testing.T) {
+	ctx := context.Background()
 	f := &Fetcher{
 		githubClient: &github.Client{},
 		stateStore:   nil,
 	}
-
-	ctx := context.Background()
 
 	tests := []struct {
 		name          string
@@ -202,73 +201,73 @@ type mockStateStore struct {
 	threads map[string]state.ThreadInfo
 }
 
-func (m *mockStateStore) Thread(owner, repo string, number int, channelID string) (state.ThreadInfo, bool) {
+func (m *mockStateStore) Thread(ctx context.Context, owner, repo string, number int, channelID string) (state.ThreadInfo, bool) {
 	key := owner + "/" + repo + "/" + string(rune(number))
 	info, exists := m.threads[key]
 	return info, exists
 }
 
-func (m *mockStateStore) SaveThread(owner, repo string, number int, channelID string, info state.ThreadInfo) error {
+func (m *mockStateStore) SaveThread(ctx context.Context, owner, repo string, number int, channelID string, info state.ThreadInfo) error {
 	return nil
 }
 
-func (m *mockStateStore) LastDM(userID, prURL string) (time.Time, bool) {
+func (m *mockStateStore) LastDM(ctx context.Context, userID, prURL string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-func (m *mockStateStore) RecordDM(userID, prURL string, sentAt time.Time) error {
+func (m *mockStateStore) RecordDM(ctx context.Context, userID, prURL string, sentAt time.Time) error {
 	return nil
 }
 
-func (m *mockStateStore) DMMessage(userID, prURL string) (state.DMInfo, bool) {
+func (m *mockStateStore) DMMessage(ctx context.Context, userID, prURL string) (state.DMInfo, bool) {
 	return state.DMInfo{}, false
 }
 
-func (m *mockStateStore) SaveDMMessage(userID, prURL string, info state.DMInfo) error {
+func (m *mockStateStore) SaveDMMessage(ctx context.Context, userID, prURL string, info state.DMInfo) error {
 	return nil
 }
 
-func (m *mockStateStore) ListDMUsers(prURL string) []string {
+func (m *mockStateStore) ListDMUsers(ctx context.Context, prURL string) []string {
 	return nil
 }
 
-func (m *mockStateStore) LastDigest(userID, date string) (time.Time, bool) {
+func (m *mockStateStore) LastDigest(ctx context.Context, userID, date string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-func (m *mockStateStore) RecordDigest(userID, date string, sentAt time.Time) error {
+func (m *mockStateStore) RecordDigest(ctx context.Context, userID, date string, sentAt time.Time) error {
 	return nil
 }
 
-func (m *mockStateStore) WasProcessed(eventKey string) bool {
+func (m *mockStateStore) WasProcessed(ctx context.Context, eventKey string) bool {
 	return false
 }
 
-func (m *mockStateStore) MarkProcessed(eventKey string, ttl time.Duration) error {
+func (m *mockStateStore) MarkProcessed(ctx context.Context, eventKey string, ttl time.Duration) error {
 	return nil
 }
 
-func (m *mockStateStore) LastNotification(prURL string) time.Time {
+func (m *mockStateStore) LastNotification(ctx context.Context, prURL string) time.Time {
 	return time.Time{}
 }
 
-func (m *mockStateStore) RecordNotification(prURL string, notifiedAt time.Time) error {
+func (m *mockStateStore) RecordNotification(ctx context.Context, prURL string, notifiedAt time.Time) error {
 	return nil
 }
 
-func (m *mockStateStore) Cleanup() error {
+func (m *mockStateStore) Cleanup(ctx context.Context) error {
 	return nil
 }
 
-func (m *mockStateStore) QueuePendingDM(dm state.PendingDM) error {
+func (m *mockStateStore) QueuePendingDM(ctx context.Context, dm *state.PendingDM) error {
 	return nil
 }
 
-func (m *mockStateStore) PendingDMs(before time.Time) ([]state.PendingDM, error) {
+func (m *mockStateStore) PendingDMs(ctx context.Context, before time.Time) ([]state.PendingDM, error) {
 	return nil, nil
 }
 
-func (m *mockStateStore) RemovePendingDM(id string) error {
+func (m *mockStateStore) RemovePendingDM(ctx context.Context, id string) error {
 	return nil
 }
 
@@ -278,6 +277,7 @@ func (m *mockStateStore) Close() error {
 
 // TestSearchPRs tests GitHub search API integration.
 func TestSearchPRs(t *testing.T) {
+	ctx := context.Background()
 	// Create mock GitHub API server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/search/issues" {
@@ -325,7 +325,6 @@ func TestSearchPRs(t *testing.T) {
 		stateStore:   mockStore,
 	}
 
-	ctx := context.Background()
 	prs, err := f.searchPRs(ctx, "is:pr is:open author:testuser org:test-org")
 	if err != nil {
 		t.Fatalf("searchPRs failed: %v", err)

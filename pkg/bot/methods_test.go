@@ -25,6 +25,7 @@ func testCoordinator(mockState *mockStateStore) *Coordinator {
 }
 
 func TestCoordinator_SaveThread(t *testing.T) {
+	ctx := context.Background()
 	mockState := &mockStateStore{
 		threads: make(map[string]cache.ThreadInfo),
 	}
@@ -43,7 +44,7 @@ func TestCoordinator_SaveThread(t *testing.T) {
 		LastEventTime: time.Now(),
 	}
 
-	c.saveThread(owner, repo, number, channelID, info)
+	c.saveThread(ctx, owner, repo, number, channelID, info)
 
 	// Verify saved to cache
 	cacheKey := "testorg/testrepo#42:C123456"

@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -11,20 +12,21 @@ import (
 // mockStore implements Store interface for testing.
 type mockStore struct{}
 
-func (m *mockStore) QueuePendingDM(dm state.PendingDM) error {
+func (m *mockStore) QueuePendingDM(ctx context.Context, dm *state.PendingDM) error {
 	return nil
 }
 
-func (m *mockStore) PendingDMs(before time.Time) ([]state.PendingDM, error) {
+func (m *mockStore) PendingDMs(ctx context.Context, before time.Time) ([]state.PendingDM, error) {
 	return nil, nil
 }
 
-func (m *mockStore) RemovePendingDM(id string) error {
+func (m *mockStore) RemovePendingDM(ctx context.Context, id string) error {
 	return nil
 }
 
 // TestRun_CleanupTicker tests that Run calls Tracker.Cleanup periodically.
 func TestRun_CleanupTicker(t *testing.T) {
+	ctx := context.Background()
 	cleanupCalled := false
 
 	// Create a tracker that we can verify cleanup was called on
@@ -54,7 +56,7 @@ func TestRun_CleanupTicker(t *testing.T) {
 	// Run should exit when context is cancelled
 	err := manager.Run(ctx)
 
-	if err != context.DeadlineExceeded && err != context.Canceled {
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context error, got %v", err)
 	}
 
@@ -72,6 +74,7 @@ func TestRun_CleanupTicker(t *testing.T) {
 
 // TestRun_ContextCancellation tests that Run respects context cancellation.
 func TestRun_ContextCancellation(t *testing.T) {
+	ctx := context.Background()
 	mockSlackMgr := &mockSlackManager{}
 	mockConfigMgr := &mockConfigManager{}
 	mockSt := &mockStore{}
@@ -86,13 +89,14 @@ func TestRun_ContextCancellation(t *testing.T) {
 	err := manager.Run(ctx)
 
 	// Should return context.Canceled
-	if err != context.Canceled {
+	if !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context.Canceled, got %v", err)
 	}
 }
 
 // TestRun_TickerFires tests that the main ticker fires.
 func TestRun_TickerFires(t *testing.T) {
+	ctx := context.Background()
 	mockSlackMgr := &mockSlackManager{}
 	mockConfigMgr := &mockConfigManager{}
 	mockSt := &mockStore{}
@@ -105,7 +109,7 @@ func TestRun_TickerFires(t *testing.T) {
 
 	err := manager.Run(ctx)
 
-	if err != context.DeadlineExceeded && err != context.Canceled {
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context timeout, got %v", err)
 	}
 }

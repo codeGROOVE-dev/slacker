@@ -266,7 +266,7 @@ func TestCommitPRCache_Concurrency(t *testing.T) {
 
 	// Concurrent writes
 	done := make(chan bool)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		go func(prNum int) {
 			cache.RecordPR("owner", "repo", prNum, "commit"+string(rune(prNum)))
 			done <- true
@@ -274,12 +274,12 @@ func TestCommitPRCache_Concurrency(t *testing.T) {
 	}
 
 	// Wait for all writes
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		<-done
 	}
 
 	// Concurrent reads
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		go func(prNum int) {
 			_ = cache.FindPRsForCommit("owner", "repo", "commit"+string(rune(prNum)))
 			_ = cache.MostRecentPR("owner", "repo")
@@ -288,7 +288,7 @@ func TestCommitPRCache_Concurrency(t *testing.T) {
 	}
 
 	// Wait for all reads
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		<-done
 	}
 

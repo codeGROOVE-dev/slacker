@@ -122,26 +122,26 @@ func (m *mockConfigProvider) ReminderDMDelay(org, channel string) int {
 type mockStateProvider struct {
 	lastDigestFunc   func(userID, date string) (time.Time, bool)
 	recordDigestFunc func(userID, date string, sentAt time.Time) error
-	lastDMFunc       func(userID, prURL string) (time.Time, bool)
+	lastDMFunc       func(ctx context.Context, userID, prURL string) (time.Time, bool)
 }
 
-func (m *mockStateProvider) LastDigest(userID, date string) (time.Time, bool) {
+func (m *mockStateProvider) LastDigest(ctx context.Context, userID, date string) (time.Time, bool) {
 	if m.lastDigestFunc != nil {
 		return m.lastDigestFunc(userID, date)
 	}
 	return time.Time{}, false
 }
 
-func (m *mockStateProvider) RecordDigest(userID, date string, sentAt time.Time) error {
+func (m *mockStateProvider) RecordDigest(ctx context.Context, userID, date string, sentAt time.Time) error {
 	if m.recordDigestFunc != nil {
 		return m.recordDigestFunc(userID, date, sentAt)
 	}
 	return nil
 }
 
-func (m *mockStateProvider) LastDM(userID, prURL string) (time.Time, bool) {
+func (m *mockStateProvider) LastDM(ctx context.Context, userID, prURL string) (time.Time, bool) {
 	if m.lastDMFunc != nil {
-		return m.lastDMFunc(userID, prURL)
+		return m.lastDMFunc(ctx, userID, prURL)
 	}
 	return time.Time{}, false
 }

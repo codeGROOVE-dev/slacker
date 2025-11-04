@@ -2,6 +2,7 @@
 package state
 
 import (
+	"context"
 	"time"
 )
 
@@ -26,22 +27,22 @@ type DMInfo struct {
 
 // PendingDM represents a DM scheduled to be sent later.
 type PendingDM struct {
-	ID            string    `json:"id"`             // Unique ID for this pending DM
-	WorkspaceID   string    `json:"workspace_id"`   // Slack workspace ID
-	UserID        string    `json:"user_id"`        // Slack user ID to DM
-	PROwner       string    `json:"pr_owner"`       // GitHub PR owner
-	PRRepo        string    `json:"pr_repo"`        // GitHub PR repo
-	PRNumber      int       `json:"pr_number"`      // GitHub PR number
-	PRURL         string    `json:"pr_url"`         // GitHub PR URL
-	PRTitle       string    `json:"pr_title"`       // PR title
-	PRAuthor      string    `json:"pr_author"`      // PR author
-	PRState       string    `json:"pr_state"`       // Deprecated simplified state
-	WorkflowState string    `json:"workflow_state"` // Workflow state from turnclient
-	NextActions   string    `json:"next_actions"`   // Serialized NextAction map (JSON)
-	ChannelID     string    `json:"channel_id"`     // Channel where user was tagged
-	ChannelName   string    `json:"channel_name"`   // Channel name
-	QueuedAt      time.Time `json:"queued_at"`      // When this DM was queued
-	SendAfter     time.Time `json:"send_after"`     // Send DM after this time
+	QueuedAt      time.Time `json:"queued_at"`
+	SendAfter     time.Time `json:"send_after"`
+	PRAuthor      string    `json:"pr_author"`
+	PRState       string    `json:"pr_state"`
+	PRRepo        string    `json:"pr_repo"`
+	WorkspaceID   string    `json:"workspace_id"`
+	PRURL         string    `json:"pr_url"`
+	PRTitle       string    `json:"pr_title"`
+	ID            string    `json:"id"`
+	PROwner       string    `json:"pr_owner"`
+	WorkflowState string    `json:"workflow_state"`
+	NextActions   string    `json:"next_actions"`
+	ChannelID     string    `json:"channel_id"`
+	ChannelName   string    `json:"channel_name"`
+	UserID        string    `json:"user_id"`
+	PRNumber      int       `json:"pr_number"`
 }
 
 // Store provides persistent storage for bot state.
@@ -50,37 +51,37 @@ type PendingDM struct {
 //nolint:interfacebloat // Store intentionally groups all state operations for simplicity
 type Store interface {
 	// Thread operations - map PR to Slack thread
-	Thread(owner, repo string, number int, channelID string) (ThreadInfo, bool)
-	SaveThread(owner, repo string, number int, channelID string, info ThreadInfo) error
+	Thread(ctx context.Context, owner, repo string, number int, channelID string) (ThreadInfo, bool)
+	SaveThread(ctx context.Context, owner, repo string, number int, channelID string, info ThreadInfo) error
 
 	// DM tracking - prevent duplicate notifications
-	LastDM(userID, prURL string) (time.Time, bool)
-	RecordDM(userID, prURL string, sentAt time.Time) error
+	LastDM(ctx context.Context, userID, prURL string) (time.Time, bool)
+	RecordDM(ctx context.Context, userID, prURL string, sentAt time.Time) error
 
 	// DM message tracking - store DM message info for updating
-	DMMessage(userID, prURL string) (DMInfo, bool)
-	SaveDMMessage(userID, prURL string, info DMInfo) error
-	ListDMUsers(prURL string) []string
+	DMMessage(ctx context.Context, userID, prURL string) (DMInfo, bool)
+	SaveDMMessage(ctx context.Context, userID, prURL string, info DMInfo) error
+	ListDMUsers(ctx context.Context, prURL string) []string
 
 	// Daily digest tracking - one per user per day
-	LastDigest(userID, date string) (time.Time, bool)
-	RecordDigest(userID, date string, sentAt time.Time) error
+	LastDigest(ctx context.Context, userID, date string) (time.Time, bool)
+	RecordDigest(ctx context.Context, userID, date string, sentAt time.Time) error
 
 	// Event deduplication - prevent processing same event twice
-	WasProcessed(eventKey string) bool
-	MarkProcessed(eventKey string, ttl time.Duration) error
+	WasProcessed(ctx context.Context, eventKey string) bool
+	MarkProcessed(ctx context.Context, eventKey string, ttl time.Duration) error
 
 	// Notification tracking - track when we last notified about a PR
-	LastNotification(prURL string) time.Time
-	RecordNotification(prURL string, notifiedAt time.Time) error
+	LastNotification(ctx context.Context, prURL string) time.Time
+	RecordNotification(ctx context.Context, prURL string, notifiedAt time.Time) error
 
 	// Pending DM queue - schedule DMs to be sent later
-	QueuePendingDM(dm PendingDM) error
-	PendingDMs(before time.Time) ([]PendingDM, error)
-	RemovePendingDM(id string) error
+	QueuePendingDM(ctx context.Context, dm *PendingDM) error
+	PendingDMs(ctx context.Context, before time.Time) ([]PendingDM, error)
+	RemovePendingDM(ctx context.Context, id string) error
 
 	// Cleanup old data
-	Cleanup() error
+	Cleanup(ctx context.Context) error
 
 	// Close releases resources
 	Close() error

@@ -15,6 +15,7 @@ import (
 
 // TestShouldSendDigest_NoSlackMapping tests when GitHub user has no Slack mapping.
 func TestShouldSendDigest_NoSlackMapping(t *testing.T) {
+	ctx := context.Background()
 	mockUserMapper := &mockDigestUserMapper{
 		slackHandleFunc: func(ctx context.Context, githubUser, org, domain string) (string, error) {
 			return "", nil // No mapping
@@ -33,7 +34,6 @@ func TestShouldSendDigest_NoSlackMapping(t *testing.T) {
 		stateStore: stateStore,
 	}
 
-	ctx := context.Background()
 	result := scheduler.shouldSendDigest(ctx, mockUserMapper, mockClient, "testuser", "test-org", "example.com", nil)
 
 	if result {
@@ -43,6 +43,7 @@ func TestShouldSendDigest_NoSlackMapping(t *testing.T) {
 
 // TestShouldSendDigest_MappingError tests when user mapping fails with error.
 func TestShouldSendDigest_MappingError(t *testing.T) {
+	ctx := context.Background()
 	mockUserMapper := &mockDigestUserMapper{
 		slackHandleFunc: func(ctx context.Context, githubUser, org, domain string) (string, error) {
 			return "", errors.New("mapping error")
@@ -55,7 +56,6 @@ func TestShouldSendDigest_MappingError(t *testing.T) {
 		stateStore: stateStore,
 	}
 
-	ctx := context.Background()
 	result := scheduler.shouldSendDigest(ctx, mockUserMapper, &mockSlackClient{}, "testuser", "test-org", "example.com", nil)
 
 	if result {
@@ -65,6 +65,7 @@ func TestShouldSendDigest_MappingError(t *testing.T) {
 
 // TestShouldSendDigest_InvalidTimezone tests when user has invalid timezone.
 func TestShouldSendDigest_InvalidTimezone(t *testing.T) {
+	ctx := context.Background()
 	mockUserMapper := &mockDigestUserMapper{
 		slackHandleFunc: func(ctx context.Context, githubUser, org, domain string) (string, error) {
 			return "U123", nil
@@ -83,7 +84,6 @@ func TestShouldSendDigest_InvalidTimezone(t *testing.T) {
 		stateStore: stateStore,
 	}
 
-	ctx := context.Background()
 	result := scheduler.shouldSendDigest(ctx, mockUserMapper, mockClient, "testuser", "test-org", "example.com", nil)
 
 	if result {
@@ -93,6 +93,7 @@ func TestShouldSendDigest_InvalidTimezone(t *testing.T) {
 
 // TestShouldSendDigest_AlreadySentToday tests when digest was already sent today.
 func TestShouldSendDigest_AlreadySentToday(t *testing.T) {
+	ctx := context.Background()
 	mockUserMapper := &mockDigestUserMapper{
 		slackHandleFunc: func(ctx context.Context, githubUser, org, domain string) (string, error) {
 			return "U123", nil
@@ -119,7 +120,6 @@ func TestShouldSendDigest_AlreadySentToday(t *testing.T) {
 		stateStore: stateStore,
 	}
 
-	ctx := context.Background()
 	result := scheduler.shouldSendDigest(ctx, mockUserMapper, mockClient, "testuser", "test-org", "example.com", nil)
 
 	if result {
@@ -129,6 +129,7 @@ func TestShouldSendDigest_AlreadySentToday(t *testing.T) {
 
 // TestSendDigest_MappingError tests error handling when user mapping fails.
 func TestSendDigest_MappingError(t *testing.T) {
+	ctx := context.Background()
 	mockUserMapper := &mockDigestUserMapper{
 		slackHandleFunc: func(ctx context.Context, githubUser, org, domain string) (string, error) {
 			return "", context.DeadlineExceeded // Mapping failed
@@ -142,8 +143,6 @@ func TestSendDigest_MappingError(t *testing.T) {
 		stateStore: stateStore,
 	}
 
-	ctx := context.Background()
-
 	err := scheduler.sendDigest(ctx, mockUserMapper, mockClient, "testuser", "test-org", "example.com", nil)
 
 	if err == nil {
@@ -153,6 +152,7 @@ func TestSendDigest_MappingError(t *testing.T) {
 
 // TestSendDigest_SendDMError tests error handling when SendDirectMessage fails.
 func TestSendDigest_SendDMError(t *testing.T) {
+	ctx := context.Background()
 	mockUserMapper := &mockDigestUserMapper{
 		slackHandleFunc: func(ctx context.Context, githubUser, org, domain string) (string, error) {
 			return "U123", nil
@@ -174,8 +174,6 @@ func TestSendDigest_SendDMError(t *testing.T) {
 		stateStore: stateStore,
 	}
 
-	ctx := context.Background()
-
 	err := scheduler.sendDigest(ctx, mockUserMapper, mockClient, "testuser", "test-org", "example.com", nil)
 
 	if err == nil {
@@ -185,6 +183,7 @@ func TestSendDigest_SendDMError(t *testing.T) {
 
 // TestSendDigest_Success tests successful digest sending with state recording.
 func TestSendDigest_Success(t *testing.T) {
+	ctx := context.Background()
 	dmSent := false
 	digestRecorded := false
 
@@ -215,7 +214,6 @@ func TestSendDigest_Success(t *testing.T) {
 		stateStore: stateStore,
 	}
 
-	ctx := context.Background()
 	prs := []home.PR{
 		{
 			Title:      "Fix bug",
@@ -242,6 +240,7 @@ func TestSendDigest_Success(t *testing.T) {
 
 // TestAnalyzePR_Success tests successful PR analysis.
 func TestAnalyzePR_Success(t *testing.T) {
+	ctx := context.Background()
 	mockClient := &mockGitHubClient{
 		installationTokenFunc: func(ctx context.Context) string {
 			return "test-token"
@@ -260,7 +259,6 @@ func TestAnalyzePR_Success(t *testing.T) {
 		},
 	}
 
-	ctx := context.Background()
 	pr := home.PR{
 		URL:       "https://github.com/test-org/test-repo/pull/1",
 		Author:    "testuser",
@@ -279,6 +277,7 @@ func TestAnalyzePR_Success(t *testing.T) {
 
 // TestAnalyzePR_TurnClientFactoryError tests when turn client creation fails.
 func TestAnalyzePR_TurnClientFactoryError(t *testing.T) {
+	ctx := context.Background()
 	mockClient := &mockGitHubClient{
 		installationTokenFunc: func(ctx context.Context) string {
 			return "test-token"
@@ -291,9 +290,7 @@ func TestAnalyzePR_TurnClientFactoryError(t *testing.T) {
 		},
 	}
 
-	ctx := context.Background()
 	pr := home.PR{
-		URL:       "https://github.com/test-org/test-repo/pull/1",
 		Author:    "testuser",
 		UpdatedAt: time.Now(),
 	}
@@ -307,6 +304,7 @@ func TestAnalyzePR_TurnClientFactoryError(t *testing.T) {
 
 // TestAnalyzePR_CheckError tests when turnclient Check fails.
 func TestAnalyzePR_CheckError(t *testing.T) {
+	ctx := context.Background()
 	mockClient := &mockGitHubClient{
 		installationTokenFunc: func(ctx context.Context) string {
 			return "test-token"
@@ -325,7 +323,6 @@ func TestAnalyzePR_CheckError(t *testing.T) {
 		},
 	}
 
-	ctx := context.Background()
 	pr := home.PR{
 		URL:       "https://github.com/test-org/test-repo/pull/1",
 		Author:    "testuser",
@@ -341,6 +338,7 @@ func TestAnalyzePR_CheckError(t *testing.T) {
 
 // TestProcessOrgDigests_NoGitHubClient tests when GitHub client is unavailable.
 func TestProcessOrgDigests_NoGitHubClient(t *testing.T) {
+	ctx := context.Background()
 	mockGitHubMgr := &mockGitHubManager{
 		clientForOrgFunc: func(org string) (github.ClientInterface, bool) {
 			return nil, false // No client
@@ -354,20 +352,20 @@ func TestProcessOrgDigests_NoGitHubClient(t *testing.T) {
 		slackManager:  &mockSlackManagerWithClient{},
 	}
 
-	ctx := context.Background()
-	sent, errors := scheduler.processOrgDigests(ctx, "test-org")
+	sent, errCount := scheduler.processOrgDigests(ctx, "test-org")
 
 	if sent != 0 {
 		t.Errorf("expected 0 sent, got %d", sent)
 	}
 
-	if errors != 1 {
-		t.Errorf("expected 1 error, got %d", errors)
+	if errCount != 1 {
+		t.Errorf("expected 1 error, got %d", errCount)
 	}
 }
 
 // TestProcessOrgDigests_NoConfig tests when config is unavailable.
 func TestProcessOrgDigests_NoConfig(t *testing.T) {
+	ctx := context.Background()
 	mockGitHubMgr := &mockGitHubManager{
 		clientForOrgFunc: func(org string) (github.ClientInterface, bool) {
 			return &mockGitHubClient{}, true
@@ -387,20 +385,20 @@ func TestProcessOrgDigests_NoConfig(t *testing.T) {
 		slackManager:  &mockSlackManagerWithClient{},
 	}
 
-	ctx := context.Background()
-	sent, errors := scheduler.processOrgDigests(ctx, "test-org")
+	sent, errCount := scheduler.processOrgDigests(ctx, "test-org")
 
 	if sent != 0 {
 		t.Errorf("expected 0 sent, got %d", sent)
 	}
 
-	if errors != 1 {
-		t.Errorf("expected 1 error, got %d", errors)
+	if errCount != 1 {
+		t.Errorf("expected 1 error, got %d", errCount)
 	}
 }
 
 // TestProcessOrgDigests_NoSlackClient tests when Slack client is unavailable.
 func TestProcessOrgDigests_NoSlackClient(t *testing.T) {
+	ctx := context.Background()
 	mockGitHubMgr := &mockGitHubManager{
 		clientForOrgFunc: func(org string) (github.ClientInterface, bool) {
 			return &mockGitHubClient{}, true
@@ -418,20 +416,20 @@ func TestProcessOrgDigests_NoSlackClient(t *testing.T) {
 		slackManager:  mockSlackMgr,
 	}
 
-	ctx := context.Background()
-	sent, errors := scheduler.processOrgDigests(ctx, "test-org")
+	sent, errCount := scheduler.processOrgDigests(ctx, "test-org")
 
 	if sent != 0 {
 		t.Errorf("expected 0 sent, got %d", sent)
 	}
 
-	if errors != 1 {
-		t.Errorf("expected 1 error, got %d", errors)
+	if errCount != 1 {
+		t.Errorf("expected 1 error, got %d", errCount)
 	}
 }
 
 // TestShouldSendDigest_In8to9amWindow tests when user is in 8-9am window.
 func TestShouldSendDigest_In8to9amWindow(t *testing.T) {
+	ctx := context.Background()
 	mockUserMapper := &mockDigestUserMapper{
 		slackHandleFunc: func(ctx context.Context, githubUser, org, domain string) (string, error) {
 			return "U123", nil
@@ -459,8 +457,6 @@ func TestShouldSendDigest_In8to9amWindow(t *testing.T) {
 		stateStore: stateStore,
 	}
 
-	ctx := context.Background()
-
 	// This test is time-dependent - it will pass if run during 8-9am UTC
 	// For deterministic testing, we'd need to inject time, but this shows the logic
 	result := scheduler.shouldSendDigest(ctx, mockUserMapper, mockClient, "testuser", "test-org", "example.com", nil)
@@ -471,6 +467,7 @@ func TestShouldSendDigest_In8to9amWindow(t *testing.T) {
 
 // TestSendDigest_PRSorting tests that PRs are sorted by update time.
 func TestSendDigest_PRSorting(t *testing.T) {
+	ctx := context.Background()
 	dmSent := false
 	var sentMessage string
 
@@ -496,8 +493,6 @@ func TestSendDigest_PRSorting(t *testing.T) {
 	scheduler := &DailyDigestScheduler{
 		stateStore: stateStore,
 	}
-
-	ctx := context.Background()
 
 	// Create PRs with different update times
 	oldPR := home.PR{
@@ -536,6 +531,7 @@ func TestSendDigest_PRSorting(t *testing.T) {
 
 // TestSendDigest_TimezoneFallback tests timezone fallback to UTC.
 func TestSendDigest_TimezoneFallback(t *testing.T) {
+	ctx := context.Background()
 	digestRecorded := false
 	var recordedDate string
 
@@ -566,7 +562,6 @@ func TestSendDigest_TimezoneFallback(t *testing.T) {
 		stateStore: stateStore,
 	}
 
-	ctx := context.Background()
 	prs := []home.PR{
 		{
 			Title:      "Test PR",
@@ -619,6 +614,7 @@ func TestNewDailyDigestScheduler_FactoryWorks(t *testing.T) {
 
 // TestProcessOrgDigests_FetchPRsError tests when fetchOrgPRs fails.
 func TestProcessOrgDigests_FetchPRsError(t *testing.T) {
+	ctx := context.Background()
 	mockGitHubClient := &mockGitHubClient{
 		clientFunc: func() *gh.Client {
 			// Return nil to cause fetchOrgPRs to fail
@@ -645,20 +641,20 @@ func TestProcessOrgDigests_FetchPRsError(t *testing.T) {
 		slackManager:  mockSlackMgr,
 	}
 
-	ctx := context.Background()
-	sent, errors := scheduler.processOrgDigests(ctx, "test-org")
+	sent, errCount := scheduler.processOrgDigests(ctx, "test-org")
 
 	if sent != 0 {
 		t.Errorf("expected 0 sent, got %d", sent)
 	}
 
-	if errors != 1 {
-		t.Errorf("expected 1 error, got %d", errors)
+	if errCount != 1 {
+		t.Errorf("expected 1 error, got %d", errCount)
 	}
 }
 
 // TestCheckAndSend_WithOrgs tests successful processing of organizations.
 func TestCheckAndSend_WithOrgs(t *testing.T) {
+	ctx := context.Background()
 	mockGitHubMgr := &mockGitHubManager{
 		allOrgsFunc: func() []string {
 			return []string{"test-org"}
@@ -681,8 +677,6 @@ func TestCheckAndSend_WithOrgs(t *testing.T) {
 		stateStore:    &mockStateProvider{},
 		slackManager:  &mockSlackManagerWithClient{},
 	}
-
-	ctx := context.Background()
 
 	// Should not crash and should process the org
 	scheduler.CheckAndSend(ctx)

@@ -50,6 +50,7 @@ func TestPollAndReconcile_EmptyPRList(t *testing.T) {
 
 // TestPollAndReconcile_ContextCancellation tests graceful shutdown on context cancellation.
 func TestPollAndReconcile_ContextCancellation(t *testing.T) {
+	ctx := context.Background()
 	// Create a context that's already canceled
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
@@ -113,6 +114,7 @@ func TestStartupReconciliation_HappyPath(t *testing.T) {
 
 // TestStartupReconciliation_ContextCancellation tests cancellation handling.
 func TestStartupReconciliation_ContextCancellation(t *testing.T) {
+	ctx := context.Background()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 

@@ -296,7 +296,7 @@ func (d *DailyDigestScheduler) shouldSendDigest(
 
 	// Check if we already sent a digest today
 	today := now.Format("2006-01-02")
-	if lastDigest, exists := d.stateStore.LastDigest(slackUserID, today); exists {
+	if lastDigest, exists := d.stateStore.LastDigest(ctx, slackUserID, today); exists {
 		slog.Debug("already sent digest today",
 			"slack_user", slackUserID,
 			"github_user", githubUser,
@@ -338,7 +338,7 @@ func (d *DailyDigestScheduler) sendDigest(
 	})
 
 	// Format digest message with separated sections
-	message := d.formatDigestMessage(incoming, outgoing)
+	message := d.formatDigestMessageAt(incoming, outgoing, time.Now())
 
 	// Send DM
 	_, _, err = slackClient.SendDirectMessage(ctx, slackUserID, message)
@@ -360,7 +360,7 @@ func (d *DailyDigestScheduler) sendDigest(
 	today := time.Now().In(loc).Format("2006-01-02")
 
 	// RecordDigest always succeeds (memory) and attempts persistence (best-effort)
-	if err := d.stateStore.RecordDigest(slackUserID, today, time.Now()); err != nil {
+	if err := d.stateStore.RecordDigest(ctx, slackUserID, today, time.Now()); err != nil {
 		slog.Debug("state store returned error for RecordDigest", "error", err)
 	}
 
@@ -371,11 +371,6 @@ func (d *DailyDigestScheduler) sendDigest(
 		"outgoing_count", len(outgoing))
 
 	return nil
-}
-
-// formatDigestMessage formats a daily digest message with friendly, varied greetings.
-func (d *DailyDigestScheduler) formatDigestMessage(incoming, outgoing []home.PR) string {
-	return d.formatDigestMessageAt(incoming, outgoing, time.Now())
 }
 
 // formatDigestMessageAt formats a daily digest message at a specific time (for testing).

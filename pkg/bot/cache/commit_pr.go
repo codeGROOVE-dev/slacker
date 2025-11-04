@@ -7,17 +7,17 @@ import (
 
 // CommitPREntry caches recent commit→PR mappings for fast lookup.
 type CommitPREntry struct {
-	PRNumber  int
-	HeadSHA   string
 	UpdatedAt time.Time
+	HeadSHA   string
+	PRNumber  int
 }
 
 // CommitPRCache provides in-memory caching of commit SHA → PR mappings.
 // This allows quick lookup when check events arrive with just a commit SHA,
 // avoiding expensive GitHub API calls for recently-seen PRs.
 type CommitPRCache struct {
+	entries map[string][]CommitPREntry
 	mu      sync.RWMutex
-	entries map[string][]CommitPREntry // "owner/repo" -> recent PRs with commits
 }
 
 // NewCommitPRCache creates a new CommitPRCache with initialized maps.

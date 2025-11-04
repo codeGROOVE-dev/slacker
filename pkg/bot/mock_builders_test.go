@@ -296,8 +296,8 @@ func NewTestCoordinator() *CoordinatorBuilder {
 }
 
 // WithSlack configures the Slack client.
-func (b *CoordinatorBuilder) WithSlack(slack *mockSlackClient) *CoordinatorBuilder {
-	b.coordinator.slack = slack
+func (b *CoordinatorBuilder) WithSlack(slackClient *mockSlackClient) *CoordinatorBuilder {
+	b.coordinator.slack = slackClient
 	return b
 }
 

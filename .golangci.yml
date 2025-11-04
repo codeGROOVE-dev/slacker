@@ -70,6 +70,7 @@ linters:
     - testableexamples # checks if examples are testable (have an expected output)
     - testpackage # makes you use a separate _test package
     - paralleltest # not every test should be in parallel
+    - tparallel # table-driven tests share mock servers for performance
     - wrapcheck # not required
     - wsl # [too strict and mostly code is not more readable] whitespace linter forces you to use empty lines
     - wsl_v5 # [too strict and mostly code is not more readable] add or remove empty lines

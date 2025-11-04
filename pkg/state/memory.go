@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"time"
@@ -35,7 +36,7 @@ func NewMemoryStore() *MemoryStore {
 }
 
 // Thread retrieves thread information for a PR.
-func (s *MemoryStore) Thread(owner, repo string, number int, channelID string) (ThreadInfo, bool) {
+func (s *MemoryStore) Thread(ctx context.Context, owner, repo string, number int, channelID string) (ThreadInfo, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	key := threadKey(owner, repo, number, channelID)
@@ -44,7 +45,7 @@ func (s *MemoryStore) Thread(owner, repo string, number int, channelID string) (
 }
 
 // SaveThread saves thread information for a PR.
-func (s *MemoryStore) SaveThread(owner, repo string, number int, channelID string, info ThreadInfo) error {
+func (s *MemoryStore) SaveThread(ctx context.Context, owner, repo string, number int, channelID string, info ThreadInfo) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := threadKey(owner, repo, number, channelID)
@@ -54,7 +55,7 @@ func (s *MemoryStore) SaveThread(owner, repo string, number int, channelID strin
 }
 
 // LastDM retrieves the last DM timestamp for a user and PR.
-func (s *MemoryStore) LastDM(userID, prURL string) (time.Time, bool) {
+func (s *MemoryStore) LastDM(ctx context.Context, userID, prURL string) (time.Time, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	key := dmKey(userID, prURL)
@@ -63,7 +64,7 @@ func (s *MemoryStore) LastDM(userID, prURL string) (time.Time, bool) {
 }
 
 // RecordDM records when a DM was sent to a user about a PR.
-func (s *MemoryStore) RecordDM(userID, prURL string, sentAt time.Time) error {
+func (s *MemoryStore) RecordDM(ctx context.Context, userID, prURL string, sentAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := dmKey(userID, prURL)
@@ -72,7 +73,7 @@ func (s *MemoryStore) RecordDM(userID, prURL string, sentAt time.Time) error {
 }
 
 // DMMessage retrieves DM message information for a user and PR.
-func (s *MemoryStore) DMMessage(userID, prURL string) (DMInfo, bool) {
+func (s *MemoryStore) DMMessage(ctx context.Context, userID, prURL string) (DMInfo, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	key := dmKey(userID, prURL)
@@ -81,7 +82,7 @@ func (s *MemoryStore) DMMessage(userID, prURL string) (DMInfo, bool) {
 }
 
 // SaveDMMessage saves DM message information for a user and PR.
-func (s *MemoryStore) SaveDMMessage(userID, prURL string, info DMInfo) error {
+func (s *MemoryStore) SaveDMMessage(ctx context.Context, userID, prURL string, info DMInfo) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := dmKey(userID, prURL)
@@ -91,7 +92,7 @@ func (s *MemoryStore) SaveDMMessage(userID, prURL string, info DMInfo) error {
 }
 
 // ListDMUsers returns all user IDs who have received DMs for a given PR.
-func (s *MemoryStore) ListDMUsers(prURL string) []string {
+func (s *MemoryStore) ListDMUsers(ctx context.Context, prURL string) []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -112,7 +113,7 @@ func (s *MemoryStore) ListDMUsers(prURL string) []string {
 }
 
 // LastDigest retrieves the last digest timestamp for a user and date.
-func (s *MemoryStore) LastDigest(userID, date string) (time.Time, bool) {
+func (s *MemoryStore) LastDigest(ctx context.Context, userID, date string) (time.Time, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	key := digestKey(userID, date)
@@ -121,7 +122,7 @@ func (s *MemoryStore) LastDigest(userID, date string) (time.Time, bool) {
 }
 
 // RecordDigest records when a digest was sent to a user.
-func (s *MemoryStore) RecordDigest(userID, date string, sentAt time.Time) error {
+func (s *MemoryStore) RecordDigest(ctx context.Context, userID, date string, sentAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := digestKey(userID, date)
@@ -130,7 +131,7 @@ func (s *MemoryStore) RecordDigest(userID, date string, sentAt time.Time) error 
 }
 
 // WasProcessed checks if an event was already processed.
-func (s *MemoryStore) WasProcessed(eventKey string) bool {
+func (s *MemoryStore) WasProcessed(ctx context.Context, eventKey string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	_, exists := s.events[eventKey]
@@ -138,7 +139,7 @@ func (s *MemoryStore) WasProcessed(eventKey string) bool {
 }
 
 // MarkProcessed marks an event as processed.
-func (s *MemoryStore) MarkProcessed(eventKey string, _ time.Duration) error {
+func (s *MemoryStore) MarkProcessed(ctx context.Context, eventKey string, _ time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.events[eventKey] = time.Now()
@@ -146,14 +147,14 @@ func (s *MemoryStore) MarkProcessed(eventKey string, _ time.Duration) error {
 }
 
 // LastNotification retrieves the last notification timestamp for a PR.
-func (s *MemoryStore) LastNotification(prURL string) time.Time {
+func (s *MemoryStore) LastNotification(ctx context.Context, prURL string) time.Time {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.notifications[prURL]
 }
 
 // RecordNotification records when a notification was sent for a PR.
-func (s *MemoryStore) RecordNotification(prURL string, notifiedAt time.Time) error {
+func (s *MemoryStore) RecordNotification(ctx context.Context, prURL string, notifiedAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.notifications[prURL] = notifiedAt
@@ -161,7 +162,7 @@ func (s *MemoryStore) RecordNotification(prURL string, notifiedAt time.Time) err
 }
 
 // Cleanup removes old data from memory.
-func (s *MemoryStore) Cleanup() error {
+func (s *MemoryStore) Cleanup(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -203,7 +204,8 @@ func (s *MemoryStore) Cleanup() error {
 	}
 
 	// Clean up old pending DMs (>7 days or already past send time by >1 day)
-	for key, dm := range s.pendingDMs {
+	for key := range s.pendingDMs {
+		dm := s.pendingDMs[key]
 		if now.Sub(dm.QueuedAt) > 7*24*time.Hour || now.Sub(dm.SendAfter) > 24*time.Hour {
 			delete(s.pendingDMs, key)
 		}
@@ -213,20 +215,21 @@ func (s *MemoryStore) Cleanup() error {
 }
 
 // QueuePendingDM adds a DM to the pending queue.
-func (s *MemoryStore) QueuePendingDM(dm PendingDM) error {
+func (s *MemoryStore) QueuePendingDM(ctx context.Context, dm *PendingDM) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pendingDMs[dm.ID] = dm
+	s.pendingDMs[dm.ID] = *dm
 	return nil
 }
 
 // PendingDMs returns all pending DMs that should be sent (SendAfter <= before).
-func (s *MemoryStore) PendingDMs(before time.Time) ([]PendingDM, error) {
+func (s *MemoryStore) PendingDMs(ctx context.Context, before time.Time) ([]PendingDM, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var result []PendingDM
-	for _, dm := range s.pendingDMs {
+	for key := range s.pendingDMs {
+		dm := s.pendingDMs[key]
 		if !dm.SendAfter.After(before) {
 			result = append(result, dm)
 		}
@@ -235,7 +238,7 @@ func (s *MemoryStore) PendingDMs(before time.Time) ([]PendingDM, error) {
 }
 
 // RemovePendingDM removes a pending DM from the queue.
-func (s *MemoryStore) RemovePendingDM(id string) error {
+func (s *MemoryStore) RemovePendingDM(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.pendingDMs, id)

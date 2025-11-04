@@ -17,7 +17,7 @@ func TestUpdateDMMessage(t *testing.T) {
 
 	t.Run("no_state_store", func(t *testing.T) {
 		client := &Client{
-			api: &mockSlackAPI{},
+			api: &mockAPI{},
 		}
 
 		prURL := "https://github.com/test/repo/pull/123"
@@ -44,7 +44,7 @@ func TestSearchMessages(t *testing.T) {
 			},
 		}
 
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			searchMessagesFunc: func(ctx context.Context, query string, params slack.SearchParameters) (*slack.SearchMessages, error) {
 				return expectedResults, nil
 			},
@@ -69,7 +69,7 @@ func TestSearchMessages(t *testing.T) {
 	})
 
 	t.Run("error", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			searchMessagesFunc: func(ctx context.Context, query string, params slack.SearchParameters) (*slack.SearchMessages, error) {
 				return nil, errors.New("api error")
 			},
@@ -84,6 +84,7 @@ func TestSearchMessages(t *testing.T) {
 			t.Fatal("expected error")
 		}
 	})
+	//nolint:tparallel // Tests share resources, cannot run subtests in parallel
 }
 
 func TestAPI(t *testing.T) {
@@ -91,7 +92,7 @@ func TestAPI(t *testing.T) {
 
 	t.Run("wrapper_returns_raw_client", func(t *testing.T) {
 		rawClient := slack.New("test-token")
-		wrapper := newSlackAPIWrapper(rawClient)
+		wrapper := newAPIWrapper(rawClient)
 
 		client := &Client{
 			api: wrapper,
@@ -104,7 +105,7 @@ func TestAPI(t *testing.T) {
 	})
 
 	t.Run("mock_returns_nil", func(t *testing.T) {
-		mockAPI := &mockSlackAPI{}
+		mockAPI := &mockAPI{}
 
 		client := &Client{
 			api: mockAPI,
@@ -114,6 +115,7 @@ func TestAPI(t *testing.T) {
 		if client.API() != nil {
 			t.Error("expected API() to return nil for mock client")
 		}
+		//nolint:tparallel // Tests share resources, cannot run subtests in parallel
 	})
 }
 
@@ -123,7 +125,7 @@ func TestResolveChannelID(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("cached_channel", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getConversationsFunc: func(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
 				return []slack.Channel{
 					{
@@ -159,7 +161,7 @@ func TestResolveChannelID(t *testing.T) {
 	})
 
 	t.Run("channel_not_found", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getConversationsFunc: func(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
 				return []slack.Channel{}, "", nil
 			},
@@ -180,7 +182,7 @@ func TestResolveChannelID(t *testing.T) {
 	})
 
 	t.Run("api_error", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getConversationsFunc: func(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
 				return nil, "", errors.New("api error")
 			},
@@ -197,6 +199,7 @@ func TestResolveChannelID(t *testing.T) {
 		// Returns the channel name itself as fallback on error
 		if id != "test-channel" {
 			t.Errorf("expected 'test-channel' as fallback, got %s", id)
+			//nolint:tparallel // Tests share resources, cannot run subtests in parallel
 		}
 	})
 }
@@ -207,7 +210,7 @@ func TestIsUserInChannel(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("user_in_channel", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getUsersInConversationFunc: func(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error) {
 				return []string{"U001", "U002", "U003"}, "", nil
 			},
@@ -227,7 +230,7 @@ func TestIsUserInChannel(t *testing.T) {
 	})
 
 	t.Run("user_not_in_channel", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getUsersInConversationFunc: func(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error) {
 				return []string{"U001", "U002", "U003"}, "", nil
 			},
@@ -247,7 +250,7 @@ func TestIsUserInChannel(t *testing.T) {
 	})
 
 	t.Run("api_error", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getUsersInConversationFunc: func(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error) {
 				return nil, "", errors.New("api error")
 			},
@@ -263,6 +266,7 @@ func TestIsUserInChannel(t *testing.T) {
 
 		inChannel := client.IsUserInChannel(ctx, "C123", "U001")
 		if inChannel {
+			//nolint:tparallel // Tests share resources, cannot run subtests in parallel
 			t.Error("expected false on error")
 		}
 	})
@@ -274,7 +278,7 @@ func TestPublishHomeView(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("success", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			publishViewFunc: func(ctx context.Context, request slack.PublishViewContextRequest) (*slack.ViewResponse, error) {
 				return &slack.ViewResponse{}, nil
 			},
@@ -299,7 +303,7 @@ func TestPublishHomeView(t *testing.T) {
 	})
 
 	t.Run("error", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			publishViewFunc: func(ctx context.Context, request slack.PublishViewContextRequest) (*slack.ViewResponse, error) {
 				return nil, errors.New("api error")
 			},
@@ -312,6 +316,7 @@ func TestPublishHomeView(t *testing.T) {
 		blocks := []slack.Block{}
 
 		err := client.PublishHomeView(ctx, "U123", blocks)
+		//nolint:tparallel // Tests share resources, cannot run subtests in parallel
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -324,7 +329,7 @@ func TestChannelHistory(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("success", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getConversationHistoryFunc: func(ctx context.Context, params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error) {
 				return &slack.GetConversationHistoryResponse{
 					Messages: []slack.Message{
@@ -358,7 +363,7 @@ func TestChannelHistory(t *testing.T) {
 	})
 
 	t.Run("with_timestamps", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getConversationHistoryFunc: func(ctx context.Context, params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error) {
 				if params.Latest != "1234567890.123456" {
 					return nil, errors.New("unexpected latest timestamp")
@@ -383,7 +388,7 @@ func TestChannelHistory(t *testing.T) {
 	})
 
 	t.Run("error", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getConversationHistoryFunc: func(ctx context.Context, params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error) {
 				return nil, errors.New("api error")
 			},
@@ -407,17 +412,18 @@ type programmableMockStateStore struct {
 	saveDMMessageErr error
 }
 
-func (m *programmableMockStateStore) DMMessage(userID, prURL string) (state.DMInfo, bool) {
+func (m *programmableMockStateStore) DMMessage(ctx context.Context, userID, prURL string) (state.DMInfo, bool) {
 	key := userID + ":" + prURL
 	info, exists := m.dmMessages[key]
 	return info, exists
 }
 
-func (m *programmableMockStateStore) SaveDMMessage(userID, prURL string, info state.DMInfo) error {
+func (m *programmableMockStateStore) SaveDMMessage(ctx context.Context, userID, prURL string, info state.DMInfo) error {
 	if m.saveDMMessageErr != nil {
 		return m.saveDMMessageErr
 	}
 	key := userID + ":" + prURL
+	//nolint:tparallel // Tests share resources, cannot run subtests in parallel
 	if m.dmMessages == nil {
 		m.dmMessages = make(map[string]state.DMInfo)
 	}
@@ -437,7 +443,7 @@ func TestUpdateDMMessage_Complete(t *testing.T) {
 		}
 
 		client := &Client{
-			api:        &mockSlackAPI{},
+			api:        &mockAPI{},
 			stateStore: mockStore,
 		}
 
@@ -459,7 +465,7 @@ func TestUpdateDMMessage_Complete(t *testing.T) {
 		}
 
 		updateCalled := false
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			updateMessageFunc: func(ctx context.Context, channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error) {
 				updateCalled = true
 				if channelID != "D123" {
@@ -488,7 +494,7 @@ func TestUpdateDMMessage_Complete(t *testing.T) {
 		}
 
 		// Verify message text was updated in store
-		info, exists := mockStore.DMMessage("U001", prURL)
+		info, exists := mockStore.DMMessage(ctx, "U001", prURL)
 		if !exists {
 			t.Fatal("expected DM message to still exist in store")
 		}
@@ -508,7 +514,7 @@ func TestUpdateDMMessage_Complete(t *testing.T) {
 			},
 		}
 
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			updateMessageFunc: func(ctx context.Context, channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error) {
 				return "", "", "", errors.New("slack API error")
 			},
@@ -538,7 +544,7 @@ func TestUpdateDMMessage_Complete(t *testing.T) {
 			saveDMMessageErr: errors.New("save error"),
 		}
 
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			updateMessageFunc: func(ctx context.Context, channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error) {
 				return channelID, timestamp, "New text", nil
 			},

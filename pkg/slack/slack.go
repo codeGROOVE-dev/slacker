@@ -25,7 +25,7 @@ import (
 	"github.com/slack-go/slack/slackevents"
 )
 
-// Errors
+// Errors.
 var (
 	// ErrNoDMToUpdate indicates no DM exists to update.
 	ErrNoDMToUpdate = errors.New("no DM found to update")
@@ -60,7 +60,7 @@ type Client struct {
 	signingSecret     string
 	teamID            string     // Workspace team ID
 	stateStore        StateStore // State store for DM message tracking
-	api               SlackAPI   // Slack API interface for testability
+	api               API        // Slack API interface for testability
 	cache             *apiCache
 	manager           *Manager                                               // Reference to manager for cache invalidation
 	homeViewHandler   func(ctx context.Context, teamID, userID string) error // Callback for app_home_opened events
@@ -132,7 +132,7 @@ func (c *Client) getRetryDelay() time.Duration {
 // New creates a new Slack client with caching.
 func New(token, signingSecret string) *Client {
 	return &Client{
-		api:           newSlackAPIWrapper(slack.New(token)),
+		api:           newAPIWrapper(slack.New(token)),
 		signingSecret: signingSecret,
 		cache: &apiCache{
 			entries: make(map[string]cacheEntry),
@@ -521,7 +521,7 @@ func (c *Client) SaveDMMessageInfo(ctx context.Context, userID, prURL, channelID
 		SentAt:      time.Now(),
 	}
 
-	if err := store.SaveDMMessage(userID, prURL, info); err != nil {
+	if err := store.SaveDMMessage(ctx, userID, prURL, info); err != nil {
 		return fmt.Errorf("failed to save DM message info: %w", err)
 	}
 
@@ -547,7 +547,7 @@ func (c *Client) UpdateDMMessage(ctx context.Context, userID, prURL, newText str
 	}
 
 	// Get stored DM message info
-	info, exists := store.DMMessage(userID, prURL)
+	info, exists := store.DMMessage(ctx, userID, prURL)
 	if !exists {
 		slog.Debug("no DM message found to update",
 			"user", userID,
@@ -563,7 +563,7 @@ func (c *Client) UpdateDMMessage(ctx context.Context, userID, prURL, newText str
 
 	// Update stored message text
 	info.MessageText = newText
-	if err := store.SaveDMMessage(userID, prURL, info); err != nil {
+	if err := store.SaveDMMessage(ctx, userID, prURL, info); err != nil {
 		slog.Warn("failed to update stored DM message text",
 			"user", userID,
 			"pr_url", prURL,
@@ -760,23 +760,20 @@ func (c *Client) EventsHandler(writer http.ResponseWriter, r *http.Request) {
 			c.homeViewHandlerMu.RUnlock()
 
 			if handler != nil {
-				//nolint:contextcheck // Use detached context for async event processing - prevents webhook events from being lost during shutdown
-				go func(teamID, userID string) {
-					homeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer cancel()
+				homeCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+				defer cancel()
 
-					if err := handler(homeCtx, teamID, userID); err != nil {
-						slog.Error("home view handler failed",
-							"team_id", teamID,
-							"user", userID,
-							"error", err)
-					} else {
-						slog.Info("successfully rendered home view",
-							"team_id", teamID,
-							"user", userID,
-							"trigger", "slack_event")
-					}
-				}(c.teamID, evt.User)
+				if err := handler(homeCtx, c.teamID, evt.User); err != nil {
+					slog.Error("home view handler failed",
+						"team_id", c.teamID,
+						"user", evt.User,
+						"error", err)
+				} else {
+					slog.Info("successfully rendered home view",
+						"team_id", c.teamID,
+						"user", evt.User,
+						"trigger", "slack_event")
+				}
 			} else {
 				slog.Debug("no home view handler registered", "user", evt.User)
 			}
@@ -862,8 +859,7 @@ func (c *Client) InteractionsHandler(writer http.ResponseWriter, r *http.Request
 	switch interaction.Type {
 	case slack.InteractionTypeBlockActions:
 		// Handle block actions (buttons, selects, etc.).
-		//nolint:contextcheck // handleBlockAction spawns async goroutines with detached contexts - this is intentional
-		c.handleBlockAction(&interaction)
+		c.handleBlockAction(r.Context(), &interaction)
 	case slack.InteractionTypeViewSubmission:
 		// Handle modal submissions.
 		slog.Debug("received view submission", "interaction", interaction)
@@ -880,7 +876,7 @@ func (c *Client) InteractionsHandler(writer http.ResponseWriter, r *http.Request
 }
 
 // handleBlockAction handles block action interactions (button clicks, etc.).
-func (c *Client) handleBlockAction(interaction *slack.InteractionCallback) {
+func (c *Client) handleBlockAction(ctx context.Context, interaction *slack.InteractionCallback) {
 	// Process each action in the callback
 	for _, action := range interaction.ActionCallback.BlockActions {
 		slog.Debug("processing block action",
@@ -890,43 +886,44 @@ func (c *Client) handleBlockAction(interaction *slack.InteractionCallback) {
 
 		switch action.ActionID {
 		case "refresh_dashboard":
-			// Trigger home view refresh
-			c.homeViewHandlerMu.RLock()
-			handler := c.homeViewHandler
-			c.homeViewHandlerMu.RUnlock()
-
-			if handler != nil {
-				// Refresh asynchronously to avoid blocking the response
-				go func(teamID, userID string) {
-					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer cancel()
-
-					slog.Info("refreshing dashboard via button click",
-						"team_id", teamID,
-						"user_id", userID,
-						"trigger", "refresh_button")
-
-					if err := handler(ctx, teamID, userID); err != nil {
-						slog.Error("failed to refresh dashboard",
-							"team_id", teamID,
-							"user_id", userID,
-							"trigger", "refresh_button",
-							"error", err)
-					} else {
-						slog.Info("successfully refreshed dashboard",
-							"team_id", teamID,
-							"user_id", userID,
-							"trigger", "refresh_button")
-					}
-				}(interaction.Team.ID, interaction.User.ID)
-			} else {
-				slog.Warn("refresh requested but no home view handler registered",
-					"user", interaction.User.ID)
-			}
-
+			c.handleRefreshDashboard(ctx, interaction)
 		default:
 			slog.Debug("unhandled action_id", "action_id", action.ActionID)
 		}
+	}
+}
+
+// handleRefreshDashboard handles the refresh dashboard button action.
+func (c *Client) handleRefreshDashboard(ctx context.Context, interaction *slack.InteractionCallback) {
+	c.homeViewHandlerMu.RLock()
+	handler := c.homeViewHandler
+	c.homeViewHandlerMu.RUnlock()
+
+	if handler == nil {
+		slog.Warn("refresh requested but no home view handler registered",
+			"user", interaction.User.ID)
+		return
+	}
+
+	handlerCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	slog.Info("refreshing dashboard via button click",
+		"team_id", interaction.Team.ID,
+		"user_id", interaction.User.ID,
+		"trigger", "refresh_button")
+
+	if err := handler(handlerCtx, interaction.Team.ID, interaction.User.ID); err != nil {
+		slog.Error("failed to refresh dashboard",
+			"team_id", interaction.Team.ID,
+			"user_id", interaction.User.ID,
+			"trigger", "refresh_button",
+			"error", err)
+	} else {
+		slog.Info("successfully refreshed dashboard",
+			"team_id", interaction.Team.ID,
+			"user_id", interaction.User.ID,
+			"trigger", "refresh_button")
 	}
 }
 
@@ -1127,9 +1124,9 @@ func (c *Client) SearchMessages(ctx context.Context, query string, params *slack
 }
 
 // API returns the underlying Slack API client for compatibility.
-// This unwraps the SlackAPI interface to return the raw *slack.Client.
+// This unwraps the API interface to return the raw *slack.Client.
 // Only use this when integrating with code that hasn't been refactored
-// to use the SlackAPI interface yet.
+// to use the API interface yet.
 func (c *Client) API() *slack.Client {
 	if wrapper, ok := c.api.(*slackAPIWrapper); ok {
 		return wrapper.RawClient()

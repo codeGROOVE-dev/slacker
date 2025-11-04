@@ -32,12 +32,12 @@ func TestClient_Client(t *testing.T) {
 }
 
 func TestClient_InstallationToken(t *testing.T) {
+	ctx := context.Background()
 	c := &Client{
 		installationToken: "test-token",
 		tokenExpiry:       time.Now().Add(1 * time.Hour),
 	}
 
-	ctx := context.Background()
 	token := c.InstallationToken(ctx)
 
 	if token != "test-token" {
@@ -46,12 +46,12 @@ func TestClient_InstallationToken(t *testing.T) {
 }
 
 func TestClient_InstallationToken_NotExpired(t *testing.T) {
+	ctx := context.Background()
 	c := &Client{
 		installationToken: "valid-token",
 		tokenExpiry:       time.Now().Add(1 * time.Hour), // Not expired
 	}
 
-	ctx := context.Background()
 	token := c.InstallationToken(ctx)
 
 	// Should return the existing token if not expired
@@ -767,6 +767,7 @@ func TestRefreshInstallations_SkipPersonalAccounts(t *testing.T) {
 }
 
 func TestRefreshInstallations_CanceledContext(t *testing.T) {
+	ctx := context.Background()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("failed to generate key: %v", err)
@@ -814,6 +815,7 @@ func TestNewTurnClient(t *testing.T) {
 }
 
 func TestSearchClient_ListOpenPRs(t *testing.T) {
+	ctx := context.Background()
 	// Create a mock server for search API
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Mock search API response
@@ -849,7 +851,6 @@ func TestSearchClient_ListOpenPRs(t *testing.T) {
 	defer server.Close()
 
 	// Create client pointing to mock server
-	ctx := context.Background()
 	src := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"})
 	httpClient := oauth2.NewClient(ctx, src)
 	searchClient := github.NewClient(httpClient)
@@ -1015,6 +1016,7 @@ func TestExtractOwnerRepo(t *testing.T) {
 }
 
 func TestSearchPRs_Pagination(t *testing.T) {
+	ctx := context.Background()
 	callCount := 0
 	var serverURL string
 
@@ -1060,7 +1062,6 @@ func TestSearchPRs_Pagination(t *testing.T) {
 	defer server.Close()
 	serverURL = server.URL
 
-	ctx := context.Background()
 	src := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"})
 	httpClient := oauth2.NewClient(ctx, src)
 	searchClient := github.NewClient(httpClient)
@@ -1087,13 +1088,13 @@ func TestSearchPRs_Pagination(t *testing.T) {
 }
 
 func TestSearchPRs_SearchError(t *testing.T) {
+	ctx := context.Background()
 	// Mock server that returns error
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
 
-	ctx := context.Background()
 	src := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"})
 	httpClient := oauth2.NewClient(ctx, src)
 	searchClient := github.NewClient(httpClient)
@@ -1111,6 +1112,7 @@ func TestSearchPRs_SearchError(t *testing.T) {
 }
 
 func TestSearchPRs_SkipsIssues(t *testing.T) {
+	ctx := context.Background()
 	// Mock server that returns both issues and PRs
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/search/issues") {
@@ -1153,7 +1155,6 @@ func TestSearchPRs_SkipsIssues(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ctx := context.Background()
 	src := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"})
 	httpClient := oauth2.NewClient(ctx, src)
 	searchClient := github.NewClient(httpClient)
@@ -1180,6 +1181,7 @@ func TestSearchPRs_SkipsIssues(t *testing.T) {
 }
 
 func TestSearchPRs_InvalidRepositoryURL(t *testing.T) {
+	ctx := context.Background()
 	// Mock server that returns PR with invalid repository URL
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/search/issues") {
@@ -1211,7 +1213,6 @@ func TestSearchPRs_InvalidRepositoryURL(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ctx := context.Background()
 	src := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"})
 	httpClient := oauth2.NewClient(ctx, src)
 	searchClient := github.NewClient(httpClient)
@@ -1428,6 +1429,7 @@ func TestNewTurnClient_Error(t *testing.T) {
 }
 
 func TestSearchPRs_MaxPageLimit(t *testing.T) {
+	ctx := context.Background()
 	callCount := 0
 	var serverURL string
 
@@ -1468,7 +1470,6 @@ func TestSearchPRs_MaxPageLimit(t *testing.T) {
 	defer server.Close()
 	serverURL = server.URL
 
-	ctx := context.Background()
 	src := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"})
 	httpClient := oauth2.NewClient(ctx, src)
 	searchClient := github.NewClient(httpClient)

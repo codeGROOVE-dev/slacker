@@ -241,11 +241,11 @@ func TestNotificationTracker_ConcurrentAccess(t *testing.T) {
 	numGoroutines := 10
 	numOperations := 100
 
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		wg.Add(1)
-		go func(id int) {
+		go func(_ int) {
 			defer wg.Done()
-			for j := 0; j < numOperations; j++ {
+			for j := range numOperations {
 				// Write operations
 				tracker.UpdateDMNotification("workspace1", "U001")
 				tracker.UpdateDailyReminder("workspace1", "U001")

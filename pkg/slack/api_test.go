@@ -8,15 +8,15 @@ import (
 	"github.com/slack-go/slack"
 )
 
-func TestSlackAPIWrapper(t *testing.T) {
-	t.Parallel()
-
+//nolint:gocognit,maintidx // Comprehensive API wrapper test covering all interface methods - complexity acceptable
+func TestAPIWrapper(t *testing.T) {
 	ctx := context.Background()
+	t.Parallel()
 
 	t.Run("RawClient", func(t *testing.T) {
 		rawClient := slack.New("test-token")
 		//nolint:errcheck // Type assertion in test is safe
-		wrapper := newSlackAPIWrapper(rawClient).(*slackAPIWrapper)
+		wrapper := newAPIWrapper(rawClient).(*slackAPIWrapper)
 
 		if wrapper.RawClient() != rawClient {
 			t.Error("expected RawClient to return the wrapped client")
@@ -29,7 +29,7 @@ func TestSlackAPIWrapper(t *testing.T) {
 			Name: "Test Team",
 		}
 
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getTeamInfoFunc: func(ctx context.Context) (*slack.TeamInfo, error) {
 				return expectedInfo, nil
 			},
@@ -51,7 +51,7 @@ func TestSlackAPIWrapper(t *testing.T) {
 			TeamID: "T123",
 		}
 
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			authTestFunc: func(ctx context.Context) (*slack.AuthTestResponse, error) {
 				return expectedResp, nil
 			},
@@ -77,7 +77,7 @@ func TestSlackAPIWrapper(t *testing.T) {
 			},
 		}
 
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getConversationInfoFunc: func(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error) {
 				return expectedChan, nil
 			},
@@ -103,7 +103,7 @@ func TestSlackAPIWrapper(t *testing.T) {
 			},
 		}
 
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			openConversationFunc: func(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error) {
 				return expectedChan, false, false, nil
 			},
@@ -123,7 +123,7 @@ func TestSlackAPIWrapper(t *testing.T) {
 	})
 
 	t.Run("PostMessageContext", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			postMessageFunc: func(ctx context.Context, channelID string, options ...slack.MsgOption) (string, string, error) {
 				return "C123", "1234567890.123456", nil
 			},
@@ -144,7 +144,7 @@ func TestSlackAPIWrapper(t *testing.T) {
 	})
 
 	t.Run("UpdateMessageContext", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			updateMessageFunc: func(ctx context.Context, channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error) {
 				return channelID, timestamp, "Updated text", nil
 			},
@@ -174,7 +174,7 @@ func TestSlackAPIWrapper(t *testing.T) {
 			Name: "testuser",
 		}
 
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getUserInfoFunc: func(ctx context.Context, userID string) (*slack.User, error) {
 				return expectedUser, nil
 			},
@@ -195,7 +195,7 @@ func TestSlackAPIWrapper(t *testing.T) {
 			Presence: "active",
 		}
 
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getUserPresenceFunc: func(ctx context.Context, userID string) (*slack.UserPresence, error) {
 				return expectedPresence, nil
 			},
@@ -212,7 +212,7 @@ func TestSlackAPIWrapper(t *testing.T) {
 	})
 
 	t.Run("AddReactionContext", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			addReactionFunc: func(ctx context.Context, name string, item slack.ItemRef) error {
 				if name != "thumbsup" {
 					return errors.New("unexpected reaction name")
@@ -233,7 +233,7 @@ func TestSlackAPIWrapper(t *testing.T) {
 	})
 
 	t.Run("RemoveReactionContext", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			removeReactionFunc: func(ctx context.Context, name string, item slack.ItemRef) error {
 				if name != "thumbsup" {
 					return errors.New("unexpected reaction name")
@@ -263,7 +263,7 @@ func TestSlackAPIWrapper(t *testing.T) {
 			},
 		}
 
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			searchMessagesFunc: func(ctx context.Context, query string, params slack.SearchParameters) (*slack.SearchMessages, error) {
 				return expectedResults, nil
 			},
@@ -282,7 +282,7 @@ func TestSlackAPIWrapper(t *testing.T) {
 	t.Run("PublishViewContext", func(t *testing.T) {
 		expectedResp := &slack.ViewResponse{}
 
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			publishViewFunc: func(ctx context.Context, request slack.PublishViewContextRequest) (*slack.ViewResponse, error) {
 				return expectedResp, nil
 			},

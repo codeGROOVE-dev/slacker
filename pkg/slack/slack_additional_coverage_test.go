@@ -15,12 +15,11 @@ import (
 
 // TestResolveChannelID_ChannelIDInput tests when input is already a channel ID.
 func TestResolveChannelID_ChannelIDInput(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
-	ctx := context.Background()
-
 	// No API calls should be made
-	api := &mockSlackAPI{}
+	api := &mockAPI{}
 
 	client := &Client{
 		api: api,
@@ -38,11 +37,10 @@ func TestResolveChannelID_ChannelIDInput(t *testing.T) {
 
 // TestResolveChannelID_HashPrefix tests when input has # prefix.
 func TestResolveChannelID_HashPrefix(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
-	ctx := context.Background()
-
-	api := &mockSlackAPI{
+	api := &mockAPI{
 		getConversationsFunc: func(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
 			return []slack.Channel{
 				{
@@ -73,12 +71,11 @@ func TestResolveChannelID_HashPrefix(t *testing.T) {
 
 // TestResolveChannelID_CacheTypeMismatch tests handling of wrong cache type.
 func TestResolveChannelID_CacheTypeMismatch(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
-	ctx := context.Background()
-
 	callCount := 0
-	api := &mockSlackAPI{
+	api := &mockAPI{
 		getConversationsFunc: func(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
 			callCount++
 			return []slack.Channel{
@@ -117,12 +114,11 @@ func TestResolveChannelID_CacheTypeMismatch(t *testing.T) {
 
 // TestResolveChannelID_FallbackToPublicOnly tests fallback to public channels only.
 func TestResolveChannelID_FallbackToPublicOnly(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
-	ctx := context.Background()
-
 	callCount := 0
-	api := &mockSlackAPI{
+	api := &mockAPI{
 		getConversationsFunc: func(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
 			callCount++
 			// First call (public+private) fails with permission error
@@ -163,11 +159,10 @@ func TestResolveChannelID_FallbackToPublicOnly(t *testing.T) {
 
 // TestResolveChannelID_EmptyChannelName tests empty channel name handling.
 func TestResolveChannelID_EmptyChannelName(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
-	ctx := context.Background()
-
-	api := &mockSlackAPI{}
+	api := &mockAPI{}
 
 	client := &Client{
 		api: api,
@@ -216,7 +211,7 @@ func TestHandleBlockAction_RefreshButton(t *testing.T) {
 	}
 
 	// Call handler
-	client.handleBlockAction(interaction)
+	client.handleBlockAction(context.Background(), interaction)
 
 	// Wait for handler to complete or timeout
 	select {
@@ -261,7 +256,7 @@ func TestHandleBlockAction_RefreshButtonNoHandler(t *testing.T) {
 	}
 
 	// Should complete without panic
-	client.handleBlockAction(interaction)
+	client.handleBlockAction(context.Background(), interaction)
 
 	// Give time for any potential goroutine
 	time.Sleep(10 * time.Millisecond)
@@ -299,7 +294,7 @@ func TestHandleBlockAction_RefreshButtonHandlerError(t *testing.T) {
 	}
 
 	// Call handler
-	client.handleBlockAction(interaction)
+	client.handleBlockAction(context.Background(), interaction)
 
 	// Wait for handler to complete or timeout
 	select {
@@ -338,7 +333,7 @@ func TestHandleBlockAction_UnhandledAction(t *testing.T) {
 	}
 
 	// Should complete without calling handler
-	client.handleBlockAction(interaction)
+	client.handleBlockAction(context.Background(), interaction)
 
 	// Give time for any potential goroutine
 	time.Sleep(10 * time.Millisecond)
@@ -382,7 +377,7 @@ func TestHandleBlockAction_MultipleActions(t *testing.T) {
 	}
 
 	// Call handler
-	client.handleBlockAction(interaction)
+	client.handleBlockAction(context.Background(), interaction)
 
 	// Wait for both handler calls
 	timeout := time.After(50 * time.Millisecond)
@@ -427,7 +422,7 @@ func TestHandleBlockAction_EmptyActions(t *testing.T) {
 	}
 
 	// Should complete without calling handler
-	client.handleBlockAction(interaction)
+	client.handleBlockAction(context.Background(), interaction)
 
 	// Give time for any potential goroutine
 	time.Sleep(10 * time.Millisecond)
@@ -437,12 +432,11 @@ func TestHandleBlockAction_EmptyActions(t *testing.T) {
 
 // TestResolveChannelID_Pagination tests channel resolution with multiple pages.
 func TestResolveChannelID_Pagination(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
-	ctx := context.Background()
-
 	callCount := 0
-	api := &mockSlackAPI{
+	api := &mockAPI{
 		getConversationsFunc: func(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
 			callCount++
 			// First call returns page 1 with cursor
@@ -496,12 +490,11 @@ func TestResolveChannelID_Pagination(t *testing.T) {
 
 // TestResolveChannelID_PaginationError tests error during pagination.
 func TestResolveChannelID_PaginationError(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
-	ctx := context.Background()
-
 	callCount := 0
-	api := &mockSlackAPI{
+	api := &mockAPI{
 		getConversationsFunc: func(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
 			callCount++
 			// First call returns page 1 with cursor
@@ -539,11 +532,10 @@ func TestResolveChannelID_PaginationError(t *testing.T) {
 
 // TestResolveChannelID_ChannelNotFound tests when channel doesn't exist.
 func TestResolveChannelID_ChannelNotFound(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
-	ctx := context.Background()
-
-	api := &mockSlackAPI{
+	api := &mockAPI{
 		getConversationsFunc: func(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
 			// Return channels but none matching
 			return []slack.Channel{
@@ -576,12 +568,11 @@ func TestResolveChannelID_ChannelNotFound(t *testing.T) {
 
 // TestResolveChannelID_BothFallbacksFail tests when both public+private and public-only fail.
 func TestResolveChannelID_BothFallbacksFail(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
-	ctx := context.Background()
-
 	callCount := 0
-	api := &mockSlackAPI{
+	api := &mockAPI{
 		getConversationsFunc: func(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
 			callCount++
 			// Both calls fail

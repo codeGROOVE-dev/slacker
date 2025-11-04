@@ -153,6 +153,7 @@ func TestService_GetSlackHandle_FallbackToGitHub(t *testing.T) {
 }
 
 func TestService_FormatUserMention_WithMapping(t *testing.T) {
+	ctx := context.Background()
 	service := &Service{
 		cache: make(map[string]*UserMapping),
 	}
@@ -165,7 +166,6 @@ func TestService_FormatUserMention_WithMapping(t *testing.T) {
 		CachedAt:       time.Now(),
 	})
 
-	ctx := context.Background()
 	result := service.FormatUserMention(ctx, "testuser", "testorg", "example.com")
 
 	if result != "<@U123456>" {
@@ -174,6 +174,7 @@ func TestService_FormatUserMention_WithMapping(t *testing.T) {
 }
 
 func TestService_FormatUserMention_NoMapping(t *testing.T) {
+	ctx := context.Background()
 	service := &Service{
 		slackClient:  &MockSlackAPI{},
 		githubLookup: &MockGitHubLookup{},
@@ -181,7 +182,6 @@ func TestService_FormatUserMention_NoMapping(t *testing.T) {
 		lookupSem:    make(chan struct{}, 5),
 	}
 
-	ctx := context.Background()
 	result := service.FormatUserMention(ctx, "unknownuser", "testorg", "example.com")
 
 	if result != "@unknownuser" {
@@ -190,6 +190,7 @@ func TestService_FormatUserMention_NoMapping(t *testing.T) {
 }
 
 func TestService_FormatUserMentions_Mixed(t *testing.T) {
+	ctx := context.Background()
 	service := &Service{
 		slackClient:  &MockSlackAPI{},
 		githubLookup: &MockGitHubLookup{},
@@ -213,7 +214,6 @@ func TestService_FormatUserMentions_Mixed(t *testing.T) {
 		CachedAt:       time.Now(),
 	})
 
-	ctx := context.Background()
 	users := []string{"user1", "user2", "user3"}
 	result := service.FormatUserMentions(ctx, users, "testorg", "example.com")
 
@@ -615,7 +615,7 @@ func TestService_SlackHandles(t *testing.T) {
 
 	mockSlack := &MockSlackAPI{
 		getUserByEmailFunc: func(ctx context.Context, email string) (*slack.User, error) {
-			if len(email) > 0 && strings.Contains(email, "@example.com") {
+			if email != "" && strings.Contains(email, "@example.com") {
 				username := strings.Split(email, "@")[0]
 				return &slack.User{
 					ID:      "U" + strings.ToUpper(username[:min(1, len(username))]),
@@ -697,6 +697,7 @@ func TestSelectBestMatch(t *testing.T) {
 }
 
 func TestService_SlackHandles_EmptyList(t *testing.T) {
+	ctx := context.Background()
 	service := &Service{
 		slackClient:  &MockSlackAPI{},
 		githubLookup: &MockGitHubLookup{},
@@ -704,7 +705,6 @@ func TestService_SlackHandles_EmptyList(t *testing.T) {
 		lookupSem:    make(chan struct{}, 5),
 	}
 
-	ctx := context.Background()
 	result, err := service.SlackHandles(ctx, []string{}, "testorg", "example.com")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -715,11 +715,11 @@ func TestService_SlackHandles_EmptyList(t *testing.T) {
 }
 
 func TestService_FormatUserMentions_Empty(t *testing.T) {
+	ctx := context.Background()
 	service := &Service{
 		cache: make(map[string]*UserMapping),
 	}
 
-	ctx := context.Background()
 	result := service.FormatUserMentions(ctx, []string{}, "testorg", "example.com")
 	if result != "" {
 		t.Errorf("expected empty string, got %q", result)
@@ -727,6 +727,7 @@ func TestService_FormatUserMentions_Empty(t *testing.T) {
 }
 
 func TestService_ContextCancellation(t *testing.T) {
+	ctx := context.Background()
 	service := &Service{
 		slackClient:  &MockSlackAPI{},
 		githubLookup: &MockGitHubLookup{},
@@ -744,7 +745,7 @@ func TestService_ContextCancellation(t *testing.T) {
 	if err == nil {
 		t.Error("expected context cancellation error, got nil")
 	}
-	if err != context.Canceled {
+	if !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context.Canceled error, got %v", err)
 	}
 }

@@ -57,15 +57,15 @@ type Coordinator struct {
 
 // StateStore interface for persistent state - allows dependency injection for testing.
 type StateStore interface {
-	Thread(owner, repo string, number int, channelID string) (cache.ThreadInfo, bool)
-	SaveThread(owner, repo string, number int, channelID string, info cache.ThreadInfo) error
-	LastDM(userID, prURL string) (time.Time, bool)
-	RecordDM(userID, prURL string, sentAt time.Time) error
-	ListDMUsers(prURL string) []string
-	WasProcessed(eventKey string) bool
-	MarkProcessed(eventKey string, ttl time.Duration) error
-	LastNotification(prURL string) time.Time
-	RecordNotification(prURL string, notifiedAt time.Time) error
+	Thread(ctx context.Context, owner, repo string, number int, channelID string) (cache.ThreadInfo, bool)
+	SaveThread(ctx context.Context, owner, repo string, number int, channelID string, info cache.ThreadInfo) error
+	LastDM(ctx context.Context, userID, prURL string) (time.Time, bool)
+	RecordDM(ctx context.Context, userID, prURL string, sentAt time.Time) error
+	ListDMUsers(ctx context.Context, prURL string) []string
+	WasProcessed(ctx context.Context, eventKey string) bool
+	MarkProcessed(ctx context.Context, eventKey string, ttl time.Duration) error
+	LastNotification(ctx context.Context, prURL string) time.Time
+	RecordNotification(ctx context.Context, prURL string, notifiedAt time.Time) error
 	Close() error
 }
 
@@ -118,13 +118,13 @@ func New(
 
 // saveThread persists thread info to both cache and persistent storage.
 // This ensures threads survive restarts and are available for closed PR updates.
-func (c *Coordinator) saveThread(owner, repo string, number int, channelID string, info cache.ThreadInfo) {
+func (c *Coordinator) saveThread(ctx context.Context, owner, repo string, number int, channelID string, info cache.ThreadInfo) {
 	// Save to in-memory cache for fast lookups
 	key := fmt.Sprintf("%s/%s#%d:%s", owner, repo, number, channelID)
 	c.threadCache.Set(key, info)
 
 	// Persist to state store for cross-instance sharing and restart recovery
-	if err := c.stateStore.SaveThread(owner, repo, number, channelID, info); err != nil {
+	if err := c.stateStore.SaveThread(ctx, owner, repo, number, channelID, info); err != nil {
 		slog.Warn("failed to persist thread to state store",
 			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, number),
 			"channel_id", channelID,
@@ -196,7 +196,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 			"current_message_preview", initialSearchText[:min(100, len(initialSearchText))])
 
 		// Save the found thread (cache + persist)
-		c.saveThread(owner, repo, prNumber, channelID, cache.ThreadInfo{
+		c.saveThread(ctx, owner, repo, prNumber, channelID, cache.ThreadInfo{
 			ThreadTS:    initialSearchTS,
 			ChannelID:   channelID,
 			LastState:   prState,
@@ -272,7 +272,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 			"note", "this prevented duplicate thread creation during rolling deployment")
 
 		// Save it and return (cache + persist)
-		c.saveThread(owner, repo, prNumber, channelID, cache.ThreadInfo{
+		c.saveThread(ctx, owner, repo, prNumber, channelID, cache.ThreadInfo{
 			ThreadTS:    crossInstanceCheckTS,
 			ChannelID:   channelID,
 			LastState:   prState,
@@ -295,7 +295,7 @@ func (c *Coordinator) findOrCreatePRThread(ctx context.Context, channelID, owner
 	}
 
 	// Save the new thread (cache + persist)
-	c.saveThread(owner, repo, prNumber, channelID, cache.ThreadInfo{
+	c.saveThread(ctx, owner, repo, prNumber, channelID, cache.ThreadInfo{
 		ThreadTS:    newThreadTS,
 		ChannelID:   channelID,
 		LastState:   prState,
@@ -925,7 +925,7 @@ func (c *Coordinator) updateDMMessagesForPR(ctx context.Context, pr prUpdateInfo
 
 	// For terminal states (merged/closed), update all users who received DMs
 	if prState == "merged" || prState == "closed" {
-		slackUserIDs = c.stateStore.ListDMUsers(prURL)
+		slackUserIDs = c.stateStore.ListDMUsers(ctx, prURL)
 		if len(slackUserIDs) == 0 {
 			slog.Debug("no DM recipients found for merged/closed PR",
 				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
@@ -983,8 +983,7 @@ func (c *Coordinator) updateDMMessagesForPR(ctx context.Context, pr prUpdateInfo
 		slog.Info("no analysis available - using state-based emoji fallback",
 			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
 			"pr_state", prState)
-		//nolint:staticcheck // deprecated method kept for backward compatibility
-		prefix = notify.PrefixForState(prState)
+		prefix = notify.PrefixForAnalysis("", nil)
 	}
 	var action string
 	switch prState {
@@ -1216,6 +1215,8 @@ func (c *Coordinator) processChannelsInParallel(
 
 // processPRForChannel handles PR processing for a single channel (extracted from the main loop).
 // Returns a map of Slack user IDs that were successfully tagged in this channel.
+//
+//nolint:maintidx // Core PR processing logic with necessary complexity for handling notifications
 func (c *Coordinator) processPRForChannel(
 	ctx context.Context, prCtx prContext, channelName, workspaceID string,
 ) map[string]bool {
@@ -1385,7 +1386,7 @@ func (c *Coordinator) processPRForChannel(
 					"next_poll_in", "5m")
 			} else {
 				// Save updated thread info (cache + persist)
-				c.saveThread(owner, repo, prNumber, channelID, cache.ThreadInfo{
+				c.saveThread(ctx, owner, repo, prNumber, channelID, cache.ThreadInfo{
 					ThreadTS:    threadTS,
 					ChannelID:   channelID,
 					LastState:   prState,

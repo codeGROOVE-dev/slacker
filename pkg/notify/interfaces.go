@@ -51,9 +51,9 @@ type ConfigProvider interface {
 // StateProvider provides state storage for daily digests.
 // Used by DailyDigestScheduler.
 type StateProvider interface {
-	LastDigest(userID, date string) (time.Time, bool)
-	RecordDigest(userID, date string, sentAt time.Time) error
-	LastDM(userID, prURL string) (time.Time, bool)
+	LastDigest(ctx context.Context, userID, date string) (time.Time, bool)
+	RecordDigest(ctx context.Context, userID, date string, sentAt time.Time) error
+	LastDM(ctx context.Context, userID, prURL string) (time.Time, bool)
 }
 
 // slackManagerAdapter adapts concrete slack.Manager to implement SlackManager interface.

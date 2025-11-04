@@ -21,8 +21,8 @@ type WorkspaceMetadata struct {
 
 // StateStore interface for DM message tracking.
 type StateStore interface {
-	DMMessage(userID, prURL string) (state.DMInfo, bool)
-	SaveDMMessage(userID, prURL string, info state.DMInfo) error
+	DMMessage(ctx context.Context, userID, prURL string) (state.DMInfo, bool)
+	SaveDMMessage(ctx context.Context, userID, prURL string, info state.DMInfo) error
 }
 
 // Manager manages Slack clients for multiple workspaces.

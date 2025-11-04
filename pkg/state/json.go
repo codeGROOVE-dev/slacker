@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -108,7 +109,7 @@ func digestKey(userID, date string) string {
 }
 
 // Thread retrieves thread information for a PR.
-func (s *JSONStore) Thread(owner, repo string, number int, channelID string) (ThreadInfo, bool) {
+func (s *JSONStore) Thread(ctx context.Context, owner, repo string, number int, channelID string) (ThreadInfo, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	key := threadKey(owner, repo, number, channelID)
@@ -117,7 +118,7 @@ func (s *JSONStore) Thread(owner, repo string, number int, channelID string) (Th
 }
 
 // SaveThread saves thread information for a PR.
-func (s *JSONStore) SaveThread(owner, repo string, number int, channelID string, info ThreadInfo) error {
+func (s *JSONStore) SaveThread(ctx context.Context, owner, repo string, number int, channelID string, info ThreadInfo) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := threadKey(owner, repo, number, channelID)
@@ -133,7 +134,7 @@ func (s *JSONStore) SaveThread(owner, repo string, number int, channelID string,
 }
 
 // LastDM retrieves the last DM timestamp for a user and PR.
-func (s *JSONStore) LastDM(userID, prURL string) (time.Time, bool) {
+func (s *JSONStore) LastDM(ctx context.Context, userID, prURL string) (time.Time, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	key := dmKey(userID, prURL)
@@ -142,7 +143,7 @@ func (s *JSONStore) LastDM(userID, prURL string) (time.Time, bool) {
 }
 
 // RecordDM records when a DM was sent to a user about a PR.
-func (s *JSONStore) RecordDM(userID, prURL string, sentAt time.Time) error {
+func (s *JSONStore) RecordDM(ctx context.Context, userID, prURL string, sentAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := dmKey(userID, prURL)
@@ -157,7 +158,7 @@ func (s *JSONStore) RecordDM(userID, prURL string, sentAt time.Time) error {
 }
 
 // DMMessage retrieves DM message information for a user and PR.
-func (s *JSONStore) DMMessage(userID, prURL string) (DMInfo, bool) {
+func (s *JSONStore) DMMessage(ctx context.Context, userID, prURL string) (DMInfo, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	key := dmKey(userID, prURL)
@@ -166,7 +167,7 @@ func (s *JSONStore) DMMessage(userID, prURL string) (DMInfo, bool) {
 }
 
 // SaveDMMessage saves DM message information for a user and PR.
-func (s *JSONStore) SaveDMMessage(userID, prURL string, info DMInfo) error {
+func (s *JSONStore) SaveDMMessage(ctx context.Context, userID, prURL string, info DMInfo) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := dmKey(userID, prURL)
@@ -182,7 +183,7 @@ func (s *JSONStore) SaveDMMessage(userID, prURL string, info DMInfo) error {
 }
 
 // ListDMUsers returns all user IDs who have received DMs for a given PR.
-func (s *JSONStore) ListDMUsers(prURL string) []string {
+func (s *JSONStore) ListDMUsers(ctx context.Context, prURL string) []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -203,7 +204,7 @@ func (s *JSONStore) ListDMUsers(prURL string) []string {
 }
 
 // LastDigest retrieves the last digest timestamp for a user and date.
-func (s *JSONStore) LastDigest(userID, date string) (time.Time, bool) {
+func (s *JSONStore) LastDigest(ctx context.Context, userID, date string) (time.Time, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	key := digestKey(userID, date)
@@ -212,7 +213,7 @@ func (s *JSONStore) LastDigest(userID, date string) (time.Time, bool) {
 }
 
 // RecordDigest records when a digest was sent to a user.
-func (s *JSONStore) RecordDigest(userID, date string, sentAt time.Time) error {
+func (s *JSONStore) RecordDigest(ctx context.Context, userID, date string, sentAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := digestKey(userID, date)
@@ -231,7 +232,7 @@ func (s *JSONStore) RecordDigest(userID, date string, sentAt time.Time) error {
 }
 
 // WasProcessed checks if an event was already processed.
-func (s *JSONStore) WasProcessed(eventKey string) bool {
+func (s *JSONStore) WasProcessed(ctx context.Context, eventKey string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	_, exists := s.events[eventKey]
@@ -241,7 +242,7 @@ func (s *JSONStore) WasProcessed(eventKey string) bool {
 // MarkProcessed marks an event as processed with an optional TTL.
 // Note: TTL is currently ignored - cleanup uses hardcoded 24-hour retention.
 // This could be enhanced in the future to support per-event TTL.
-func (s *JSONStore) MarkProcessed(eventKey string, _ time.Duration) error {
+func (s *JSONStore) MarkProcessed(ctx context.Context, eventKey string, _ time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Always save to memory (primary storage)
@@ -255,14 +256,14 @@ func (s *JSONStore) MarkProcessed(eventKey string, _ time.Duration) error {
 }
 
 // LastNotification retrieves the last notification timestamp for a PR.
-func (s *JSONStore) LastNotification(prURL string) time.Time {
+func (s *JSONStore) LastNotification(ctx context.Context, prURL string) time.Time {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.notifications[prURL]
 }
 
 // RecordNotification records when a notification was sent for a PR.
-func (s *JSONStore) RecordNotification(prURL string, notifiedAt time.Time) error {
+func (s *JSONStore) RecordNotification(ctx context.Context, prURL string, notifiedAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// Always save to memory (primary storage)
@@ -276,7 +277,7 @@ func (s *JSONStore) RecordNotification(prURL string, notifiedAt time.Time) error
 }
 
 // Cleanup removes old data from all maps.
-func (s *JSONStore) Cleanup() error {
+func (s *JSONStore) Cleanup(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -329,7 +330,8 @@ func (s *JSONStore) Cleanup() error {
 
 	// Clean up old pending DMs (>7 days or already past send time by >1 day)
 	cleanedPendingDMs := 0
-	for key, dm := range s.pendingDMs {
+	for key := range s.pendingDMs {
+		dm := s.pendingDMs[key]
 		if now.Sub(dm.QueuedAt) > 7*24*time.Hour || now.Sub(dm.SendAfter) > 24*time.Hour {
 			delete(s.pendingDMs, key)
 			cleanedPendingDMs++
@@ -473,10 +475,10 @@ func (s *JSONStore) load() error {
 }
 
 // QueuePendingDM adds a DM to the pending queue.
-func (s *JSONStore) QueuePendingDM(dm PendingDM) error {
+func (s *JSONStore) QueuePendingDM(ctx context.Context, dm *PendingDM) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pendingDMs[dm.ID] = dm
+	s.pendingDMs[dm.ID] = *dm
 	s.modified = true
 	// Best-effort persistence to JSON file for restart recovery
 	if err := s.save(); err != nil {
@@ -486,12 +488,13 @@ func (s *JSONStore) QueuePendingDM(dm PendingDM) error {
 }
 
 // PendingDMs returns all pending DMs that should be sent (SendAfter <= before).
-func (s *JSONStore) PendingDMs(before time.Time) ([]PendingDM, error) {
+func (s *JSONStore) PendingDMs(ctx context.Context, before time.Time) ([]PendingDM, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var result []PendingDM
-	for _, dm := range s.pendingDMs {
+	for key := range s.pendingDMs {
+		dm := s.pendingDMs[key]
 		if !dm.SendAfter.After(before) {
 			result = append(result, dm)
 		}
@@ -500,7 +503,7 @@ func (s *JSONStore) PendingDMs(before time.Time) ([]PendingDM, error) {
 }
 
 // RemovePendingDM removes a pending DM from the queue.
-func (s *JSONStore) RemovePendingDM(id string) error {
+func (s *JSONStore) RemovePendingDM(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.pendingDMs, id)

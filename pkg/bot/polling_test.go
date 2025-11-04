@@ -455,6 +455,7 @@ func TestStartupReconciliation_NoToken(t *testing.T) {
 
 // TestPollAndReconcile_Deduplication tests that already-processed events are skipped.
 func TestPollAndReconcile_Deduplication(t *testing.T) {
+	ctx := context.Background()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -1292,6 +1293,7 @@ func TestPollAndReconcileWithSearcher_SuccessfulOpenPRProcessing(t *testing.T) {
 
 // TestPollAndReconcileWithSearcher_ContextCancellationDuringOpenPRs tests graceful cancellation.
 func TestPollAndReconcileWithSearcher_ContextCancellationDuringOpenPRs(t *testing.T) {
+	ctx := context.Background()
 	ctx, cancel := context.WithCancel(context.Background())
 	store := &mockStateStore{
 		processedEvents: make(map[string]bool),
@@ -1492,6 +1494,7 @@ func TestPollAndReconcileWithSearcher_ListClosedPRsError(t *testing.T) {
 
 // TestPollAndReconcileWithSearcher_ContextCancellationDuringClosedPRs tests cancellation during closed PR processing.
 func TestPollAndReconcileWithSearcher_ContextCancellationDuringClosedPRs(t *testing.T) {
+	ctx := context.Background()
 	ctx, cancel := context.WithCancel(context.Background())
 	store := &mockStateStore{
 		processedEvents: make(map[string]bool),

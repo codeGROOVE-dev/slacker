@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -216,10 +217,10 @@ func TestCacheGetExpired(t *testing.T) {
 // mockStateStore implements StateStore for testing.
 type mockStateStore struct{}
 
-func (m *mockStateStore) DMMessage(userID, prURL string) (state.DMInfo, bool) {
+func (m *mockStateStore) DMMessage(ctx context.Context, userID, prURL string) (state.DMInfo, bool) {
 	return state.DMInfo{}, false
 }
 
-func (m *mockStateStore) SaveDMMessage(userID, prURL string, info state.DMInfo) error {
+func (m *mockStateStore) SaveDMMessage(ctx context.Context, userID, prURL string, info state.DMInfo) error {
 	return nil
 }

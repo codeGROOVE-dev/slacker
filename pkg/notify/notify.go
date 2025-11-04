@@ -72,37 +72,38 @@ func FormatChannelMessageBase(ctx context.Context, params MessageParams) string 
 		"unresolved_comments", a.UnresolvedComments)
 
 	// Determine emoji and state parameter
-	var emoji, state string
+	var emoji, stateSuffix string
 
 	// Handle merged/closed states first (most definitive)
 	//nolint:gocritic // if-else chain is clearer than switch for state-based logic
 	if pr.Merged {
-		emoji, state = ":rocket:", "?st=merged"
+		emoji, stateSuffix = ":rocket:", "?st=merged"
 		slog.Info("using :rocket: emoji - PR is merged", "pr", prID, "merged_at", pr.MergedAt)
 	} else if pr.State == "closed" {
-		emoji, state = ":x:", "?st=closed"
+		emoji, stateSuffix = ":x:", "?st=closed"
 		slog.Info("using :x: emoji - PR is closed but not merged", "pr", prID)
 	} else if a.WorkflowState != "" {
 		// Use WorkflowState as primary signal (most reliable source of truth)
-		emoji, state = emojiFromWorkflowState(a.WorkflowState, a.NextAction)
-		slog.Info("using emoji from workflow_state", "pr", prID, "workflow_state", a.WorkflowState, "emoji", emoji, "state_param", state)
+		emoji, stateSuffix = emojiFromWorkflowState(a.WorkflowState, a.NextAction)
+		slog.Info("using emoji from workflow_state", "pr", prID, "workflow_state", a.WorkflowState, "emoji", emoji, "state_param", stateSuffix)
 	} else if len(a.NextAction) > 0 {
 		// Fallback to NextAction if no WorkflowState (shouldn't normally happen)
 		action := PrimaryAction(a.NextAction)
 		emoji = PrefixForAction(action)
-		state = stateParam(params.CheckResult)
-		slog.Info("using emoji from primary next_action (no workflow_state)", "pr", prID, "primary_action", action, "emoji", emoji, "state_param", state)
+		stateSuffix = stateParam(params.CheckResult)
+		slog.Info("using emoji from primary next_action (no workflow_state)",
+			"pr", prID, "primary_action", action, "emoji", emoji, "state_param", stateSuffix)
 	} else {
 		// Final fallback based on PR properties
-		emoji, state = fallbackEmoji(params.CheckResult)
+		emoji, stateSuffix = fallbackEmoji(params.CheckResult)
 		//nolint:revive // line length acceptable for structured logging
-		slog.Info("using fallback emoji - no workflow_state or next_actions", "pr", prID, "emoji", emoji, "state_param", state, "fallback_reason", "empty_workflow_state_and_next_actions")
+		slog.Info("using fallback emoji - no workflow_state or next_actions", "pr", prID, "emoji", emoji, "state_param", stateSuffix, "fallback_reason", "empty_workflow_state_and_next_actions")
 	}
 
 	return fmt.Sprintf("%s %s <%s|%s#%d> · %s",
 		emoji,
 		params.Title,
-		params.HTMLURL+state,
+		params.HTMLURL+stateSuffix,
 		params.Repo,
 		params.PRNumber,
 		params.Author)
@@ -125,7 +126,7 @@ func FormatNextActionsSuffix(ctx context.Context, params MessageParams) string {
 
 // emojiFromWorkflowState determines emoji based on WorkflowState as the primary signal.
 // Uses NextAction for additional granularity in specific states (e.g., test failures).
-func emojiFromWorkflowState(workflowState string, nextActions map[string]turn.Action) (emoji, state string) {
+func emojiFromWorkflowState(workflowState string, nextActions map[string]turn.Action) (emoji, stateSuffix string) {
 	switch workflowState {
 	case string(turn.StateNewlyPublished):
 		return ":new:", "?st=newly_published"
@@ -211,7 +212,7 @@ func stateParam(r *turn.CheckResponse) string {
 }
 
 // fallbackEmoji determines emoji when no workflow_state or next_actions are available.
-func fallbackEmoji(r *turn.CheckResponse) (emoji, state string) {
+func fallbackEmoji(r *turn.CheckResponse) (emoji, stateSuffix string) {
 	pr := r.PullRequest
 	a := r.Analysis
 
@@ -279,9 +280,9 @@ func formatNextActionsInternal(ctx context.Context, nextActions map[string]turn.
 
 // Store interface for persistent DM queue management.
 type Store interface {
-	QueuePendingDM(dm state.PendingDM) error
-	PendingDMs(before time.Time) ([]state.PendingDM, error)
-	RemovePendingDM(id string) error
+	QueuePendingDM(ctx context.Context, dm *state.PendingDM) error
+	PendingDMs(ctx context.Context, before time.Time) ([]state.PendingDM, error)
+	RemovePendingDM(ctx context.Context, id string) error
 }
 
 // Manager handles user notifications across multiple workspaces.
@@ -337,7 +338,7 @@ func (m *Manager) Run(ctx context.Context) error {
 // processPendingDMs checks for pending DMs that should be sent and sends them.
 func (m *Manager) processPendingDMs(ctx context.Context) error {
 	now := time.Now()
-	pendingDMs, err := m.store.PendingDMs(now)
+	pendingDMs, err := m.store.PendingDMs(ctx, now)
 	if err != nil {
 		return fmt.Errorf("failed to get pending DMs: %w", err)
 	}
@@ -348,7 +349,8 @@ func (m *Manager) processPendingDMs(ctx context.Context) error {
 
 	slog.Info("processing pending DMs", "count", len(pendingDMs))
 
-	for _, dm := range pendingDMs {
+	for i := range pendingDMs {
+		dm := &pendingDMs[i]
 		// Deserialize NextActions
 		var nextAction map[string]turn.Action
 		if err := json.Unmarshal([]byte(dm.NextActions), &nextAction); err != nil {
@@ -386,7 +388,7 @@ func (m *Manager) processPendingDMs(ctx context.Context) error {
 		}
 
 		// Remove from queue after successful send
-		if err := m.store.RemovePendingDM(dm.ID); err != nil {
+		if err := m.store.RemovePendingDM(ctx, dm.ID); err != nil {
 			slog.Error("failed to remove pending DM from queue",
 				"dm_id", dm.ID,
 				"user", dm.UserID,
@@ -622,7 +624,7 @@ func PrimaryAction(nextActions map[string]turn.Action) string {
 // PrefixForAnalysis returns the emoji prefix based on workflow state and next actions.
 // This is the primary function for determining PR emoji - it handles the logic:
 // 1. Use WorkflowState as primary signal (most reliable)
-// 2. Fall back to NextAction if no WorkflowState
+// 2. Fall back to NextAction if no WorkflowState.
 func PrefixForAnalysis(workflowState string, nextActions map[string]turn.Action) string {
 	// Log input for debugging emoji selection
 	actionKinds := make([]string, 0, len(nextActions))
@@ -798,7 +800,7 @@ func (m *Manager) NotifyUser(ctx context.Context, workspaceID, userID, channelID
 					SendAfter:     sendAfter,
 				}
 
-				if err := m.store.QueuePendingDM(pendingDM); err != nil {
+				if err := m.store.QueuePendingDM(ctx, &pendingDM); err != nil {
 					slog.Error("failed to queue pending DM",
 						"user", userID,
 						"pr", fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number),

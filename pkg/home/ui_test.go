@@ -9,6 +9,8 @@ import (
 )
 
 // TestBuildBlocks verifies home dashboard block generation.
+//
+//nolint:gocognit,maintidx // Comprehensive test with many test cases - complexity acceptable
 func TestBuildBlocks(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -25,6 +27,7 @@ func TestBuildBlocks(t *testing.T) {
 			},
 			primaryOrg: "test-org",
 			validate: func(t *testing.T, blocks []slack.Block) {
+				t.Helper()
 				if len(blocks) == 0 {
 					t.Fatal("expected non-empty blocks")
 				}
@@ -111,6 +114,7 @@ func TestBuildBlocks(t *testing.T) {
 			},
 			primaryOrg: "test-org",
 			validate: func(t *testing.T, blocks []slack.Block) {
+				t.Helper()
 				// Should have "Action needed" status
 				foundActionNeeded := false
 				for _, block := range blocks {
@@ -171,6 +175,7 @@ func TestBuildBlocks(t *testing.T) {
 			},
 			primaryOrg: "test-org",
 			validate: func(t *testing.T, blocks []slack.Block) {
+				t.Helper()
 				// Should show outgoing PR section
 				foundOutgoing := false
 				for _, block := range blocks {
@@ -207,6 +212,7 @@ func TestBuildBlocks(t *testing.T) {
 			},
 			primaryOrg: "org1",
 			validate: func(t *testing.T, blocks []slack.Block) {
+				t.Helper()
 				// Should list all orgs in monitoring section
 				foundOrgs := 0
 				for _, block := range blocks {
@@ -242,6 +248,8 @@ func TestBuildBlocks(t *testing.T) {
 }
 
 // TestFormatEnhancedPRBlock verifies individual PR block formatting.
+//
+//nolint:maintidx // Comprehensive test covering all PR states and formatting - complexity acceptable
 func TestFormatEnhancedPRBlock(t *testing.T) {
 	now := time.Now()
 
@@ -262,6 +270,7 @@ func TestFormatEnhancedPRBlock(t *testing.T) {
 				UpdatedAt:   now.Add(-2 * time.Hour),
 			},
 			validate: func(t *testing.T, block slack.Block) {
+				t.Helper()
 				sb, ok := block.(*slack.SectionBlock)
 				if !ok {
 					t.Fatal("expected SectionBlock")
@@ -308,6 +317,7 @@ func TestFormatEnhancedPRBlock(t *testing.T) {
 				UpdatedAt:   now.Add(-1 * time.Hour),
 			},
 			validate: func(t *testing.T, block slack.Block) {
+				t.Helper()
 				sb, ok := block.(*slack.SectionBlock)
 				if !ok {
 					t.Fatal("expected block to be *slack.SectionBlock")
@@ -342,6 +352,7 @@ func TestFormatEnhancedPRBlock(t *testing.T) {
 				UpdatedAt:   now.Add(-30 * time.Minute),
 			},
 			validate: func(t *testing.T, block slack.Block) {
+				t.Helper()
 				sb, ok := block.(*slack.SectionBlock)
 				if !ok {
 					t.Fatal("expected block to be *slack.SectionBlock")
@@ -376,6 +387,7 @@ func TestFormatEnhancedPRBlock(t *testing.T) {
 				UpdatedAt:   now.Add(-24 * time.Hour),
 			},
 			validate: func(t *testing.T, block slack.Block) {
+				t.Helper()
 				sb, ok := block.(*slack.SectionBlock)
 				if !ok {
 					t.Fatal("expected block to be *slack.SectionBlock")
@@ -408,6 +420,7 @@ func TestFormatEnhancedPRBlock(t *testing.T) {
 				UpdatedAt:  now,
 			},
 			validate: func(t *testing.T, block slack.Block) {
+				t.Helper()
 				sb, ok := block.(*slack.SectionBlock)
 				if !ok {
 					t.Fatal("expected block to be *slack.SectionBlock")
@@ -439,6 +452,7 @@ func TestFormatEnhancedPRBlock(t *testing.T) {
 				UpdatedAt:  now.Add(-5 * 24 * time.Hour),
 			},
 			validate: func(t *testing.T, block slack.Block) {
+				t.Helper()
 				sb, ok := block.(*slack.SectionBlock)
 				if !ok {
 					t.Fatal("expected block to be *slack.SectionBlock")
@@ -461,6 +475,7 @@ func TestFormatEnhancedPRBlock(t *testing.T) {
 				UpdatedAt:  now.Add(-60 * 24 * time.Hour),
 			},
 			validate: func(t *testing.T, block slack.Block) {
+				t.Helper()
 				sb, ok := block.(*slack.SectionBlock)
 				if !ok {
 					t.Fatal("expected block to be *slack.SectionBlock")

@@ -832,8 +832,8 @@ func TestManager_ChannelsForRepoNoConfig(t *testing.T) {
 }
 
 func TestManager_LoadConfigNoClient(t *testing.T) {
-	m := New()
 	ctx := context.Background()
+	m := New()
 
 	// LoadConfig should fail if no GitHub client is set
 	err := m.LoadConfig(ctx, "test-org")
@@ -846,8 +846,8 @@ func TestManager_LoadConfigNoClient(t *testing.T) {
 }
 
 func TestManager_LoadConfigFromCache(t *testing.T) {
-	m := New()
 	ctx := context.Background()
+	m := New()
 
 	// Pre-populate cache
 	cachedConfig := createDefaultConfig()
@@ -877,8 +877,8 @@ func TestManager_LoadConfigFromCache(t *testing.T) {
 }
 
 func TestManager_ReloadConfig(t *testing.T) {
-	m := New()
 	ctx := context.Background()
+	m := New()
 
 	// Pre-populate cache
 	oldConfig := createDefaultConfig()
@@ -907,8 +907,8 @@ func TestManager_ReloadConfig(t *testing.T) {
 
 // Helper function to check if a string contains a substring.
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && len(substr) > 0 && indexOf(s, substr) >= 0))
+	return len(s) >= len(substr) && (s == substr || substr == "" ||
+		(s != "" && substr != "" && indexOf(s, substr) >= 0))
 }
 
 func indexOf(s, substr string) int {
@@ -936,6 +936,7 @@ func must[T any](v T, err error) T {
 }
 
 func TestManager_LoadConfigValidYAML(t *testing.T) {
+	ctx := context.Background()
 	validYAML := `
 global:
   team_id: T123456
@@ -962,9 +963,9 @@ channels:
 				Encoding: &encoding,
 			}
 			w.Header().Set("Content-Type", "application/json")
-			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
-			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
-			_ = json.NewEncoder(w).Encode(response)
+			if err := json.NewEncoder(w).Encode(response); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
 			return
 		}
 		http.NotFound(w, r)
@@ -976,7 +977,6 @@ channels:
 	m := New()
 	m.SetGitHubClient("test-org", client)
 
-	ctx := context.Background()
 	err := m.LoadConfig(ctx, "test-org")
 	if err != nil {
 		t.Fatalf("unexpected error loading valid config: %v", err)
@@ -1002,6 +1002,7 @@ channels:
 }
 
 func TestManager_LoadConfig404NotFound(t *testing.T) {
+	ctx := context.Background()
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	}
@@ -1012,7 +1013,6 @@ func TestManager_LoadConfig404NotFound(t *testing.T) {
 	m := New()
 	m.SetGitHubClient("test-org", client)
 
-	ctx := context.Background()
 	err := m.LoadConfig(ctx, "test-org")
 	if err != nil {
 		t.Fatalf("expected graceful degradation on 404, got error: %v", err)
@@ -1032,6 +1032,7 @@ func TestManager_LoadConfig404NotFound(t *testing.T) {
 }
 
 func TestManager_LoadConfigInvalidYAML(t *testing.T) {
+	ctx := context.Background()
 	invalidYAML := `
 global:
   - this is not valid yaml
@@ -1048,8 +1049,9 @@ channels: [1, 2, 3]
 			Encoding: &encoding,
 		}
 		w.Header().Set("Content-Type", "application/json")
-		//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
-		_ = json.NewEncoder(w).Encode(response)
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 	}
 
 	client, server := createTestGitHubClient(handler)
@@ -1058,7 +1060,6 @@ channels: [1, 2, 3]
 	m := New()
 	m.SetGitHubClient("test-org", client)
 
-	ctx := context.Background()
 	err := m.LoadConfig(ctx, "test-org")
 	if err != nil {
 		t.Fatalf("expected graceful degradation on invalid YAML, got error: %v", err)
@@ -1075,6 +1076,7 @@ channels: [1, 2, 3]
 }
 
 func TestManager_LoadConfigCodeGROOVEProdConfig(t *testing.T) {
+	ctx := context.Background()
 	// Test with actual production config from codeGROOVE-dev/.codeGROOVE/slack.yaml
 	prodYAML := `global:
     team_id: T09CJ7X7T7Y
@@ -1116,7 +1118,6 @@ channels:
 	m := New()
 	m.SetGitHubClient("codeGROOVE-dev", client)
 
-	ctx := context.Background()
 	err := m.LoadConfig(ctx, "codeGROOVE-dev")
 	if err != nil {
 		t.Fatalf("unexpected error loading production config: %v", err)
@@ -1181,14 +1182,16 @@ channels:
 }
 
 func TestManager_LoadConfigEmptyContent(t *testing.T) {
+	ctx := context.Background()
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		// Return a response with nil Content
 		response := github.RepositoryContent{
 			Type: github.String("file"),
 		}
 		w.Header().Set("Content-Type", "application/json")
-		//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
-		_ = json.NewEncoder(w).Encode(response)
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 	}
 
 	client, server := createTestGitHubClient(handler)
@@ -1197,7 +1200,6 @@ func TestManager_LoadConfigEmptyContent(t *testing.T) {
 	m := New()
 	m.SetGitHubClient("test-org", client)
 
-	ctx := context.Background()
 	err := m.LoadConfig(ctx, "test-org")
 	if err != nil {
 		t.Fatalf("expected graceful degradation on empty content, got error: %v", err)

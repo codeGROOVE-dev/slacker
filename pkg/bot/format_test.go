@@ -9,10 +9,9 @@ import (
 
 // TestFormatNextActionsEarlyReturn tests the formatNextActions utility function early return cases.
 func TestFormatNextActionsEarlyReturn(t *testing.T) {
+	ctx := context.Background()
 	// Create a coordinator - userMapper will be nil but that's OK for these early return tests
 	c := &Coordinator{}
-
-	ctx := context.Background()
 
 	tests := []struct {
 		name     string

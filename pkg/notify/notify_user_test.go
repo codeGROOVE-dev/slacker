@@ -44,7 +44,7 @@ func (m *mockSlackClient) UserTimezone(ctx context.Context, userID string) (stri
 	return "America/New_York", nil
 }
 
-func (m *mockSlackClient) SendDirectMessage(ctx context.Context, userID, text string) (string, string, error) {
+func (m *mockSlackClient) SendDirectMessage(ctx context.Context, userID, text string) (channelID, timestamp string, err error) {
 	if m.sendDirectMessageFunc != nil {
 		return m.sendDirectMessageFunc(ctx, userID, text)
 	}
@@ -109,6 +109,7 @@ func (m *mockConfigManagerCustomizable) ReminderDMDelay(org, channel string) int
 
 // TestNotifyUser_UserInactive tests that notifications are deferred when user is inactive.
 func TestNotifyUser_UserInactive(t *testing.T) {
+	ctx := context.Background()
 	mockClient := &mockSlackClient{
 		isUserActiveFunc: func(ctx context.Context, userID string) bool {
 			return false // User is inactive
@@ -127,7 +128,6 @@ func TestNotifyUser_UserInactive(t *testing.T) {
 		configManager: &mockConfigManager{},
 	}
 
-	ctx := context.Background()
 	pr := PRInfo{
 		Owner:  "test-org",
 		Repo:   "test-repo",
@@ -143,6 +143,7 @@ func TestNotifyUser_UserInactive(t *testing.T) {
 
 // TestNotifyUser_AntiSpam tests anti-spam protection (1 minute minimum between DMs).
 func TestNotifyUser_AntiSpam(t *testing.T) {
+	ctx := context.Background()
 	dmSent := false
 	mockClient := &mockSlackClient{
 		isUserActiveFunc: func(ctx context.Context, userID string) bool {
@@ -169,7 +170,6 @@ func TestNotifyUser_AntiSpam(t *testing.T) {
 	// Record a recent DM (30 seconds ago)
 	manager.Tracker.lastDM["T123:U123"] = time.Now().Add(-30 * time.Second)
 
-	ctx := context.Background()
 	pr := PRInfo{
 		Owner:   "test-org",
 		Repo:    "test-repo",
@@ -190,6 +190,7 @@ func TestNotifyUser_AntiSpam(t *testing.T) {
 
 // TestNotifyUser_DelayedDM_UserInChannel tests delayed DM logic when user is in the tagged channel.
 func TestNotifyUser_DelayedDM_UserInChannel(t *testing.T) {
+	ctx := context.Background()
 	dmSent := false
 	mockClient := &mockSlackClient{
 		isUserActiveFunc: func(ctx context.Context, userID string) bool {
@@ -226,7 +227,6 @@ func TestNotifyUser_DelayedDM_UserInChannel(t *testing.T) {
 		Timestamp: time.Now().Add(-30 * time.Minute),
 	}
 
-	ctx := context.Background()
 	pr := PRInfo{
 		Owner:   "test-org",
 		Repo:    "test-repo",
@@ -247,6 +247,7 @@ func TestNotifyUser_DelayedDM_UserInChannel(t *testing.T) {
 
 // TestNotifyUser_DelayedDM_UserNotInChannel tests immediate DM when user is NOT in the tagged channel.
 func TestNotifyUser_DelayedDM_UserNotInChannel(t *testing.T) {
+	ctx := context.Background()
 	dmSent := false
 	mockClient := &mockSlackClient{
 		isUserActiveFunc: func(ctx context.Context, userID string) bool {
@@ -282,7 +283,6 @@ func TestNotifyUser_DelayedDM_UserNotInChannel(t *testing.T) {
 		Timestamp: time.Now().Add(-5 * time.Minute),
 	}
 
-	ctx := context.Background()
 	pr := PRInfo{
 		Owner:   "test-org",
 		Repo:    "test-repo",
@@ -303,6 +303,7 @@ func TestNotifyUser_DelayedDM_UserNotInChannel(t *testing.T) {
 
 // TestNotifyUser_DelayElapsed tests that DM is sent after delay period elapses.
 func TestNotifyUser_DelayElapsed(t *testing.T) {
+	ctx := context.Background()
 	dmSent := false
 	mockClient := &mockSlackClient{
 		isUserActiveFunc: func(ctx context.Context, userID string) bool {
@@ -342,7 +343,6 @@ func TestNotifyUser_DelayElapsed(t *testing.T) {
 		Timestamp: time.Now().Add(-70 * time.Minute),
 	}
 
-	ctx := context.Background()
 	pr := PRInfo{
 		Owner:   "test-org",
 		Repo:    "test-repo",
@@ -363,6 +363,7 @@ func TestNotifyUser_DelayElapsed(t *testing.T) {
 
 // TestNotifyUser_RemindersDisabled tests that DM is skipped when reminder_dm_delay is 0.
 func TestNotifyUser_RemindersDisabled(t *testing.T) {
+	ctx := context.Background()
 	dmSent := false
 	mockClient := &mockSlackClient{
 		isUserActiveFunc: func(ctx context.Context, userID string) bool {
@@ -397,7 +398,6 @@ func TestNotifyUser_RemindersDisabled(t *testing.T) {
 		Timestamp: time.Now().Add(-5 * time.Minute),
 	}
 
-	ctx := context.Background()
 	pr := PRInfo{
 		Owner:   "test-org",
 		Repo:    "test-repo",
@@ -418,6 +418,7 @@ func TestNotifyUser_RemindersDisabled(t *testing.T) {
 
 // TestNotifyUser_SendDirectMessageError tests error handling when SendDirectMessage fails.
 func TestNotifyUser_SendDirectMessageError(t *testing.T) {
+	ctx := context.Background()
 	mockClient := &mockSlackClient{
 		isUserActiveFunc: func(ctx context.Context, userID string) bool {
 			return true
@@ -442,7 +443,6 @@ func TestNotifyUser_SendDirectMessageError(t *testing.T) {
 		configManager: &mockConfigManager{},
 	}
 
-	ctx := context.Background()
 	pr := PRInfo{
 		Owner:   "test-org",
 		Repo:    "test-repo",
@@ -460,26 +460,26 @@ func TestNotifyUser_SendDirectMessageError(t *testing.T) {
 
 // mockStoreCustomizable allows customizing store behavior for testing.
 type mockStoreCustomizable struct {
-	queuePendingDMFunc  func(dm state.PendingDM) error
+	queuePendingDMFunc  func(dm *state.PendingDM) error
 	getPendingDMsFunc   func(before time.Time) ([]state.PendingDM, error)
 	removePendingDMFunc func(id string) error
 }
 
-func (m *mockStoreCustomizable) QueuePendingDM(dm state.PendingDM) error {
+func (m *mockStoreCustomizable) QueuePendingDM(ctx context.Context, dm *state.PendingDM) error {
 	if m.queuePendingDMFunc != nil {
 		return m.queuePendingDMFunc(dm)
 	}
 	return nil
 }
 
-func (m *mockStoreCustomizable) PendingDMs(before time.Time) ([]state.PendingDM, error) {
+func (m *mockStoreCustomizable) PendingDMs(ctx context.Context, before time.Time) ([]state.PendingDM, error) {
 	if m.getPendingDMsFunc != nil {
 		return m.getPendingDMsFunc(before)
 	}
 	return nil, nil
 }
 
-func (m *mockStoreCustomizable) RemovePendingDM(id string) error {
+func (m *mockStoreCustomizable) RemovePendingDM(ctx context.Context, id string) error {
 	if m.removePendingDMFunc != nil {
 		return m.removePendingDMFunc(id)
 	}
@@ -573,6 +573,7 @@ func TestProcessPendingDMs(t *testing.T) {
 
 // TestProcessPendingDMs_EmptyQueue tests processPendingDMs with no pending DMs.
 func TestProcessPendingDMs_EmptyQueue(t *testing.T) {
+	ctx := context.Background()
 	mockSt := &mockStoreCustomizable{
 		getPendingDMsFunc: func(before time.Time) ([]state.PendingDM, error) {
 			return []state.PendingDM{}, nil // No pending DMs
@@ -589,7 +590,6 @@ func TestProcessPendingDMs_EmptyQueue(t *testing.T) {
 		},
 	}
 
-	ctx := context.Background()
 	err := manager.processPendingDMs(ctx)
 	if err != nil {
 		t.Fatalf("unexpected error with empty queue: %v", err)
@@ -598,6 +598,7 @@ func TestProcessPendingDMs_EmptyQueue(t *testing.T) {
 
 // TestProcessPendingDMs_StoreError tests error handling when store fails.
 func TestProcessPendingDMs_StoreError(t *testing.T) {
+	ctx := context.Background()
 	mockSt := &mockStoreCustomizable{
 		getPendingDMsFunc: func(before time.Time) ([]state.PendingDM, error) {
 			return nil, errors.New("database error")
@@ -608,7 +609,6 @@ func TestProcessPendingDMs_StoreError(t *testing.T) {
 		store: mockSt,
 	}
 
-	ctx := context.Background()
 	err := manager.processPendingDMs(ctx)
 	if err == nil {
 		t.Error("expected error when store fails")
@@ -617,6 +617,7 @@ func TestProcessPendingDMs_StoreError(t *testing.T) {
 
 // TestSendDMNow tests the sendDMNow function.
 func TestSendDMNow(t *testing.T) {
+	ctx := context.Background()
 	dmSent := false
 	var sentMessage string
 
@@ -644,7 +645,6 @@ func TestSendDMNow(t *testing.T) {
 		configManager: &mockConfigManager{},
 	}
 
-	ctx := context.Background()
 	pr := PRInfo{
 		Owner:         "test-org",
 		Repo:          "test-repo",
@@ -671,6 +671,7 @@ func TestSendDMNow(t *testing.T) {
 
 // TestSendDMNow_UserInactive tests sendDMNow skips inactive users.
 func TestSendDMNow_UserInactive(t *testing.T) {
+	ctx := context.Background()
 	dmSent := false
 
 	mockClient := &mockSlackClient{
@@ -695,7 +696,6 @@ func TestSendDMNow_UserInactive(t *testing.T) {
 		},
 	}
 
-	ctx := context.Background()
 	pr := PRInfo{
 		Owner:   "test-org",
 		Repo:    "test-repo",
@@ -716,6 +716,7 @@ func TestSendDMNow_UserInactive(t *testing.T) {
 
 // TestSendDMNow_AntiSpam tests sendDMNow respects anti-spam limits.
 func TestSendDMNow_AntiSpam(t *testing.T) {
+	ctx := context.Background()
 	dmSent := false
 
 	mockClient := &mockSlackClient{
@@ -743,7 +744,6 @@ func TestSendDMNow_AntiSpam(t *testing.T) {
 	// Record a recent DM (30 seconds ago)
 	manager.Tracker.lastDM["T123:U001"] = time.Now().Add(-30 * time.Second)
 
-	ctx := context.Background()
 	pr := PRInfo{
 		Owner:   "test-org",
 		Repo:    "test-repo",
@@ -764,6 +764,7 @@ func TestSendDMNow_AntiSpam(t *testing.T) {
 
 // TestSendDMNow_SlackError tests error handling when Slack API fails.
 func TestSendDMNow_SlackError(t *testing.T) {
+	ctx := context.Background()
 	mockClient := &mockSlackClient{
 		isUserActiveFunc: func(ctx context.Context, userID string) bool {
 			return true
@@ -785,7 +786,6 @@ func TestSendDMNow_SlackError(t *testing.T) {
 		},
 	}
 
-	ctx := context.Background()
 	pr := PRInfo{
 		Owner:   "test-org",
 		Repo:    "test-repo",

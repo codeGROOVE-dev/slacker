@@ -15,17 +15,17 @@ import (
 
 // mockStateStore implements StateStore interface from bot package.
 type mockStateStore struct {
-	mu                sync.Mutex
+	markProcessedErr  error
+	saveThreadErr     error
 	threads           map[string]cache.ThreadInfo
 	dmTimes           map[string]time.Time
 	dmUsers           map[string][]string
 	processedEvents   map[string]bool
 	lastNotifications map[string]time.Time
-	markProcessedErr  error // Error to return from MarkProcessed
-	saveThreadErr     error // Error to return from SaveThread
+	mu                sync.Mutex
 }
 
-func (m *mockStateStore) Thread(owner, repo string, number int, channelID string) (cache.ThreadInfo, bool) {
+func (m *mockStateStore) Thread(ctx context.Context, owner, repo string, number int, channelID string) (cache.ThreadInfo, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := fmt.Sprintf("%s/%s#%d:%s", owner, repo, number, channelID)
@@ -37,7 +37,7 @@ func (m *mockStateStore) Thread(owner, repo string, number int, channelID string
 	return cache.ThreadInfo{}, false
 }
 
-func (m *mockStateStore) SaveThread(owner, repo string, number int, channelID string, info cache.ThreadInfo) error {
+func (m *mockStateStore) SaveThread(ctx context.Context, owner, repo string, number int, channelID string, info cache.ThreadInfo) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.saveThreadErr != nil {
@@ -51,7 +51,7 @@ func (m *mockStateStore) SaveThread(owner, repo string, number int, channelID st
 	return nil
 }
 
-func (m *mockStateStore) LastDM(userID, prURL string) (time.Time, bool) {
+func (m *mockStateStore) LastDM(ctx context.Context, userID, prURL string) (time.Time, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := userID + ":" + prURL
@@ -63,7 +63,7 @@ func (m *mockStateStore) LastDM(userID, prURL string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-func (m *mockStateStore) RecordDM(userID, prURL string, sentAt time.Time) error {
+func (m *mockStateStore) RecordDM(ctx context.Context, userID, prURL string, sentAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := userID + ":" + prURL
@@ -74,7 +74,7 @@ func (m *mockStateStore) RecordDM(userID, prURL string, sentAt time.Time) error 
 	return nil
 }
 
-func (m *mockStateStore) ListDMUsers(prURL string) []string {
+func (m *mockStateStore) ListDMUsers(ctx context.Context, prURL string) []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.dmUsers != nil {
@@ -85,7 +85,7 @@ func (m *mockStateStore) ListDMUsers(prURL string) []string {
 	return []string{}
 }
 
-func (m *mockStateStore) WasProcessed(eventKey string) bool {
+func (m *mockStateStore) WasProcessed(ctx context.Context, eventKey string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.processedEvents != nil {
@@ -94,7 +94,7 @@ func (m *mockStateStore) WasProcessed(eventKey string) bool {
 	return false
 }
 
-func (m *mockStateStore) MarkProcessed(eventKey string, _ time.Duration) error {
+func (m *mockStateStore) MarkProcessed(ctx context.Context, eventKey string, _ time.Duration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.markProcessedErr != nil {
@@ -107,7 +107,7 @@ func (m *mockStateStore) MarkProcessed(eventKey string, _ time.Duration) error {
 	return nil
 }
 
-func (m *mockStateStore) LastNotification(prURL string) time.Time {
+func (m *mockStateStore) LastNotification(ctx context.Context, prURL string) time.Time {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.lastNotifications != nil {
@@ -118,7 +118,7 @@ func (m *mockStateStore) LastNotification(prURL string) time.Time {
 	return time.Time{}
 }
 
-func (m *mockStateStore) RecordNotification(prURL string, notifiedAt time.Time) error {
+func (m *mockStateStore) RecordNotification(ctx context.Context, prURL string, notifiedAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.lastNotifications == nil {
@@ -128,16 +128,16 @@ func (m *mockStateStore) RecordNotification(prURL string, notifiedAt time.Time) 
 	return nil
 }
 
-// notify.Store interface methods for DM queue management.
-func (*mockStateStore) QueuePendingDM(dm state.PendingDM) error {
+// QueuePendingDM implements notify.Store interface for DM queue management.
+func (*mockStateStore) QueuePendingDM(_ *state.PendingDM) error {
 	return nil // No-op for tests
 }
 
-func (*mockStateStore) PendingDMs(before time.Time) ([]state.PendingDM, error) {
+func (*mockStateStore) PendingDMs(_ time.Time) ([]state.PendingDM, error) {
 	return nil, nil // Return empty list for tests
 }
 
-func (*mockStateStore) RemovePendingDM(id string) error {
+func (*mockStateStore) RemovePendingDM(_ string) error {
 	return nil // No-op for tests
 }
 

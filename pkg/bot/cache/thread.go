@@ -1,3 +1,4 @@
+// Package cache provides thread information caching for bot operations.
 package cache
 
 import (

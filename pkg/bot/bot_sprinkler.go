@@ -118,6 +118,7 @@ func (c *Coordinator) lookupPRsForCheckEvent(ctx context.Context, event client.E
 	// If yes, fetch it via turnclient to see if it contains this commit
 	// This is cheaper than searching all PRs via GitHub API
 	mostRecentPR := c.commitPRCache.MostRecentPR(owner, repo)
+	//nolint:nestif // Complex but necessary cache population logic with early returns
 	if mostRecentPR > 0 {
 		slog.Debug("attempting turnclient lookup on most recent PR for repo",
 			"organization", organization,
@@ -156,14 +157,14 @@ func (c *Coordinator) lookupPRsForCheckEvent(ctx context.Context, event client.E
 
 							// Populate cache with all commits from this PR
 							for _, commit := range checkResult.PullRequest.Commits {
+								//nolint:revive // Nesting depth acceptable for cache population logic
 								if commit != "" {
 									c.commitPRCache.RecordPR(owner, repo, mostRecentPR, commit)
 								}
 							}
 
 							// Process the PR update since we have fresh data
-							//nolint:contextcheck // Background context intentional - goroutine must outlive parent timeout
-							go c.handlePullRequestEventWithData(context.Background(), owner, repo, struct {
+							c.handlePullRequestEventWithData(ctx, owner, repo, struct {
 								Action      string `json:"action"`
 								PullRequest struct {
 									HTMLURL   string    `json:"html_url"`
@@ -270,7 +271,7 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 
 	// Try to claim this event atomically using persistent store (Datastore transaction).
 	// This is the single source of truth for cross-instance deduplication.
-	if err := c.stateStore.MarkProcessed(eventKey, 24*time.Hour); err != nil {
+	if err := c.stateStore.MarkProcessed(ctx, eventKey, 24*time.Hour); err != nil {
 		// Check if this is a race condition vs a database error
 		if errors.Is(err, state.ErrAlreadyProcessed) {
 			slog.Info("skipping duplicate event - claimed by this or another instance",

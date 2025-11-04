@@ -41,6 +41,7 @@ func TestFormatChannelMessageBase_DraftPR(t *testing.T) {
 
 // TestNotifyUser_NoChannelName tests NotifyUser when channelName is empty.
 func TestNotifyUser_NoChannelName(t *testing.T) {
+	ctx := context.Background()
 	mockClient := &mockSlackClient{
 		isUserActiveFunc: func(ctx context.Context, userID string) bool {
 			return true
@@ -65,7 +66,6 @@ func TestNotifyUser_NoChannelName(t *testing.T) {
 		configManager: &mockConfigManager{},
 	}
 
-	ctx := context.Background()
 	pr := PRInfo{
 		Owner:   "test-org",
 		Repo:    "test-repo",
@@ -82,6 +82,7 @@ func TestNotifyUser_NoChannelName(t *testing.T) {
 
 // TestNotifyUser_HasRecentDM tests that NotifyUser skips DM when HasRecentDMAboutPR returns true.
 func TestNotifyUser_HasRecentDM(t *testing.T) {
+	ctx := context.Background()
 	dmSent := false
 	mockClient := &mockSlackClient{
 		isUserActiveFunc: func(ctx context.Context, userID string) bool {
@@ -108,7 +109,6 @@ func TestNotifyUser_HasRecentDM(t *testing.T) {
 		configManager: &mockConfigManager{},
 	}
 
-	ctx := context.Background()
 	pr := PRInfo{
 		Owner:   "test-org",
 		Repo:    "test-repo",
@@ -129,6 +129,7 @@ func TestNotifyUser_HasRecentDM(t *testing.T) {
 
 // TestNotifyUser_SaveDMMessageInfoError tests error handling when SaveDMMessageInfo fails.
 func TestNotifyUser_SaveDMMessageInfoError(t *testing.T) {
+	ctx := context.Background()
 	mockClient := &mockSlackClient{
 		isUserActiveFunc: func(ctx context.Context, userID string) bool {
 			return true
@@ -156,7 +157,6 @@ func TestNotifyUser_SaveDMMessageInfoError(t *testing.T) {
 		configManager: &mockConfigManager{},
 	}
 
-	ctx := context.Background()
 	pr := PRInfo{
 		Owner:   "test-org",
 		Repo:    "test-repo",

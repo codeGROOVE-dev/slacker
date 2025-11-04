@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -32,10 +33,11 @@ func TestNewMemoryStore(t *testing.T) {
 }
 
 func TestThreadOperations(t *testing.T) {
+	ctx := context.Background()
 	store := NewMemoryStore()
 
 	// Test retrieval of non-existent thread
-	_, exists := store.Thread("owner", "repo", 123, "C123")
+	_, exists := store.Thread(ctx, "owner", "repo", 123, "C123")
 	if exists {
 		t.Error("expected thread to not exist")
 	}
@@ -49,13 +51,13 @@ func TestThreadOperations(t *testing.T) {
 		LastEventTime: time.Now(),
 	}
 
-	err := store.SaveThread("owner", "repo", 123, "C123", threadInfo)
+	err := store.SaveThread(ctx, "owner", "repo", 123, "C123", threadInfo)
 	if err != nil {
 		t.Fatalf("unexpected error saving thread: %v", err)
 	}
 
 	// Retrieve saved thread
-	retrieved, exists := store.Thread("owner", "repo", 123, "C123")
+	retrieved, exists := store.Thread(ctx, "owner", "repo", 123, "C123")
 	if !exists {
 		t.Fatal("expected thread to exist")
 	}
@@ -80,23 +82,24 @@ func TestThreadOperations(t *testing.T) {
 }
 
 func TestDMOperations(t *testing.T) {
+	ctx := context.Background()
 	store := NewMemoryStore()
 
 	// Test retrieval of non-existent DM
-	_, exists := store.LastDM("U001", "https://github.com/test/repo/pull/123")
+	_, exists := store.LastDM(ctx, "U001", "https://github.com/test/repo/pull/123")
 	if exists {
 		t.Error("expected DM to not exist")
 	}
 
 	// Record DM
 	sentAt := time.Now()
-	err := store.RecordDM("U001", "https://github.com/test/repo/pull/123", sentAt)
+	err := store.RecordDM(ctx, "U001", "https://github.com/test/repo/pull/123", sentAt)
 	if err != nil {
 		t.Fatalf("unexpected error recording DM: %v", err)
 	}
 
 	// Retrieve recorded DM
-	retrieved, exists := store.LastDM("U001", "https://github.com/test/repo/pull/123")
+	retrieved, exists := store.LastDM(ctx, "U001", "https://github.com/test/repo/pull/123")
 	if !exists {
 		t.Fatal("expected DM to exist")
 	}
@@ -107,12 +110,13 @@ func TestDMOperations(t *testing.T) {
 }
 
 func TestDMMessageOperations(t *testing.T) {
+	ctx := context.Background()
 	store := NewMemoryStore()
 
 	prURL := "https://github.com/test/repo/pull/123"
 
 	// Test retrieval of non-existent DM message
-	_, exists := store.DMMessage("U001", prURL)
+	_, exists := store.DMMessage(ctx, "U001", prURL)
 	if exists {
 		t.Error("expected DM message to not exist")
 	}
@@ -125,13 +129,13 @@ func TestDMMessageOperations(t *testing.T) {
 		MessageText: "Test DM",
 	}
 
-	err := store.SaveDMMessage("U001", prURL, dmInfo)
+	err := store.SaveDMMessage(ctx, "U001", prURL, dmInfo)
 	if err != nil {
 		t.Fatalf("unexpected error saving DM message: %v", err)
 	}
 
 	// Retrieve saved DM message
-	retrieved, exists := store.DMMessage("U001", prURL)
+	retrieved, exists := store.DMMessage(ctx, "U001", prURL)
 	if !exists {
 		t.Fatal("expected DM message to exist")
 	}
@@ -153,12 +157,13 @@ func TestDMMessageOperations(t *testing.T) {
 }
 
 func TestListDMUsers(t *testing.T) {
+	ctx := context.Background()
 	store := NewMemoryStore()
 
 	prURL := "https://github.com/test/repo/pull/123"
 
 	// Initially no users
-	users := store.ListDMUsers(prURL)
+	users := store.ListDMUsers(ctx, prURL)
 	if len(users) != 0 {
 		t.Errorf("expected 0 users, got %d", len(users))
 	}
@@ -171,18 +176,18 @@ func TestListDMUsers(t *testing.T) {
 		MessageText: "Test DM",
 	}
 
-	if err := store.SaveDMMessage("U001", prURL, dmInfo); err != nil {
+	if err := store.SaveDMMessage(ctx, "U001", prURL, dmInfo); err != nil {
 		t.Fatalf("failed to save DM for U001: %v", err)
 	}
-	if err := store.SaveDMMessage("U002", prURL, dmInfo); err != nil {
+	if err := store.SaveDMMessage(ctx, "U002", prURL, dmInfo); err != nil {
 		t.Fatalf("failed to save DM for U002: %v", err)
 	}
-	if err := store.SaveDMMessage("U003", prURL, dmInfo); err != nil {
+	if err := store.SaveDMMessage(ctx, "U003", prURL, dmInfo); err != nil {
 		t.Fatalf("failed to save DM for U003: %v", err)
 	}
 
 	// List users
-	users = store.ListDMUsers(prURL)
+	users = store.ListDMUsers(ctx, prURL)
 	if len(users) != 3 {
 		t.Fatalf("expected 3 users, got %d", len(users))
 	}
@@ -200,30 +205,31 @@ func TestListDMUsers(t *testing.T) {
 	}
 
 	// Different PR should return no users
-	users = store.ListDMUsers("https://github.com/test/repo/pull/456")
+	users = store.ListDMUsers(ctx, "https://github.com/test/repo/pull/456")
 	if len(users) != 0 {
 		t.Errorf("expected 0 users for different PR, got %d", len(users))
 	}
 }
 
 func TestDigestOperations(t *testing.T) {
+	ctx := context.Background()
 	store := NewMemoryStore()
 
 	// Test retrieval of non-existent digest
-	_, exists := store.LastDigest("U001", "2025-01-15")
+	_, exists := store.LastDigest(ctx, "U001", "2025-01-15")
 	if exists {
 		t.Error("expected digest to not exist")
 	}
 
 	// Record digest
 	sentAt := time.Now()
-	err := store.RecordDigest("U001", "2025-01-15", sentAt)
+	err := store.RecordDigest(ctx, "U001", "2025-01-15", sentAt)
 	if err != nil {
 		t.Fatalf("unexpected error recording digest: %v", err)
 	}
 
 	// Retrieve recorded digest
-	retrieved, exists := store.LastDigest("U001", "2025-01-15")
+	retrieved, exists := store.LastDigest(ctx, "U001", "2025-01-15")
 	if !exists {
 		t.Fatal("expected digest to exist")
 	}
@@ -234,53 +240,56 @@ func TestDigestOperations(t *testing.T) {
 }
 
 func TestEventProcessing(t *testing.T) {
+	ctx := context.Background()
 	store := NewMemoryStore()
 
 	eventKey := "event-123"
 
 	// Event should not be processed initially
-	if store.WasProcessed(eventKey) {
+	if store.WasProcessed(ctx, eventKey) {
 		t.Error("expected event to not be processed")
 	}
 
 	// Mark event as processed
-	err := store.MarkProcessed(eventKey, 24*time.Hour)
+	err := store.MarkProcessed(ctx, eventKey, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("unexpected error marking event: %v", err)
 	}
 
 	// Event should now be processed
-	if !store.WasProcessed(eventKey) {
+	if !store.WasProcessed(ctx, eventKey) {
 		t.Error("expected event to be processed")
 	}
 }
 
 func TestNotificationOperations(t *testing.T) {
+	ctx := context.Background()
 	store := NewMemoryStore()
 
 	prURL := "https://github.com/test/repo/pull/123"
 
 	// Last notification should be zero time initially
-	lastNotif := store.LastNotification(prURL)
+	lastNotif := store.LastNotification(ctx, prURL)
 	if !lastNotif.IsZero() {
 		t.Error("expected zero time for non-existent notification")
 	}
 
 	// Record notification
 	notifiedAt := time.Now()
-	err := store.RecordNotification(prURL, notifiedAt)
+	err := store.RecordNotification(ctx, prURL, notifiedAt)
 	if err != nil {
 		t.Fatalf("unexpected error recording notification: %v", err)
 	}
 
 	// Retrieve last notification
-	retrieved := store.LastNotification(prURL)
+	retrieved := store.LastNotification(ctx, prURL)
 	if !retrieved.Equal(notifiedAt) {
 		t.Errorf("expected notifiedAt %v, got %v", notifiedAt, retrieved)
 	}
 }
 
 func TestCleanup(t *testing.T) {
+	ctx := context.Background()
 	store := NewMemoryStore()
 
 	// Add some old data
@@ -317,7 +326,7 @@ func TestCleanup(t *testing.T) {
 	store.events["recent-event"] = recentTime
 
 	// Run cleanup
-	err := store.Cleanup()
+	err := store.Cleanup(ctx)
 	if err != nil {
 		t.Fatalf("unexpected error during cleanup: %v", err)
 	}
@@ -356,10 +365,11 @@ func TestClose(t *testing.T) {
 }
 
 func TestPendingDMOperations(t *testing.T) {
+	ctx := context.Background()
 	store := NewMemoryStore()
 
 	// Test retrieval when no pending DMs exist
-	pending, err := store.PendingDMs(time.Now())
+	pending, err := store.PendingDMs(ctx, time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs: %v", err)
 	}
@@ -388,7 +398,7 @@ func TestPendingDMOperations(t *testing.T) {
 		SendAfter:     now.Add(-5 * time.Minute), // 5 minutes ago - ready to send
 	}
 
-	err = store.QueuePendingDM(dm1)
+	err = store.QueuePendingDM(ctx, &dm1)
 	if err != nil {
 		t.Fatalf("unexpected error queueing DM: %v", err)
 	}
@@ -413,13 +423,13 @@ func TestPendingDMOperations(t *testing.T) {
 		SendAfter:     now.Add(10 * time.Minute), // 10 minutes from now - not ready yet
 	}
 
-	err = store.QueuePendingDM(dm2)
+	err = store.QueuePendingDM(ctx, &dm2)
 	if err != nil {
 		t.Fatalf("unexpected error queueing second DM: %v", err)
 	}
 
 	// Get pending DMs that are ready to send
-	pending, err = store.PendingDMs(now)
+	pending, err = store.PendingDMs(ctx, now)
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs: %v", err)
 	}
@@ -441,7 +451,7 @@ func TestPendingDMOperations(t *testing.T) {
 
 	// Get pending DMs 15 minutes from now - both should be ready
 	future := now.Add(15 * time.Minute)
-	pending, err = store.PendingDMs(future)
+	pending, err = store.PendingDMs(ctx, future)
 	if err != nil {
 		t.Fatalf("unexpected error getting future pending DMs: %v", err)
 	}
@@ -451,13 +461,13 @@ func TestPendingDMOperations(t *testing.T) {
 	}
 
 	// Remove one DM
-	err = store.RemovePendingDM("dm-001")
+	err = store.RemovePendingDM(ctx, "dm-001")
 	if err != nil {
 		t.Fatalf("unexpected error removing DM: %v", err)
 	}
 
 	// Now only dm2 should remain
-	pending, err = store.PendingDMs(future)
+	pending, err = store.PendingDMs(ctx, future)
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs after removal: %v", err)
 	}
@@ -471,13 +481,14 @@ func TestPendingDMOperations(t *testing.T) {
 	}
 
 	// Remove non-existent DM should not error
-	err = store.RemovePendingDM("dm-999")
+	err = store.RemovePendingDM(ctx, "dm-999")
 	if err != nil {
 		t.Errorf("unexpected error removing non-existent DM: %v", err)
 	}
 }
 
 func TestPendingDMCleanup(t *testing.T) {
+	ctx := context.Background()
 	store := NewMemoryStore()
 
 	now := time.Now()
@@ -491,7 +502,7 @@ func TestPendingDMCleanup(t *testing.T) {
 		QueuedAt:  oldTime,
 		SendAfter: oldTime,
 	}
-	if err := store.QueuePendingDM(oldDM); err != nil {
+	if err := store.QueuePendingDM(ctx, &oldDM); err != nil {
 		t.Fatalf("failed to queue old DM: %v", err)
 	}
 
@@ -503,18 +514,18 @@ func TestPendingDMCleanup(t *testing.T) {
 		QueuedAt:  now,
 		SendAfter: now.Add(10 * time.Minute),
 	}
-	if err := store.QueuePendingDM(recentDM); err != nil {
+	if err := store.QueuePendingDM(ctx, &recentDM); err != nil {
 		t.Fatalf("failed to queue recent DM: %v", err)
 	}
 
 	// Run cleanup
-	err := store.Cleanup()
+	err := store.Cleanup(ctx)
 	if err != nil {
 		t.Fatalf("unexpected error during cleanup: %v", err)
 	}
 
 	// Verify old DM was removed
-	pending, err := store.PendingDMs(now.Add(24 * time.Hour))
+	pending, err := store.PendingDMs(ctx, now.Add(24*time.Hour))
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs: %v", err)
 	}
@@ -529,6 +540,7 @@ func TestPendingDMCleanup(t *testing.T) {
 }
 
 func TestPendingDMConcurrency(t *testing.T) {
+	ctx := context.Background()
 	store := NewMemoryStore()
 
 	now := time.Now()
@@ -536,7 +548,7 @@ func TestPendingDMConcurrency(t *testing.T) {
 	// Queue multiple DMs concurrently
 	done := make(chan bool, 3)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		go func(index int) {
 			dm := PendingDM{
 				ID:        fmt.Sprintf("dm-%d", index),
@@ -545,7 +557,7 @@ func TestPendingDMConcurrency(t *testing.T) {
 				QueuedAt:  now,
 				SendAfter: now.Add(-1 * time.Minute),
 			}
-			if err := store.QueuePendingDM(dm); err != nil {
+			if err := store.QueuePendingDM(ctx, &dm); err != nil {
 				t.Errorf("failed to queue DM in goroutine %d: %v", index, err)
 			}
 			done <- true
@@ -553,12 +565,12 @@ func TestPendingDMConcurrency(t *testing.T) {
 	}
 
 	// Wait for all goroutines
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		<-done
 	}
 
 	// Get all pending DMs
-	pending, err := store.PendingDMs(now)
+	pending, err := store.PendingDMs(ctx, now)
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs: %v", err)
 	}
@@ -568,9 +580,9 @@ func TestPendingDMConcurrency(t *testing.T) {
 	}
 
 	// Remove DMs concurrently
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		go func(index int) {
-			if err := store.RemovePendingDM(fmt.Sprintf("dm-%d", index)); err != nil {
+			if err := store.RemovePendingDM(ctx, fmt.Sprintf("dm-%d", index)); err != nil {
 				t.Errorf("failed to remove DM in goroutine %d: %v", index, err)
 			}
 			done <- true
@@ -578,12 +590,12 @@ func TestPendingDMConcurrency(t *testing.T) {
 	}
 
 	// Wait for all removals
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		<-done
 	}
 
 	// Verify all removed
-	pending, err = store.PendingDMs(now)
+	pending, err = store.PendingDMs(ctx, now)
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs after removal: %v", err)
 	}

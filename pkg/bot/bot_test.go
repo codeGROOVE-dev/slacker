@@ -167,6 +167,7 @@ func TestNew_WithGitHubClient(t *testing.T) {
 }
 
 func TestSaveThread(t *testing.T) {
+	ctx := context.Background()
 	mockSlack := &mockSlackClient{}
 	configMgr := NewMockConfig().Build()
 
@@ -190,7 +191,7 @@ func TestSaveThread(t *testing.T) {
 		ThreadTS:  "1234567890.123456",
 	}
 
-	c.saveThread("testorg", "testrepo", 42, "C123456", threadInfo)
+	c.saveThread(ctx, "testorg", "testrepo", 42, "C123456", threadInfo)
 
 	// Check cache
 	key := "testorg/testrepo#42:C123456"
@@ -220,6 +221,7 @@ func TestSaveThread(t *testing.T) {
 }
 
 func TestSaveThread_PersistenceError(t *testing.T) {
+	ctx := context.Background()
 	mockSlack := &mockSlackClient{}
 	configMgr := NewMockConfig().Build()
 
@@ -245,7 +247,7 @@ func TestSaveThread_PersistenceError(t *testing.T) {
 	}
 
 	// Should still save to cache even if persistence fails
-	c.saveThread("testorg", "testrepo", 42, "C123456", threadInfo)
+	c.saveThread(ctx, "testorg", "testrepo", 42, "C123456", threadInfo)
 
 	// Check cache (should succeed)
 	key := "testorg/testrepo#42:C123456"

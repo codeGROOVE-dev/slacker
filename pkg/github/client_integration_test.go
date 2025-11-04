@@ -10,6 +10,7 @@ import (
 
 // TestClient_AuthenticateWithMock tests successful authentication flow with mock server.
 func TestClient_AuthenticateWithMock(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockGitHubServer()
 	defer mock.Close()
 
@@ -31,7 +32,6 @@ func TestClient_AuthenticateWithMock(t *testing.T) {
 	}
 
 	// Test authentication
-	ctx := context.Background()
 	err = client.authenticate(ctx)
 	if err != nil {
 		t.Fatalf("authenticate() failed: %v", err)
@@ -55,6 +55,7 @@ func TestClient_AuthenticateWithMock(t *testing.T) {
 
 // TestClient_Authenticate_InvalidInstallation tests authentication with invalid installation ID.
 func TestClient_Authenticate_InvalidInstallation(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockGitHubServer()
 	defer mock.Close()
 
@@ -72,7 +73,6 @@ func TestClient_Authenticate_InvalidInstallation(t *testing.T) {
 		baseURL:        mock.URL(),
 	}
 
-	ctx := context.Background()
 	err = client.authenticate(ctx)
 	if err == nil {
 		t.Error("expected error for invalid installation, got nil")
@@ -81,6 +81,7 @@ func TestClient_Authenticate_InvalidInstallation(t *testing.T) {
 
 // TestClient_Authenticate_RetryOnFailure tests retry logic on transient failures.
 func TestClient_Authenticate_RetryOnFailure(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockGitHubServer()
 	defer mock.Close()
 
@@ -102,7 +103,6 @@ func TestClient_Authenticate_RetryOnFailure(t *testing.T) {
 	// Inject failure on first attempt
 	mock.FailNextAuthRequest = true
 
-	ctx := context.Background()
 	err = client.authenticate(ctx)
 	// Should still succeed after retry
 	if err != nil {
@@ -117,6 +117,7 @@ func TestClient_Authenticate_RetryOnFailure(t *testing.T) {
 
 // TestClient_FindPRsForCommit_Success tests finding PRs by commit SHA.
 func TestClient_FindPRsForCommit_Success(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockGitHubServer()
 	defer mock.Close()
 
@@ -146,7 +147,6 @@ func TestClient_FindPRsForCommit_Success(t *testing.T) {
 	// Create client pointing to mock server
 	client := createMockClient(t, mock)
 
-	ctx := context.Background()
 	prNumbers, err := client.FindPRsForCommit(ctx, "test-org", "test-repo", "abc123")
 	if err != nil {
 		t.Fatalf("FindPRsForCommit() failed: %v", err)
@@ -174,11 +174,11 @@ func TestClient_FindPRsForCommit_Success(t *testing.T) {
 
 // TestClient_FindPRsForCommit_InvalidParams tests error handling for invalid parameters.
 func TestClient_FindPRsForCommit_InvalidParams(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockGitHubServer()
 	defer mock.Close()
 
 	client := createMockClient(t, mock)
-	ctx := context.Background()
 
 	tests := []struct {
 		name  string
@@ -203,11 +203,11 @@ func TestClient_FindPRsForCommit_InvalidParams(t *testing.T) {
 
 // TestClient_FindPRsForCommit_NoResults tests handling when no PRs are found.
 func TestClient_FindPRsForCommit_NoResults(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockGitHubServer()
 	defer mock.Close()
 
 	client := createMockClient(t, mock)
-	ctx := context.Background()
 
 	// Query for commit with no PRs
 	prNumbers, err := client.FindPRsForCommit(ctx, "test-org", "test-repo", "nonexistent")
@@ -222,6 +222,7 @@ func TestClient_FindPRsForCommit_NoResults(t *testing.T) {
 
 // TestClient_FindPRsForCommit_OnlyOpenPRs tests that only open PRs are returned.
 func TestClient_FindPRsForCommit_OnlyOpenPRs(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockGitHubServer()
 	defer mock.Close()
 
@@ -245,7 +246,6 @@ func TestClient_FindPRsForCommit_OnlyOpenPRs(t *testing.T) {
 	})
 
 	client := createMockClient(t, mock)
-	ctx := context.Background()
 
 	prNumbers, err := client.FindPRsForCommit(ctx, "test-org", "test-repo", "abc123")
 	if err != nil {

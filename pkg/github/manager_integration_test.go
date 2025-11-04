@@ -9,6 +9,7 @@ import (
 
 // TestManager_RefreshInstallationsWithMock tests successful installation discovery.
 func TestManager_RefreshInstallationsWithMock(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockGitHubServer()
 	defer mock.Close()
 
@@ -32,7 +33,6 @@ func TestManager_RefreshInstallationsWithMock(t *testing.T) {
 		baseURL:               mock.URL(),
 	}
 
-	ctx := context.Background()
 	err = manager.RefreshInstallations(ctx)
 	if err != nil {
 		t.Fatalf("RefreshInstallations() failed: %v", err)
@@ -57,6 +57,7 @@ func TestManager_RefreshInstallationsWithMock(t *testing.T) {
 
 // TestManager_RefreshInstallations_AllowPersonalAccounts tests personal account handling.
 func TestManager_RefreshInstallations_AllowPersonalAccounts(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockGitHubServer()
 	defer mock.Close()
 
@@ -77,7 +78,6 @@ func TestManager_RefreshInstallations_AllowPersonalAccounts(t *testing.T) {
 		baseURL:               mock.URL(),
 	}
 
-	ctx := context.Background()
 	err = manager.RefreshInstallations(ctx)
 	if err != nil {
 		t.Fatalf("RefreshInstallations() failed: %v", err)
@@ -98,6 +98,7 @@ func TestManager_RefreshInstallations_AllowPersonalAccounts(t *testing.T) {
 
 // TestManager_RefreshInstallations_NoInstallations tests handling of no installations.
 func TestManager_RefreshInstallations_NoInstallations(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockGitHubServer()
 	defer mock.Close()
 
@@ -115,7 +116,6 @@ func TestManager_RefreshInstallations_NoInstallations(t *testing.T) {
 		baseURL:    mock.URL(),
 	}
 
-	ctx := context.Background()
 	err = manager.RefreshInstallations(ctx)
 	if err != nil {
 		t.Fatalf("RefreshInstallations() should succeed with no installations, got error: %v", err)
@@ -128,6 +128,7 @@ func TestManager_RefreshInstallations_NoInstallations(t *testing.T) {
 
 // TestManager_RefreshInstallations_PreserveExisting tests that existing clients are preserved.
 func TestManager_RefreshInstallations_PreserveExisting(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockGitHubServer()
 	defer mock.Close()
 
@@ -154,7 +155,6 @@ func TestManager_RefreshInstallations_PreserveExisting(t *testing.T) {
 	}
 	manager.clients["org1"] = existingClient
 
-	ctx := context.Background()
 	err = manager.RefreshInstallations(ctx)
 	if err != nil {
 		t.Fatalf("RefreshInstallations() failed: %v", err)

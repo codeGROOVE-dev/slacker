@@ -9,8 +9,10 @@ import (
 	"github.com/slack-go/slack"
 )
 
-// TestSlackAPIWrapperIntegration tests the actual slackAPIWrapper with a mock HTTP server.
-func TestSlackAPIWrapperIntegration(t *testing.T) {
+// TestAPIWrapperIntegration tests the actual slackAPIWrapper with a mock HTTP server.
+//
+//nolint:maintidx // Integration test covering all API methods with mock server - complexity acceptable
+func TestAPIWrapperIntegration(t *testing.T) {
 	t.Parallel()
 
 	// Create a mock HTTP server that responds to Slack API calls
@@ -74,7 +76,7 @@ func TestSlackAPIWrapperIntegration(t *testing.T) {
 
 	// Create Slack client pointing to mock server
 	slackClient := slack.New("test-token", slack.OptionAPIURL(server.URL+"/api/"))
-	wrapper := newSlackAPIWrapper(slackClient)
+	wrapper := newAPIWrapper(slackClient)
 
 	ctx := context.Background()
 
