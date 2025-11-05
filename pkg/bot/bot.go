@@ -76,7 +76,7 @@ type Coordinator struct {
 
 // StateStore interface for persistent state - allows dependency injection for testing.
 //
-//nolint:interfacebloat // 13 methods needed for complete state management
+//nolint:interfacebloat // 15 methods needed for complete state management
 type StateStore interface {
 	Thread(ctx context.Context, owner, repo string, number int, channelID string) (cache.ThreadInfo, bool)
 	SaveThread(ctx context.Context, owner, repo string, number int, channelID string, info cache.ThreadInfo) error
@@ -86,6 +86,8 @@ type StateStore interface {
 	SaveDMMessage(ctx context.Context, userID, prURL string, info state.DMInfo) error
 	ListDMUsers(ctx context.Context, prURL string) []string
 	QueuePendingDM(ctx context.Context, dm *state.PendingDM) error
+	PendingDMs(ctx context.Context, before time.Time) ([]state.PendingDM, error)
+	RemovePendingDM(ctx context.Context, id string) error
 	WasProcessed(ctx context.Context, eventKey string) bool
 	MarkProcessed(ctx context.Context, eventKey string, ttl time.Duration) error
 	LastNotification(ctx context.Context, prURL string) time.Time
