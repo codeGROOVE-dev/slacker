@@ -2,6 +2,7 @@ package home
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -254,8 +255,15 @@ func (f *Fetcher) enrichPRs(ctx context.Context, prs []PR, githubUsername string
 
 	results := make(chan enrichResult, len(prs))
 
-	for i := range prs {
+	for prIdx := range prs {
 		go func(idx int, pr PR) {
+			slog.Info("calling turnclient for PR enrichment",
+				"pr", pr.URL,
+				"github_user", githubUsername,
+				"incoming", incoming,
+				"bot_username", f.botUsername,
+				"last_event_time", pr.LastEventTime)
+
 			// Use LastEventTime for cache optimization - it's the most recent timestamp
 			// we know about (max of GitHub UpdatedAt and sprinkler LastEventTime)
 			var checkResult *turn.CheckResponse
@@ -273,12 +281,41 @@ func (f *Fetcher) enrichPRs(ctx context.Context, prs []PR, githubUsername string
 				retry.Context(ctx),
 			)
 			if err != nil {
-				slog.Debug("turnclient check failed after retries, using basic PR data",
+				slog.Warn("turnclient check failed after retries, using basic PR data",
 					"pr", pr.URL,
+					"github_user", githubUsername,
+					"incoming", incoming,
 					"error", err)
 				results <- enrichResult{idx: idx, pr: pr}
 				return
 			}
+
+			// Marshal full response for debugging
+			responseJSON, err := json.Marshal(checkResult)
+			if err != nil {
+				slog.Warn("failed to marshal turnclient response", "pr", pr.URL, "error", err)
+			} else {
+				slog.Info("turnclient full response",
+					"pr", pr.URL,
+					"github_user", githubUsername,
+					"incoming", incoming,
+					"last_event_time_param", pr.LastEventTime,
+					"response_json", string(responseJSON))
+			}
+
+			slog.Info("turnclient returned response",
+				"pr", pr.URL,
+				"github_user", githubUsername,
+				"incoming", incoming,
+				"workflow_state", checkResult.Analysis.WorkflowState,
+				"next_action_count", len(checkResult.Analysis.NextAction),
+				"next_action_keys", func() []string {
+					keys := make([]string, 0, len(checkResult.Analysis.NextAction))
+					for k := range checkResult.Analysis.NextAction {
+						keys = append(keys, k)
+					}
+					return keys
+				}())
 
 			// Extract action for this user
 			if action, exists := checkResult.Analysis.NextAction[githubUsername]; exists {
@@ -290,6 +327,30 @@ func (f *Fetcher) enrichPRs(ctx context.Context, prs []PR, githubUsername string
 				} else {
 					pr.IsBlocked = action.Critical
 				}
+
+				slog.Info("found action for user in turnclient response",
+					"pr", pr.URL,
+					"github_user", githubUsername,
+					"action_kind", action.Kind,
+					"critical", action.Critical,
+					"reason", action.Reason,
+					"incoming", incoming,
+					"is_blocked", pr.IsBlocked,
+					"needs_review", pr.NeedsReview)
+			} else {
+				// No action for this user in the response
+				slog.Debug("no action for user in turnclient response",
+					"pr", pr.URL,
+					"github_user", githubUsername,
+					"incoming", incoming,
+					"workflow_state", checkResult.Analysis.WorkflowState,
+					"next_action_keys", func() []string {
+						keys := make([]string, 0, len(checkResult.Analysis.NextAction))
+						for k := range checkResult.Analysis.NextAction {
+							keys = append(keys, k)
+						}
+						return keys
+					}())
 			}
 
 			// Extract test state from Analysis
@@ -306,7 +367,7 @@ func (f *Fetcher) enrichPRs(ctx context.Context, prs []PR, githubUsername string
 			}
 
 			results <- enrichResult{idx: idx, pr: pr}
-		}(i, prs[i])
+		}(prIdx, prs[prIdx])
 	}
 
 	// Collect results in original order

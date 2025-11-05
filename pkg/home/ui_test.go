@@ -58,21 +58,19 @@ func TestBuildBlocks(t *testing.T) {
 					t.Error("expected 'All clear' status for empty dashboard")
 				}
 
-				// Should have "No incoming PRs" message
-				foundIncoming := false
+				// With new format, empty dashboards don't show "No incoming PRs" message
+				// They just show header/status/refresh with no PR sections
+				// Verify we don't have any PR section blocks
+				hasPRSections := false
 				for _, block := range blocks {
-					if cb, ok := block.(*slack.ContextBlock); ok {
-						for _, elem := range cb.ContextElements.Elements {
-							if txt, ok := elem.(*slack.TextBlockObject); ok {
-								if strings.Contains(txt.Text, "No incoming PRs") {
-									foundIncoming = true
-								}
-							}
+					if sb, ok := block.(*slack.SectionBlock); ok {
+						if sb.Text != nil && (strings.Contains(sb.Text.Text, "Incoming") || strings.Contains(sb.Text.Text, "Outgoing")) {
+							hasPRSections = true
 						}
 					}
 				}
-				if !foundIncoming {
-					t.Error("expected 'No incoming PRs' message")
+				if hasPRSections {
+					t.Error("expected no PR sections for empty dashboard")
 				}
 
 				// Should have dashboard link
@@ -128,7 +126,7 @@ func TestBuildBlocks(t *testing.T) {
 					t.Error("expected 'Action needed' status with blocked PRs")
 				}
 
-				// Should show "1 blocked on you"
+				// Should show "1 blocked on you" in section header (new format)
 				foundBlocked := false
 				for _, block := range blocks {
 					if sb, ok := block.(*slack.SectionBlock); ok {
@@ -138,20 +136,20 @@ func TestBuildBlocks(t *testing.T) {
 					}
 				}
 				if !foundBlocked {
-					t.Error("expected 'blocked on you' message")
+					t.Error("expected 'blocked on you' message in header")
 				}
 
-				// Should have PR with "BLOCKED ON YOU" status
+				// Should have PR with large red square (incoming blocked indicator)
 				foundBlockedPR := false
 				for _, block := range blocks {
 					if sb, ok := block.(*slack.SectionBlock); ok {
-						if sb.Text != nil && strings.Contains(sb.Text.Text, "BLOCKED ON YOU") {
+						if sb.Text != nil && strings.Contains(sb.Text.Text, ":red_circle:") {
 							foundBlockedPR = true
 						}
 					}
 				}
 				if !foundBlockedPR {
-					t.Error("expected PR block with 'BLOCKED ON YOU' status")
+					t.Error("expected PR with :red_circle: indicating blocked incoming PR")
 				}
 			},
 		},
@@ -176,30 +174,34 @@ func TestBuildBlocks(t *testing.T) {
 			primaryOrg: "test-org",
 			validate: func(t *testing.T, blocks []slack.Block) {
 				t.Helper()
-				// Should show outgoing PR section
+				// Should show outgoing PR section with "blocked on you" (new format)
 				foundOutgoing := false
 				for _, block := range blocks {
 					if sb, ok := block.(*slack.SectionBlock); ok {
-						if sb.Text != nil && strings.Contains(sb.Text.Text, "Outgoing PRs") {
+						if sb.Text != nil && strings.Contains(sb.Text.Text, "Outgoing") {
 							foundOutgoing = true
+							// Should show "1 blocked on you" in the header
+							if !strings.Contains(sb.Text.Text, "1 blocked on you") {
+								t.Error("expected '1 blocked on you' in Outgoing section header")
+							}
 						}
 					}
 				}
 				if !foundOutgoing {
-					t.Error("expected 'Outgoing PRs' section")
+					t.Error("expected 'Outgoing' section")
 				}
 
-				// Should show waiting count
-				foundWaiting := false
+				// Should have PR with large green square (outgoing blocked indicator)
+				foundBlocked := false
 				for _, block := range blocks {
 					if sb, ok := block.(*slack.SectionBlock); ok {
-						if sb.Text != nil && strings.Contains(sb.Text.Text, "1 waiting") {
-							foundWaiting = true
+						if sb.Text != nil && strings.Contains(sb.Text.Text, ":green_circle:") {
+							foundBlocked = true
 						}
 					}
 				}
-				if !foundWaiting {
-					t.Error("expected 'waiting' count for blocked outgoing PRs")
+				if !foundBlocked {
+					t.Error("expected PR with :green_circle: for blocked outgoing PR")
 				}
 			},
 		},
@@ -243,257 +245,6 @@ func TestBuildBlocks(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			blocks := BuildBlocks(tt.dashboard, tt.primaryOrg)
 			tt.validate(t, blocks)
-		})
-	}
-}
-
-// TestFormatEnhancedPRBlock verifies individual PR block formatting.
-//
-//nolint:maintidx // Comprehensive test covering all PR states and formatting - complexity acceptable
-func TestFormatEnhancedPRBlock(t *testing.T) {
-	now := time.Now()
-
-	tests := []struct {
-		name     string
-		pr       *PR
-		validate func(t *testing.T, block slack.Block)
-	}{
-		{
-			name: "blocked on you - highest priority",
-			pr: &PR{
-				Number:      123,
-				Title:       "Fix authentication",
-				Repository:  "org/repo",
-				URL:         "https://github.com/org/repo/pull/123",
-				IsBlocked:   true,
-				NeedsReview: true,
-				UpdatedAt:   now.Add(-2 * time.Hour),
-			},
-			validate: func(t *testing.T, block slack.Block) {
-				t.Helper()
-				sb, ok := block.(*slack.SectionBlock)
-				if !ok {
-					t.Fatal("expected SectionBlock")
-				}
-
-				text := sb.Text.Text
-
-				// Should have urgent emoji
-				if !strings.Contains(text, "🚨") {
-					t.Error("expected 🚨 emoji for blocked on you")
-				}
-
-				// Should have "BLOCKED ON YOU" status
-				if !strings.Contains(text, "BLOCKED ON YOU") {
-					t.Error("expected 'BLOCKED ON YOU' status")
-				}
-
-				// Should have repo#number format
-				if !strings.Contains(text, "repo#123") {
-					t.Error("expected 'repo#123' reference")
-				}
-
-				// Should have age indicator
-				if !strings.Contains(text, "2h ago") {
-					t.Error("expected '2h ago' age indicator")
-				}
-
-				// Should have title
-				if !strings.Contains(text, "Fix authentication") {
-					t.Error("expected PR title")
-				}
-			},
-		},
-		{
-			name: "blocked on author",
-			pr: &PR{
-				Number:      456,
-				Title:       "Add feature",
-				Repository:  "org/repo",
-				URL:         "https://github.com/org/repo/pull/456",
-				IsBlocked:   true,
-				NeedsReview: false,
-				ActionKind:  "address_feedback",
-				UpdatedAt:   now.Add(-1 * time.Hour),
-			},
-			validate: func(t *testing.T, block slack.Block) {
-				t.Helper()
-				sb, ok := block.(*slack.SectionBlock)
-				if !ok {
-					t.Fatal("expected block to be *slack.SectionBlock")
-				}
-				text := sb.Text.Text
-
-				// Should have pause emoji
-				if !strings.Contains(text, "⏸️") {
-					t.Error("expected ⏸️ emoji for blocked on author")
-				}
-
-				// Should have "Blocked on author" status
-				if !strings.Contains(text, "Blocked on author") {
-					t.Error("expected 'Blocked on author' status")
-				}
-
-				// Should have action kind
-				if !strings.Contains(text, "address feedback") {
-					t.Error("expected action kind with underscores replaced")
-				}
-			},
-		},
-		{
-			name: "ready for review",
-			pr: &PR{
-				Number:      789,
-				Title:       "Update docs",
-				Repository:  "org/repo",
-				URL:         "https://github.com/org/repo/pull/789",
-				IsBlocked:   false,
-				NeedsReview: true,
-				UpdatedAt:   now.Add(-30 * time.Minute),
-			},
-			validate: func(t *testing.T, block slack.Block) {
-				t.Helper()
-				sb, ok := block.(*slack.SectionBlock)
-				if !ok {
-					t.Fatal("expected block to be *slack.SectionBlock")
-				}
-				text := sb.Text.Text
-
-				// Should have eyes emoji
-				if !strings.Contains(text, "👀") {
-					t.Error("expected 👀 emoji for ready for review")
-				}
-
-				// Should have "Ready for review" status
-				if !strings.Contains(text, "Ready for review") {
-					t.Error("expected 'Ready for review' status")
-				}
-
-				// Should show age in minutes
-				if !strings.Contains(text, "30m ago") {
-					t.Error("expected '30m ago' age indicator")
-				}
-			},
-		},
-		{
-			name: "in progress",
-			pr: &PR{
-				Number:      999,
-				Title:       "Work in progress",
-				Repository:  "org/repo",
-				URL:         "https://github.com/org/repo/pull/999",
-				IsBlocked:   false,
-				NeedsReview: false,
-				UpdatedAt:   now.Add(-24 * time.Hour),
-			},
-			validate: func(t *testing.T, block slack.Block) {
-				t.Helper()
-				sb, ok := block.(*slack.SectionBlock)
-				if !ok {
-					t.Fatal("expected block to be *slack.SectionBlock")
-				}
-				text := sb.Text.Text
-
-				// Should have hourglass emoji
-				if !strings.Contains(text, "⏳") {
-					t.Error("expected ⏳ emoji for in progress")
-				}
-
-				// Should have "In progress" status
-				if !strings.Contains(text, "In progress") {
-					t.Error("expected 'In progress' status")
-				}
-
-				// Should show age in days for exactly 24 hours (age >= 24h shows as days)
-				if !strings.Contains(text, "1d ago") {
-					t.Error("expected '1d ago' age indicator")
-				}
-			},
-		},
-		{
-			name: "long title truncation",
-			pr: &PR{
-				Number:     111,
-				Title:      strings.Repeat("a", 150),
-				Repository: "org/repo",
-				URL:        "https://github.com/org/repo/pull/111",
-				UpdatedAt:  now,
-			},
-			validate: func(t *testing.T, block slack.Block) {
-				t.Helper()
-				sb, ok := block.(*slack.SectionBlock)
-				if !ok {
-					t.Fatal("expected block to be *slack.SectionBlock")
-				}
-				text := sb.Text.Text
-
-				// Should truncate to 120 characters with "..."
-				if !strings.Contains(text, "...") {
-					t.Error("expected truncation ellipsis for long title")
-				}
-
-				// Title line should not exceed reasonable length
-				lines := strings.Split(text, "\n")
-				if len(lines) > 0 {
-					titleLine := lines[len(lines)-1]
-					if len(titleLine) > 125 {
-						t.Errorf("title line too long: %d characters", len(titleLine))
-					}
-				}
-			},
-		},
-		{
-			name: "age formatting - days",
-			pr: &PR{
-				Number:     222,
-				Title:      "Old PR",
-				Repository: "org/repo",
-				URL:        "https://github.com/org/repo/pull/222",
-				UpdatedAt:  now.Add(-5 * 24 * time.Hour),
-			},
-			validate: func(t *testing.T, block slack.Block) {
-				t.Helper()
-				sb, ok := block.(*slack.SectionBlock)
-				if !ok {
-					t.Fatal("expected block to be *slack.SectionBlock")
-				}
-				text := sb.Text.Text
-
-				// Should show age in days
-				if !strings.Contains(text, "5d ago") {
-					t.Error("expected '5d ago' age indicator")
-				}
-			},
-		},
-		{
-			name: "age formatting - months",
-			pr: &PR{
-				Number:     333,
-				Title:      "Very old PR",
-				Repository: "org/repo",
-				URL:        "https://github.com/org/repo/pull/333",
-				UpdatedAt:  now.Add(-60 * 24 * time.Hour),
-			},
-			validate: func(t *testing.T, block slack.Block) {
-				t.Helper()
-				sb, ok := block.(*slack.SectionBlock)
-				if !ok {
-					t.Fatal("expected block to be *slack.SectionBlock")
-				}
-				text := sb.Text.Text
-
-				// Should show age in months (approximately 2 months)
-				if !strings.Contains(text, "mo ago") {
-					t.Error("expected month age indicator")
-				}
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			block := formatEnhancedPRBlock(tt.pr)
-			tt.validate(t, block)
 		})
 	}
 }
@@ -553,8 +304,116 @@ func TestBuildBlocks_DividersBetweenSections(t *testing.T) {
 		}
 	}
 
-	// Should have at least 3 dividers (before incoming, before outgoing, before footer)
-	if dividerCount < 3 {
-		t.Errorf("expected at least 3 dividers, got %d", dividerCount)
+	// With new unified format: 2 dividers (after refresh button, before footer)
+	// PR sections flow together without dividers between them
+	if dividerCount < 2 {
+		t.Errorf("expected at least 2 dividers, got %d", dividerCount)
+	}
+}
+
+// TestBuildPRSections_SortOrder verifies blocked PRs appear first, then by recency.
+func TestBuildPRSections_SortOrder(t *testing.T) {
+	baseTime := time.Now()
+
+	// Create incoming PRs with mixed blocked/unblocked and timestamps
+	incoming := []PR{
+		{Number: 1, Title: "Oldest non-blocked", Repository: "org/repo", URL: "https://github.com/org/repo/pull/1", UpdatedAt: baseTime.Add(-4 * time.Hour), NeedsReview: false},
+		{Number: 2, Title: "Newest blocked", Repository: "org/repo", URL: "https://github.com/org/repo/pull/2", UpdatedAt: baseTime.Add(-1 * time.Hour), NeedsReview: true},
+		{Number: 3, Title: "Middle non-blocked", Repository: "org/repo", URL: "https://github.com/org/repo/pull/3", UpdatedAt: baseTime.Add(-2 * time.Hour), NeedsReview: false},
+		{Number: 4, Title: "Oldest blocked", Repository: "org/repo", URL: "https://github.com/org/repo/pull/4", UpdatedAt: baseTime.Add(-5 * time.Hour), NeedsReview: true},
+	}
+
+	// Create outgoing PRs with mixed blocked/unblocked and timestamps
+	outgoing := []PR{
+		{Number: 5, Title: "Middle non-blocked out", Repository: "org/repo", URL: "https://github.com/org/repo/pull/5", UpdatedAt: baseTime.Add(-3 * time.Hour), IsBlocked: false},
+		{Number: 6, Title: "Newest blocked out", Repository: "org/repo", URL: "https://github.com/org/repo/pull/6", UpdatedAt: baseTime.Add(-1 * time.Hour), IsBlocked: true},
+		{Number: 7, Title: "Oldest blocked out", Repository: "org/repo", URL: "https://github.com/org/repo/pull/7", UpdatedAt: baseTime.Add(-6 * time.Hour), IsBlocked: true},
+		{Number: 8, Title: "Newest non-blocked out", Repository: "org/repo", URL: "https://github.com/org/repo/pull/8", UpdatedAt: baseTime.Add(-2 * time.Hour), IsBlocked: false},
+	}
+
+	blocks := BuildPRSections(incoming, outgoing)
+
+	// Should have 2 blocks (incoming and outgoing sections)
+	if len(blocks) != 2 {
+		t.Fatalf("expected 2 blocks, got %d", len(blocks))
+	}
+
+	// Check incoming section order
+	incomingBlock, ok := blocks[0].(*slack.SectionBlock)
+	if !ok {
+		t.Fatal("expected first block to be SectionBlock")
+	}
+	incomingText := incomingBlock.Text.Text
+
+	// Verify blocked PRs appear before non-blocked
+	// Expected order: PR#2 (newest blocked), PR#4 (oldest blocked), PR#3 (middle non-blocked), PR#1 (oldest non-blocked)
+	idx2 := strings.Index(incomingText, "repo#2")
+	idx4 := strings.Index(incomingText, "repo#4")
+	idx3 := strings.Index(incomingText, "repo#3")
+	idx1 := strings.Index(incomingText, "repo#1")
+
+	if idx2 < 0 || idx4 < 0 || idx3 < 0 || idx1 < 0 {
+		t.Fatal("not all incoming PRs found in output")
+	}
+
+	// Blocked PRs (2, 4) should come before non-blocked PRs (3, 1)
+	if idx2 > idx3 || idx2 > idx1 {
+		t.Error("blocked PR#2 should appear before non-blocked PRs")
+	}
+	if idx4 > idx3 || idx4 > idx1 {
+		t.Error("blocked PR#4 should appear before non-blocked PRs")
+	}
+
+	// Within blocked group: PR#2 (newer) should come before PR#4 (older)
+	if idx2 > idx4 {
+		t.Error("newer blocked PR#2 should appear before older blocked PR#4")
+	}
+
+	// Within non-blocked group: PR#3 (newer) should come before PR#1 (older)
+	if idx3 > idx1 {
+		t.Error("newer non-blocked PR#3 should appear before older non-blocked PR#1")
+	}
+
+	// Check outgoing section order
+	outgoingBlock, ok := blocks[1].(*slack.SectionBlock)
+	if !ok {
+		t.Fatal("expected second block to be SectionBlock")
+	}
+	outgoingText := outgoingBlock.Text.Text
+
+	// Expected order: PR#6 (newest blocked), PR#7 (oldest blocked), PR#8 (newest non-blocked), PR#5 (middle non-blocked)
+	idx6 := strings.Index(outgoingText, "repo#6")
+	idx7 := strings.Index(outgoingText, "repo#7")
+	idx8 := strings.Index(outgoingText, "repo#8")
+	idx5 := strings.Index(outgoingText, "repo#5")
+
+	if idx6 < 0 || idx7 < 0 || idx8 < 0 || idx5 < 0 {
+		t.Fatal("not all outgoing PRs found in output")
+	}
+
+	// Blocked PRs (6, 7) should come before non-blocked PRs (8, 5)
+	if idx6 > idx8 || idx6 > idx5 {
+		t.Error("blocked PR#6 should appear before non-blocked PRs")
+	}
+	if idx7 > idx8 || idx7 > idx5 {
+		t.Error("blocked PR#7 should appear before non-blocked PRs")
+	}
+
+	// Within blocked group: PR#6 (newer) should come before PR#7 (older)
+	if idx6 > idx7 {
+		t.Error("newer blocked PR#6 should appear before older blocked PR#7")
+	}
+
+	// Within non-blocked group: PR#8 (newer) should come before PR#5 (older)
+	if idx8 > idx5 {
+		t.Error("newer non-blocked PR#8 should appear before older non-blocked PR#5")
+	}
+
+	// Verify color indicators
+	if !strings.Contains(incomingText, ":red_circle:") {
+		t.Error("incoming blocked PRs should use :red_circle:")
+	}
+	if !strings.Contains(outgoingText, ":green_circle:") {
+		t.Error("outgoing blocked PRs should use :green_circle:")
 	}
 }
