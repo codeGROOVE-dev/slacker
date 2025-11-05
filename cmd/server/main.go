@@ -730,6 +730,7 @@ func runBotCoordinators(
 	defer cleanupTicker.Stop()
 
 	// Run cleanup once on startup
+	//nolint:contextcheck // Background cleanup should complete even during shutdown
 	go func() {
 		if err := stateStore.Cleanup(context.Background()); err != nil {
 			slog.Warn("initial state cleanup failed", "error", err)
@@ -764,6 +765,7 @@ func runBotCoordinators(
 
 		case <-cleanupTicker.C:
 			// Periodic cleanup of old state data
+			//nolint:contextcheck // Background cleanup should complete even during shutdown
 			go func() {
 				if err := stateStore.Cleanup(context.Background()); err != nil {
 					slog.Warn("state cleanup failed", "error", err)

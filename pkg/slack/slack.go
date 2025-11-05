@@ -31,6 +31,12 @@ var (
 	ErrNoDMToUpdate = errors.New("no DM found to update")
 )
 
+// DMLocation represents a DM message location in Slack.
+type DMLocation struct {
+	ChannelID string
+	MessageTS string
+}
+
 // Constants for input validation.
 const (
 	maxCommandInputLength = 200
@@ -577,6 +583,68 @@ func (c *Client) UpdateDMMessage(ctx context.Context, userID, prURL, newText str
 		"message_ts", info.MessageTS)
 
 	return nil
+}
+
+// FindDMMessagesInHistory searches Slack DM history to find existing messages about a PR.
+// This is the fallback when cache/datastore don't have the DM location.
+// Searches since the given time in DM history using the Slack API directly.
+func (c *Client) FindDMMessagesInHistory(ctx context.Context, userID, prURL string, since time.Time) ([]DMLocation, error) {
+	// Open DM channel with user
+	channel, _, _, err := c.api.OpenConversationContext(ctx, &slack.OpenConversationParameters{
+		Users: []string{userID},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open conversation: %w", err)
+	}
+	dmChannelID := channel.ID
+
+	// Get bot info to filter our messages only
+	botInfo, err := c.BotInfo(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get bot info: %w", err)
+	}
+
+	// Convert time to Slack timestamp format
+	oldest := strconv.FormatInt(since.Unix(), 10)
+
+	var allLocations []DMLocation
+	cursor := ""
+
+	for {
+		// Fetch messages with pagination
+		history, err := c.api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{
+			ChannelID: dmChannelID,
+			Oldest:    oldest,
+			Cursor:    cursor,
+			Limit:     100,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("get conversation history: %w", err)
+		}
+
+		// Search for PR URL in bot's messages only
+		for i := range history.Messages {
+			msg := &history.Messages[i]
+			if msg.User == botInfo.UserID && strings.Contains(msg.Text, prURL) {
+				allLocations = append(allLocations, DMLocation{
+					ChannelID: dmChannelID,
+					MessageTS: msg.Timestamp,
+				})
+				slog.Debug("found DM in history",
+					"user", userID,
+					"pr", prURL,
+					"message_ts", msg.Timestamp)
+			}
+		}
+
+		// Check for more pages
+		if !history.HasMore {
+			break
+		}
+		cursor = history.ResponseMetaData.NextCursor
+	}
+
+	return allLocations, nil
 }
 
 // UserInfo gets user information including timezone with retry logic.

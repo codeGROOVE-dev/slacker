@@ -39,6 +39,7 @@ type MessageParams struct {
 	Author      string
 	HTMLURL     string
 	Domain      string
+	ChannelName string // Optional: if provided and matches Repo (case-insensitive), shows short form #123
 	UserMapper  UserMapper
 }
 
@@ -100,12 +101,18 @@ func FormatChannelMessageBase(ctx context.Context, params MessageParams) string 
 		slog.Info("using fallback emoji - no workflow_state or next_actions", "pr", prID, "emoji", emoji, "state_param", stateSuffix, "fallback_reason", "empty_workflow_state_and_next_actions")
 	}
 
-	return fmt.Sprintf("%s %s <%s|%s#%d> · %s",
+	// Determine PR reference format: if channel name matches repo (case-insensitive), use short form #123
+	prRef := fmt.Sprintf("%s#%d", params.Repo, params.PRNumber)
+	if params.ChannelName != "" && strings.EqualFold(params.ChannelName, params.Repo) {
+		prRef = fmt.Sprintf("#%d", params.PRNumber)
+	}
+
+	// Format: :emoji: <url|repo#123> · Title · author
+	return fmt.Sprintf("%s <%s|%s> · %s · %s",
 		emoji,
-		params.Title,
 		params.HTMLURL+stateSuffix,
-		params.Repo,
-		params.PRNumber,
+		prRef,
+		params.Title,
 		params.Author)
 }
 
@@ -451,7 +458,7 @@ func (m *Manager) sendDMNow(ctx context.Context, workspaceID, userID, channelID,
 		prefix = PrefixForState(pr.State)
 	}
 
-	// Format: :emoji: Title <url|repo#123> · author → action
+	// Format: :emoji: <url|repo#123> · Title · author → action
 	var action string
 	switch pr.State {
 	case "newly_published":
@@ -471,13 +478,12 @@ func (m *Manager) sendDMNow(ctx context.Context, workspaceID, userID, channelID,
 		}
 	}
 
-	message := fmt.Sprintf("%s %s <%s|%s/%s#%d>",
+	message := fmt.Sprintf("%s <%s|%s#%d> · %s",
 		prefix,
-		pr.Title,
 		pr.HTMLURL,
-		pr.Owner,
 		pr.Repo,
-		pr.Number)
+		pr.Number,
+		pr.Title)
 
 	if action != "" {
 		message += fmt.Sprintf(" · %s → %s", pr.Author, action)
@@ -906,14 +912,14 @@ func formatDMMessage(pr PRInfo) (message, action string) {
 		action = "attention needed"
 	}
 
-	// Format: :emoji: Title <url|repo#123> · author → action
+	// Format: :emoji: <url|repo#123> · Title · author → action
 	message = fmt.Sprintf(
-		"%s %s <%s|%s#%d> · %s → %s",
+		"%s <%s|%s#%d> · %s · %s → %s",
 		prefix,
-		pr.Title,
 		pr.HTMLURL,
 		pr.Repo,
 		pr.Number,
+		pr.Title,
 		pr.Author,
 		action,
 	)

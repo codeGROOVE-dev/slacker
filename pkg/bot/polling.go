@@ -5,10 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
+	"os"
 	"time"
 
-	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 	"github.com/codeGROOVE-dev/slacker/pkg/github"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
@@ -209,7 +208,14 @@ func (c *Coordinator) reconcilePR(ctx context.Context, pr *github.PRSnapshot) er
 	}
 
 	// Create turnclient to analyze PR state
-	turnClient, err := turn.NewDefaultClient()
+	// Allow test backend override for mocking in tests
+	var turnClient *turn.Client
+	var err error
+	if testBackend := os.Getenv("TURN_TEST_BACKEND"); testBackend != "" {
+		turnClient, err = turn.NewClient(testBackend)
+	} else {
+		turnClient, err = turn.NewDefaultClient()
+	}
 	if err != nil {
 		return fmt.Errorf("failed to create turnclient: %w", err)
 	}
@@ -291,143 +297,13 @@ func isChannelResolutionFailed(channelName, resolvedID string) bool {
 }
 
 // updateClosedPRThread updates Slack threads for a closed or merged PR.
+// Delegates to reconcilePR which handles turnclient checks and thread updates.
 func (c *Coordinator) updateClosedPRThread(ctx context.Context, pr *github.PRSnapshot) error {
-	prKey := formatPRIdentifier(pr.Owner, pr.Repo, pr.Number)
-	slog.Debug("updating thread for closed/merged PR",
-		"pr", prKey,
-		"state", pr.State)
-
-	channels := c.configManager.ChannelsForRepo(pr.Owner, pr.Repo)
-	if len(channels) == 0 {
-		slog.Debug("no channels configured for closed PR",
-			"pr", prKey,
-			"owner", pr.Owner,
-			"repo", pr.Repo)
-		return nil
-	}
-
-	updatedCount := 0
-	for _, ch := range channels {
-		id := c.slack.ResolveChannelID(ctx, ch)
-
-		// Check if channel resolution failed (returns original name if not found)
-		if isChannelResolutionFailed(ch, id) {
-			slog.Warn("could not resolve channel for closed PR thread update",
-				"workspace", c.workspaceName,
-				"pr", prKey,
-				"owner", pr.Owner,
-				"repo", pr.Repo,
-				"number", pr.Number,
-				"channel", ch,
-				"action_required", "verify channel exists and bot has access")
-			continue
-		}
-
-		info, ok := c.stateStore.Thread(ctx, pr.Owner, pr.Repo, pr.Number, id)
-		if !ok {
-			// Thread not in persistent storage - search channel history as fallback
-			// This handles cases where state was lost or thread created before persistence was added
-			slog.Debug("thread not in state store, searching channel history",
-				"pr", prKey,
-				"channel", ch,
-				"channel_id", id,
-				"pr_state", pr.State)
-
-			threadTS, messageText := c.searchForPRThread(ctx, id, pr.URL, pr.CreatedAt)
-			if threadTS == "" {
-				slog.Debug("no thread found in channel history for closed PR",
-					"pr", prKey,
-					"channel", ch,
-					"channel_id", id,
-					"pr_state", pr.State,
-					"pr_created_at", pr.CreatedAt,
-					"possible_reason", "PR closed before thread created or thread in different channel")
-				continue
-			}
-
-			// Found via channel history - reconstruct ThreadInfo
-			info = cache.ThreadInfo{
-				ThreadTS:    threadTS,
-				ChannelID:   id,
-				MessageText: messageText,
-				UpdatedAt:   time.Now(),
-			}
-
-			// Persist for future use (avoid redundant searches)
-			if err := c.stateStore.SaveThread(ctx, pr.Owner, pr.Repo, pr.Number, id, info); err != nil {
-				slog.Warn("failed to persist recovered thread",
-					"pr", prKey,
-					"error", err)
-			}
-
-			slog.Info("found thread via channel history search",
-				"pr", prKey,
-				"channel", ch,
-				"thread_ts", threadTS,
-				"message_preview", messageText[:min(len(messageText), 100)])
-		}
-
-		if err := c.updateThreadForClosedPR(ctx, pr, id, info); err != nil {
-			slog.Warn("failed to update thread for closed PR",
-				"pr", prKey,
-				"channel", ch,
-				"error", err)
-			continue
-		}
-
-		updatedCount++
-		slog.Info("updated thread for closed/merged PR",
-			"pr", prKey,
-			"state", pr.State,
-			"channel", ch,
-			"thread_ts", info.ThreadTS)
-	}
-
-	if updatedCount == 0 {
-		return errors.New("no threads found or updated for closed PR")
-	}
-
-	return nil
-}
-
-// emojiForPRState returns the appropriate emoji for a PR state.
-// This is a pure function that can be easily tested.
-func emojiForPRState(state string) (string, error) {
-	switch state {
-	case "MERGED":
-		return ":rocket:", nil
-	case "CLOSED":
-		return ":x:", nil
-	default:
-		return "", fmt.Errorf("unexpected PR state: %s", state)
-	}
-}
-
-// replaceEmojiPrefix replaces the emoji prefix in a message.
-// This is a pure function that can be easily tested.
-// Format: ":emoji: Title • repo#123 by @user".
-func replaceEmojiPrefix(text, newEmoji string) string {
-	i := strings.Index(text, " ")
-	if i == -1 {
-		return newEmoji + " " + text
-	}
-	return newEmoji + text[i:]
-}
-
-// updateThreadForClosedPR updates a single thread's message to reflect closed/merged state.
-func (c *Coordinator) updateThreadForClosedPR(ctx context.Context, pr *github.PRSnapshot, channelID string, info cache.ThreadInfo) error {
-	emoji, err := emojiForPRState(pr.State)
-	if err != nil {
-		return err
-	}
-
-	text := replaceEmojiPrefix(info.MessageText, emoji)
-
-	if err := c.slack.UpdateMessage(ctx, channelID, info.ThreadTS, text); err != nil {
-		return fmt.Errorf("failed to update message: %w", err)
-	}
-
-	return nil
+	// reconcilePR already does everything we need:
+	// - Calls turnclient to distinguish merged vs closed-but-not-merged
+	// - Updates all channel threads with correct emoji
+	// - Sends DM updates if needed
+	return c.reconcilePR(ctx, pr)
 }
 
 // shouldReconcilePR determines if a PR should be reconciled based on notification history.

@@ -65,7 +65,6 @@ func TestHandleCallback_MissingCode(t *testing.T) {
 
 // TestHandleCallback_ShortCode tests OAuth code logging with short value.
 func TestHandleCallback_ShortCode(t *testing.T) {
-	ctx := context.Background()
 	t.Parallel()
 
 	handler := &OAuthHandler{
@@ -208,7 +207,6 @@ func TestHandleCallback_MissingStateCookie(t *testing.T) {
 
 // TestHandleCallback_StateMatchSuccess tests successful state verification.
 func TestHandleCallback_StateMatchSuccess(t *testing.T) {
-	ctx := context.Background()
 	t.Parallel()
 
 	handler := &OAuthHandler{
@@ -243,7 +241,6 @@ func TestHandleCallback_StateMatchSuccess(t *testing.T) {
 
 // TestHandleCallback_CookieDeletion tests that state cookie is cleared after verification.
 func TestHandleCallback_CookieDeletion(t *testing.T) {
-	ctx := context.Background()
 	t.Parallel()
 
 	handler := &OAuthHandler{
@@ -299,7 +296,6 @@ func TestHandleCallback_CookieDeletion(t *testing.T) {
 
 // TestHandleCallback_NoStateParam tests direct installation without state.
 func TestHandleCallback_NoStateParam(t *testing.T) {
-	ctx := context.Background()
 	t.Parallel()
 
 	handler := &OAuthHandler{

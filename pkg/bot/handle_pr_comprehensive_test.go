@@ -272,7 +272,6 @@ func TestHandlePullRequestEventWithData_DuplicateBlockedUsers(t *testing.T) {
 
 // TestHandlePullRequestEventWithData_ExtractStateFromTurnclient tests state extraction.
 func TestHandlePullRequestEventWithData_ExtractStateFromTurnclient(t *testing.T) {
-
 	c := NewTestCoordinator().
 		WithState(NewMockState().Build()).
 		WithSlack(NewMockSlack().Build()).

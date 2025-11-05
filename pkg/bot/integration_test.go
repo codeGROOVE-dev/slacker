@@ -19,7 +19,6 @@ import (
 
 // TestUserMappingIntegration tests the complete flow of mapping GitHub users to Slack users.
 func TestUserMappingIntegration(t *testing.T) {
-
 	// Setup mock Slack server
 	mockSlack := slacktest.New()
 	defer mockSlack.Close()

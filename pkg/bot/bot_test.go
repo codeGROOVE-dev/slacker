@@ -3,11 +3,32 @@ package bot
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 	"github.com/slack-go/slack"
 )
+
+// TestMain sets up the test environment before running tests.
+func TestMain(m *testing.M) {
+	// Create a shared mock turnclient server for all tests
+	mockServer := mockTurnServer(&testing.T{})
+
+	// Set environment variable so all turnclient calls use the mock
+	if err := os.Setenv("TURN_TEST_BACKEND", mockServer.URL); err != nil {
+		panic("failed to set TURN_TEST_BACKEND: " + err.Error())
+	}
+
+	// Run tests
+	code := m.Run()
+
+	// Cleanup (before os.Exit to avoid exitAfterDefer lint error)
+	mockServer.Close()
+	_ = os.Unsetenv("TURN_TEST_BACKEND") //nolint:errcheck // Best effort cleanup
+
+	os.Exit(code)
+}
 
 func TestNew(t *testing.T) {
 	ctx := context.Background()

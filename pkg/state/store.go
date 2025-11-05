@@ -23,6 +23,7 @@ type DMInfo struct {
 	ChannelID   string    `json:"channel_id"`   // DM conversation channel ID
 	MessageTS   string    `json:"message_ts"`   // Message timestamp for updating
 	MessageText string    `json:"message_text"` // Current message text
+	LastState   string    `json:"last_state"`   // Last PR state we notified about (for idempotency)
 }
 
 // PendingDM represents a DM scheduled to be sent later.
