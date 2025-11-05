@@ -16,7 +16,6 @@ func TestNotifyUserRequiresDeeperMocking(t *testing.T) {
 
 // TestNotifyManagerRun tests the notification scheduler Run method.
 func TestNotifyManagerRun(t *testing.T) {
-	ctx := context.Background()
 	mockSlackMgr := &mockSlackManager{}
 	mockConfigMgr := &mockConfigManager{}
 

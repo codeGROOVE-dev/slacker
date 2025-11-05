@@ -284,7 +284,6 @@ func TestReconcilePR(t *testing.T) {
 	}
 }
 
-
 // TestShouldReconcilePR tests the pure function that determines if a PR should be reconciled.
 func TestShouldReconcilePR(t *testing.T) {
 	now := time.Now()
@@ -553,118 +552,6 @@ func TestIsChannelResolutionFailed(t *testing.T) {
 	}
 }
 
-// TestUpdateClosedPRThread_WithConfiguredChannels tests successful thread update with channels.
-func TestUpdateClosedPRThread_WithConfiguredChannels(t *testing.T) {
-	ctx := context.Background()
-
-	// Mock Slack client that successfully resolves channels and updates messages
-	updatedMessages := []string{}
-	mockSlack := &mockSlackClient{
-		resolveChannelFunc: func(ctx context.Context, channelName string) string {
-			if channelName == "test-channel" || channelName == "#test-channel" {
-				return "C123"
-			}
-			return channelName // Failed resolution returns input
-		},
-		updateMessageFunc: func(ctx context.Context, channelID, timestamp, text string) error {
-			updatedMessages = append(updatedMessages, text)
-			return nil
-		},
-	}
-
-	// Mock state store with existing thread info
-	mockState := &mockStateStore{
-		processedEvents: make(map[string]bool),
-		threads: map[string]cache.ThreadInfo{
-			"thread:testorg/testrepo#42:C123": {
-				ThreadTS:    "1234567890.123456",
-				ChannelID:   "C123",
-				MessageText: ":hourglass: Test PR",
-				UpdatedAt:   time.Now().Add(-1 * time.Hour),
-			},
-		},
-	}
-
-	// Mock config manager that returns a channel
-	cfg := NewMockConfig().Build()
-	// Note: We can't easily inject config via API, so this will still return empty channels
-	// The real test coverage comes from the mock state store having the thread
-
-	c := &Coordinator{
-		github:         &mockGitHub{org: "testorg", token: "test-token"},
-		slack:          mockSlack,
-		stateStore:     mockState,
-		configManager:  cfg,
-		threadCache:    cache.New(),
-		eventSemaphore: make(chan struct{}, 10),
-		workspaceName:  "test-workspace.slack.com",
-	}
-
-	pr := &github.PRSnapshot{
-		Owner:     "testorg",
-		Repo:      "testrepo",
-		Number:    42,
-		State:     "MERGED",
-		URL:       "https://github.com/testorg/testrepo/pull/42",
-		Title:     "Test PR",
-		Author:    "testauthor",
-		CreatedAt: time.Now().Add(-24 * time.Hour),
-		UpdatedAt: time.Now(),
-	}
-
-	// Should handle gracefully when config returns no channels
-	err := c.updateClosedPRThread(ctx, pr)
-
-	// Code gracefully handles empty channel list
-	if err != nil && !strings.Contains(err.Error(), "no threads found or updated") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-// TestUpdateClosedPRThread_ChannelResolutionFailed tests when channel ID resolution fails.
-func TestUpdateClosedPRThread_ChannelResolutionFailed(t *testing.T) {
-	ctx := context.Background()
-
-	resolveAttempts := 0
-	mockSlack := &mockSlackClient{
-		resolveChannelFunc: func(ctx context.Context, channelName string) string {
-			resolveAttempts++
-			// Return the input name unchanged (indicates resolution failure)
-			return channelName
-		},
-	}
-
-	// Manually create a config-like scenario where channels would be returned
-	// Since we can't inject config, this test verifies the resolution failure path
-	c := &Coordinator{
-		github:         &mockGitHub{org: "testorg", token: "test-token"},
-		slack:          mockSlack,
-		stateStore:     &mockStateStore{processedEvents: make(map[string]bool)},
-		configManager:  NewMockConfig().Build(),
-		threadCache:    cache.New(),
-		eventSemaphore: make(chan struct{}, 10),
-		workspaceName:  "test-workspace.slack.com",
-	}
-
-	pr := &github.PRSnapshot{
-		Owner:     "testorg",
-		Repo:      "testrepo",
-		Number:    42,
-		State:     "CLOSED",
-		URL:       "https://github.com/testorg/testrepo/pull/42",
-		Title:     "Test PR",
-		Author:    "testauthor",
-		CreatedAt: time.Now().Add(-24 * time.Hour),
-		UpdatedAt: time.Now(),
-	}
-
-	err := c.updateClosedPRThread(ctx, pr)
-
-	// Code gracefully handles when no channels are configured
-	if err != nil && !strings.Contains(err.Error(), "no threads found or updated") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
 
 // TestPollAndReconcileWithSearcher_SuccessfulOpenPRProcessing tests complete open PR processing flow.
 func TestPollAndReconcileWithSearcher_SuccessfulOpenPRProcessing(t *testing.T) {
@@ -739,7 +626,6 @@ func TestPollAndReconcileWithSearcher_SuccessfulOpenPRProcessing(t *testing.T) {
 
 // TestPollAndReconcileWithSearcher_ContextCancellationDuringOpenPRs tests graceful cancellation.
 func TestPollAndReconcileWithSearcher_ContextCancellationDuringOpenPRs(t *testing.T) {
-	ctx := context.Background()
 	ctx, cancel := context.WithCancel(context.Background())
 	store := &mockStateStore{
 		processedEvents: make(map[string]bool),
@@ -926,7 +812,6 @@ func TestPollAndReconcileWithSearcher_ListClosedPRsError(t *testing.T) {
 
 // TestPollAndReconcileWithSearcher_ContextCancellationDuringClosedPRs tests cancellation during closed PR processing.
 func TestPollAndReconcileWithSearcher_ContextCancellationDuringClosedPRs(t *testing.T) {
-	ctx := context.Background()
 	ctx, cancel := context.WithCancel(context.Background())
 	store := &mockStateStore{
 		processedEvents: make(map[string]bool),

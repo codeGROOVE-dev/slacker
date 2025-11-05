@@ -727,7 +727,6 @@ func TestService_FormatUserMentions_Empty(t *testing.T) {
 }
 
 func TestService_ContextCancellation(t *testing.T) {
-	ctx := context.Background()
 	service := &Service{
 		slackClient:  &MockSlackAPI{},
 		githubLookup: &MockGitHubLookup{},

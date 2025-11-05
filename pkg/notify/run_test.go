@@ -26,7 +26,6 @@ func (m *mockStore) RemovePendingDM(ctx context.Context, id string) error {
 
 // TestRun_CleanupTicker tests that Run calls Tracker.Cleanup periodically.
 func TestRun_CleanupTicker(t *testing.T) {
-	ctx := context.Background()
 	cleanupCalled := false
 
 	// Create a tracker that we can verify cleanup was called on
@@ -74,7 +73,6 @@ func TestRun_CleanupTicker(t *testing.T) {
 
 // TestRun_ContextCancellation tests that Run respects context cancellation.
 func TestRun_ContextCancellation(t *testing.T) {
-	ctx := context.Background()
 	mockSlackMgr := &mockSlackManager{}
 	mockConfigMgr := &mockConfigManager{}
 	mockSt := &mockStore{}
@@ -96,7 +94,6 @@ func TestRun_ContextCancellation(t *testing.T) {
 
 // TestRun_TickerFires tests that the main ticker fires.
 func TestRun_TickerFires(t *testing.T) {
-	ctx := context.Background()
 	mockSlackMgr := &mockSlackManager{}
 	mockConfigMgr := &mockConfigManager{}
 	mockSt := &mockStore{}

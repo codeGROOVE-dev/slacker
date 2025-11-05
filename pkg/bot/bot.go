@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +36,22 @@ type prContext struct {
 	Repo     string
 	State    string
 	Number   int
+}
+
+// messageUpdateParams groups parameters for message update operations.
+type messageUpdateParams struct {
+	CheckResult    *turn.CheckResponse
+	Event          any
+	ChannelID      string
+	ChannelName    string
+	ChannelDisplay string
+	ThreadTS       string
+	OldState       string
+	CurrentText    string
+	PRState        string
+	Owner          string
+	Repo           string
+	PRNumber       int
 }
 
 // Coordinator coordinates between GitHub, Slack, and notifications for a single org.
@@ -1066,12 +1083,12 @@ func (c *Coordinator) updateDMMessagesForPR(ctx context.Context, pr prUpdateInfo
 	}
 
 	message := fmt.Sprintf(
-		"%s %s <%s|%s#%d> · %s → %s",
+		"%s <%s|%s#%d> · %s · %s → %s",
 		prefix,
-		pr.title,
 		prURL,
 		repo,
 		prNumber,
+		pr.title,
 		pr.author,
 		action,
 	)
@@ -1361,7 +1378,20 @@ func (c *Coordinator) processPRForChannel(
 
 	// Update message if needed
 	if !wasNewlyCreated {
-		c.updateMessageIfNeeded(ctx, channelID, channelDisplay, threadTS, oldState, currentText, prState, owner, repo, prNumber, event, checkResult)
+		c.updateMessageIfNeeded(ctx, messageUpdateParams{
+			ChannelID:      channelID,
+			ChannelName:    channelName,
+			ChannelDisplay: channelDisplay,
+			ThreadTS:       threadTS,
+			OldState:       oldState,
+			CurrentText:    currentText,
+			PRState:        prState,
+			Owner:          owner,
+			Repo:           repo,
+			PRNumber:       prNumber,
+			Event:          event,
+			CheckResult:    checkResult,
+		})
 	}
 
 	slog.Info("successfully processed PR in channel",
@@ -1442,64 +1472,68 @@ func (c *Coordinator) trackUserTagsForDMDelay(
 }
 
 // updateMessageIfNeeded builds the expected message and updates if different from current.
-//
-//nolint:revive // Function complexity justified by comprehensive message update logic
-func (c *Coordinator) updateMessageIfNeeded(ctx context.Context, channelID, channelDisplay, threadTS, oldState, currentText, prState, owner, repo string, prNumber int, event struct {
-	Action      string `json:"action"`
-	PullRequest struct {
-		HTMLURL   string    `json:"html_url"`
-		Title     string    `json:"title"`
-		CreatedAt time.Time `json:"created_at"`
-		User      struct {
-			Login string `json:"login"`
-		} `json:"user"`
+func (c *Coordinator) updateMessageIfNeeded(ctx context.Context, params messageUpdateParams) {
+	event, ok := params.Event.(struct {
+		Action      string `json:"action"`
+		PullRequest struct {
+			HTMLURL   string    `json:"html_url"`
+			Title     string    `json:"title"`
+			CreatedAt time.Time `json:"created_at"`
+			User      struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			Number int `json:"number"`
+		} `json:"pull_request"`
 		Number int `json:"number"`
-	} `json:"pull_request"`
-	Number int `json:"number"`
-}, checkResult *turn.CheckResponse,
-) {
-	domain := c.configManager.Domain(owner)
-	params := notify.MessageParams{
-		CheckResult: checkResult,
-		Owner:       owner,
-		Repo:        repo,
-		PRNumber:    prNumber,
+	})
+	if !ok {
+		slog.Error("invalid event type in messageUpdateParams", "expected", "pull_request_event")
+		return
+	}
+
+	domain := c.configManager.Domain(params.Owner)
+	msgParams := notify.MessageParams{
+		CheckResult: params.CheckResult,
+		Owner:       params.Owner,
+		Repo:        params.Repo,
+		PRNumber:    params.PRNumber,
 		Title:       event.PullRequest.Title,
 		Author:      event.PullRequest.User.Login,
 		HTMLURL:     event.PullRequest.HTMLURL,
 		Domain:      domain,
+		ChannelName: params.ChannelName,
 		UserMapper:  c.userMapper,
 	}
-	expectedText := notify.FormatChannelMessageBase(ctx, params) + notify.FormatNextActionsSuffix(ctx, params)
+	expectedText := notify.FormatChannelMessageBase(ctx, msgParams) + notify.FormatNextActionsSuffix(ctx, msgParams)
 
-	if currentText == expectedText {
+	if params.CurrentText == expectedText {
 		slog.Debug("message already matches expected content, no update needed",
 			"workspace", c.workspaceName,
-			logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-			"channel", channelDisplay,
-			"thread_ts", threadTS,
-			"pr_state", prState)
+			logFieldPR, fmt.Sprintf(prFormatString, params.Owner, params.Repo, params.PRNumber),
+			"channel", params.ChannelDisplay,
+			"thread_ts", params.ThreadTS,
+			"pr_state", params.PRState)
 		return
 	}
 
 	slog.Info("updating message - content changed",
 		"workspace", c.workspaceName,
-		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-		"channel", channelDisplay,
-		"channel_id", channelID,
-		"thread_ts", threadTS,
-		"pr_state", prState,
-		"old_state", oldState,
-		"current_message_preview", currentText[:min(100, len(currentText))],
+		logFieldPR, fmt.Sprintf(prFormatString, params.Owner, params.Repo, params.PRNumber),
+		"channel", params.ChannelDisplay,
+		"channel_id", params.ChannelID,
+		"thread_ts", params.ThreadTS,
+		"pr_state", params.PRState,
+		"old_state", params.OldState,
+		"current_message_preview", params.CurrentText[:min(100, len(params.CurrentText))],
 		"expected_message_preview", expectedText[:min(100, len(expectedText))])
 
-	if err := c.slack.UpdateMessage(ctx, channelID, threadTS, expectedText); err != nil {
+	if err := c.slack.UpdateMessage(ctx, params.ChannelID, params.ThreadTS, expectedText); err != nil {
 		slog.Error("failed to update PR message",
 			"workspace", c.workspaceName,
-			logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-			"channel", channelDisplay,
-			"channel_id", channelID,
-			"thread_ts", threadTS,
+			logFieldPR, fmt.Sprintf(prFormatString, params.Owner, params.Repo, params.PRNumber),
+			"channel", params.ChannelDisplay,
+			"channel_id", params.ChannelID,
+			"thread_ts", params.ThreadTS,
 			"error", err,
 			"impact", "message_update_skipped_will_retry_via_polling",
 			"next_poll_in", "5m")
@@ -1507,30 +1541,30 @@ func (c *Coordinator) updateMessageIfNeeded(ctx context.Context, channelID, chan
 	}
 
 	// Save updated thread info
-	c.saveThread(ctx, owner, repo, prNumber, channelID, cache.ThreadInfo{
-		ThreadTS:    threadTS,
-		ChannelID:   channelID,
-		LastState:   prState,
+	c.saveThread(ctx, params.Owner, params.Repo, params.PRNumber, params.ChannelID, cache.ThreadInfo{
+		ThreadTS:    params.ThreadTS,
+		ChannelID:   params.ChannelID,
+		LastState:   params.PRState,
 		MessageText: expectedText,
 	})
 	slog.Info("successfully updated PR message",
 		"workspace", c.workspaceName,
-		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-		"channel", channelDisplay,
-		"channel_id", channelID,
-		"thread_ts", threadTS,
-		"pr_state", prState)
+		logFieldPR, fmt.Sprintf(prFormatString, params.Owner, params.Repo, params.PRNumber),
+		"channel", params.ChannelDisplay,
+		"channel_id", params.ChannelID,
+		"thread_ts", params.ThreadTS,
+		"pr_state", params.PRState)
 
 	// Also update DM messages for blocked users
 	c.updateDMMessagesForPR(ctx, prUpdateInfo{
-		owner:    owner,
-		repo:     repo,
-		number:   prNumber,
+		owner:    params.Owner,
+		repo:     params.Repo,
+		number:   params.PRNumber,
 		title:    event.PullRequest.Title,
 		author:   event.PullRequest.User.Login,
-		state:    prState,
+		state:    params.PRState,
 		url:      event.PullRequest.HTMLURL,
-		checkRes: checkResult,
+		checkRes: params.CheckResult,
 	})
 }
 
@@ -1554,8 +1588,14 @@ func (c *Coordinator) handlePullRequestFromSprinkler(
 		return
 	}
 
-	// Create and authenticate turnclient
-	turnClient, err := turn.NewDefaultClient()
+	// Create and authenticate turnclient (allow test backend override for mocking)
+	var turnClient *turn.Client
+	var err error
+	if testBackend := os.Getenv("TURN_TEST_BACKEND"); testBackend != "" {
+		turnClient, err = turn.NewClient(testBackend)
+	} else {
+		turnClient, err = turn.NewDefaultClient()
+	}
 	if err != nil {
 		slog.Error("failed to create turnclient",
 			logFieldOwner, owner,

@@ -767,7 +767,6 @@ func TestRefreshInstallations_SkipPersonalAccounts(t *testing.T) {
 }
 
 func TestRefreshInstallations_CanceledContext(t *testing.T) {
-	ctx := context.Background()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("failed to generate key: %v", err)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/codeGROOVE-dev/slacker/pkg/github"
@@ -207,7 +208,14 @@ func (c *Coordinator) reconcilePR(ctx context.Context, pr *github.PRSnapshot) er
 	}
 
 	// Create turnclient to analyze PR state
-	turnClient, err := turn.NewDefaultClient()
+	// Allow test backend override for mocking in tests
+	var turnClient *turn.Client
+	var err error
+	if testBackend := os.Getenv("TURN_TEST_BACKEND"); testBackend != "" {
+		turnClient, err = turn.NewClient(testBackend)
+	} else {
+		turnClient, err = turn.NewDefaultClient()
+	}
 	if err != nil {
 		return fmt.Errorf("failed to create turnclient: %w", err)
 	}

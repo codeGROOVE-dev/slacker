@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -131,8 +132,14 @@ func (c *Coordinator) lookupPRsForCheckEvent(ctx context.Context, event client.E
 		// Get GitHub token
 		githubToken := c.github.InstallationToken(ctx)
 		if githubToken != "" {
-			// Create turnclient
-			turnClient, tcErr := turn.NewDefaultClient()
+			// Create turnclient (allow test backend override for mocking)
+			var turnClient *turn.Client
+			var tcErr error
+			if testBackend := os.Getenv("TURN_TEST_BACKEND"); testBackend != "" {
+				turnClient, tcErr = turn.NewClient(testBackend)
+			} else {
+				turnClient, tcErr = turn.NewDefaultClient()
+			}
 			if tcErr == nil {
 				turnClient.SetAuthToken(githubToken)
 
