@@ -734,6 +734,25 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 		slog.Info("no users blocking PR - no notifications needed",
 			logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
 			"pr_state", prState)
+
+		// For merged/closed PRs, still update existing DMs even if no one is blocking
+		// This ensures users see the final state (🚀 merged or ❌ closed)
+		if prState == "merged" || prState == "closed" {
+			slog.Info("updating DMs for terminal PR state",
+				logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+				"pr_state", prState,
+				"reason", "terminal_state_update")
+			c.updateDMMessagesForPR(ctx, prUpdateInfo{
+				Owner:       owner,
+				Repo:        repo,
+				PRNumber:    prNumber,
+				PRTitle:     event.PullRequest.Title,
+				PRAuthor:    event.PullRequest.User.Login,
+				PRState:     prState,
+				PRURL:       event.PullRequest.HTMLURL,
+				CheckResult: checkResult,
+			})
+		}
 	}
 }
 
@@ -876,12 +895,18 @@ func (*Coordinator) getStateQueryParam(prState string) string {
 	}
 }
 
+// UserTagInfo contains information about a user who was tagged in PR notifications.
+type UserTagInfo struct {
+	UserID         string
+	IsInAnyChannel bool // True if user is member of at least one channel where they were tagged
+}
+
 // processChannelsInParallel processes multiple channels concurrently for better performance.
 // processChannelsInParallel processes PR notifications for multiple channels concurrently.
-// Returns a map of Slack user IDs that were successfully tagged in at least one channel.
+// Returns a map of Slack user IDs to tag info for users successfully tagged in at least one channel.
 func (c *Coordinator) processChannelsInParallel(
 	ctx context.Context, prCtx prContext, channels []string, workspaceID string,
-) map[string]bool {
+) map[string]UserTagInfo {
 	event, ok := prCtx.Event.(struct {
 		Action      string `json:"action"`
 		PullRequest struct {
@@ -951,7 +976,7 @@ func (c *Coordinator) processChannelsInParallel(
 
 	// Track which Slack users were successfully tagged across all channels
 	var taggedUsersMu sync.Mutex
-	taggedUsers := make(map[string]bool)
+	taggedUsers := make(map[string]UserTagInfo)
 
 	// Process channels in parallel for better performance
 	// Use WaitGroup instead of errgroup since we don't want one failure to cancel others
@@ -967,8 +992,18 @@ func (c *Coordinator) processChannelsInParallel(
 
 			// Merge tagged users from this channel into the overall set
 			taggedUsersMu.Lock()
-			for userID := range channelTaggedUsers {
-				taggedUsers[userID] = true
+			for userID, info := range channelTaggedUsers {
+				existing, exists := taggedUsers[userID]
+				if !exists {
+					// First time seeing this user
+					taggedUsers[userID] = info
+				} else {
+					// User already tagged in another channel - update IsInAnyChannel if this channel has them
+					if info.IsInAnyChannel {
+						existing.IsInAnyChannel = true
+						taggedUsers[userID] = existing
+					}
+				}
 			}
 			taggedUsersMu.Unlock()
 		}(channelName)
@@ -985,10 +1020,10 @@ func (c *Coordinator) processChannelsInParallel(
 }
 
 // processPRForChannel handles PR processing for a single channel (extracted from the main loop).
-// Returns a map of Slack user IDs that were successfully tagged in this channel.
+// Returns a map of Slack user IDs to UserTagInfo for users successfully tagged in this channel.
 func (c *Coordinator) processPRForChannel(
 	ctx context.Context, prCtx prContext, channelName, workspaceID string,
-) map[string]bool {
+) map[string]UserTagInfo {
 	owner, repo, prNumber, prState := prCtx.Owner, prCtx.Repo, prCtx.Number, prCtx.State
 	checkResult := prCtx.CheckRes
 	event, ok := prCtx.Event.(struct {
@@ -1145,11 +1180,12 @@ func (c *Coordinator) resolveAndValidateChannel(
 }
 
 // trackUserTagsForDMDelay tracks user tags in channel for DM delay logic.
+// Returns map of Slack user IDs to UserTagInfo with channel membership status.
 func (c *Coordinator) trackUserTagsForDMDelay(
 	ctx context.Context, workspaceID, channelID, channelDisplay, owner, repo string, prNumber int,
 	checkResult *turn.CheckResponse,
-) map[string]bool {
-	taggedUsers := make(map[string]bool)
+) map[string]UserTagInfo {
+	taggedUsers := make(map[string]UserTagInfo)
 	blockedUsers := c.extractBlockedUsersFromTurnclient(checkResult)
 	if len(blockedUsers) == 0 {
 		return taggedUsers
@@ -1166,13 +1202,22 @@ func (c *Coordinator) trackUserTagsForDMDelay(
 			if c.notifier != nil && c.notifier.Tracker != nil {
 				c.notifier.Tracker.UpdateUserPRChannelTag(workspaceID, slackUserID, channelID, owner, repo, prNumber)
 			}
-			taggedUsers[slackUserID] = true
+
+			// Check if user is member of this channel (for DM delay decision)
+			isInChannel := c.slack.IsUserInChannel(ctx, channelID, slackUserID)
+
+			taggedUsers[slackUserID] = UserTagInfo{
+				UserID:         slackUserID,
+				IsInAnyChannel: isInChannel,
+			}
+
 			slog.Debug("tracked user tag in channel",
 				"workspace", workspaceID,
 				"github_user", githubUser,
 				"slack_user", slackUserID,
 				"channel", channelDisplay,
 				"channel_id", channelID,
+				"is_in_channel", isInChannel,
 				"pr", fmt.Sprintf(prFormatString, owner, repo, prNumber))
 		}
 	}
