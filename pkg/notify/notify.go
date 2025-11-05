@@ -39,6 +39,7 @@ type MessageParams struct {
 	Author      string
 	HTMLURL     string
 	Domain      string
+	ChannelName string // Optional: if provided and matches Repo (case-insensitive), shows short form #123
 	UserMapper  UserMapper
 }
 
