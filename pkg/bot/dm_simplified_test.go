@@ -275,42 +275,33 @@ func TestShouldDelayNewDM_NoChannel(t *testing.T) {
 }
 
 // TestShouldDelayNewDM_UserNotInChannel verifies immediate send when user not in channel.
+// Channel membership is now determined by caller - empty channelID means user not in any channel.
 func TestShouldDelayNewDM_UserNotInChannel(t *testing.T) {
-	slack := &mockSlackClient{
-		isUserInChannelFunc: func(ctx context.Context, channelID, userID string) bool {
-			return false
-		},
-	}
 	config := &mockConfigManager{
 		dmDelay: 30,
 	}
 
 	c := &Coordinator{
-		slack:         slack,
 		configManager: config,
 		userMapper:    &mockUserMapper{},
 	}
 
-	shouldQueue, _ := c.shouldDelayNewDM(context.Background(), "U123", "C123", "general", "owner", "repo")
+	// Empty channelID signals user was not in any channel
+	shouldQueue, _ := c.shouldDelayNewDM(context.Background(), "U123", "", "general", "owner", "repo")
 
 	if shouldQueue {
-		t.Error("Expected shouldQueue=false when user not in channel")
+		t.Error("Expected shouldQueue=false when user not in channel (empty channelID)")
 	}
 }
 
 // TestShouldDelayNewDM_UserInChannel verifies delayed send when user is in channel.
+// Channel membership is now determined by caller - non-empty channelID means user was in a channel.
 func TestShouldDelayNewDM_UserInChannel(t *testing.T) {
-	slack := &mockSlackClient{
-		isUserInChannelFunc: func(ctx context.Context, channelID, userID string) bool {
-			return true
-		},
-	}
 	config := &mockConfigManager{
 		dmDelay: 30,
 	}
 
 	c := &Coordinator{
-		slack:         slack,
 		configManager: config,
 		userMapper:    &mockUserMapper{},
 	}
@@ -569,8 +560,9 @@ func TestUpdateDMMessagesForPR_NoUsers_Simplified(t *testing.T) {
 	}
 }
 
-// TestSendPRNotification_UpdateFailsFallbackToNew tests fallback to new DM when update fails.
-func TestSendPRNotification_UpdateFailsFallbackToNew(t *testing.T) {
+// TestSendPRNotification_UpdateFails tests that we skip sending duplicate when update fails.
+// This prevents duplicate DMs when Slack API is slow or history search fails.
+func TestSendPRNotification_UpdateFails(t *testing.T) {
 	store := &mockStateStore{
 		dmMessages: map[string]state.DMInfo{
 			"U123:https://github.com/owner/repo/pull/1": {
@@ -616,13 +608,14 @@ func TestSendPRNotification_UpdateFailsFallbackToNew(t *testing.T) {
 		t.Errorf("Expected no error, got: %v", err)
 	}
 
-	// Verify both UpdateMessage and SendDirectMessage were called
+	// Verify UpdateMessage was attempted
 	if len(slack.updatedMessages) == 0 {
 		t.Error("Expected UpdateMessage to be attempted")
 	}
 
-	if len(slack.sentDirectMessages) != 1 {
-		t.Fatal("Expected SendDirectMessage to be called as fallback")
+	// CRITICAL: No new DM should be sent to prevent duplicates
+	if len(slack.sentDirectMessages) != 0 {
+		t.Errorf("Expected no new DM when update fails (to prevent duplicates), got %d DMs", len(slack.sentDirectMessages))
 	}
 }
 
@@ -1246,5 +1239,120 @@ func TestSendPRNotification_QueuedDMBehaviorAcrossRestarts(t *testing.T) {
 	// No immediate DM should be sent
 	if len(slack.sentDirectMessages) != 0 {
 		t.Errorf("Expected no immediate DM (should update queued DM), got %d DMs", len(slack.sentDirectMessages))
+	}
+}
+
+// TestSendDMNotificationsToTaggedUsers_ChannelMembershipDecision tests that users
+// not in any channel get immediate DMs while users in channels get delayed DMs.
+func TestSendDMNotificationsToTaggedUsers_ChannelMembershipDecision(t *testing.T) {
+	store := &mockStateStore{}
+	slack := &mockSlackClient{}
+	config := &mockConfigManager{
+		dmDelay: 60, // 60 minute delay configured
+		domain:  "example.com",
+	}
+
+	c := &Coordinator{
+		stateStore:    store,
+		slack:         slack,
+		configManager: config,
+		userMapper:    &mockUserMapper{},
+	}
+
+	checkResult := newCheckResponse("awaiting_review")
+
+	taggedUsers := map[string]UserTagInfo{
+		"U123": {
+			UserID:         "U123",
+			IsInAnyChannel: false, // User NOT in any channel -> immediate
+		},
+		"U456": {
+			UserID:         "U456",
+			IsInAnyChannel: true, // User IS in a channel -> delayed
+		},
+	}
+
+	event := struct {
+		Action      string `json:"action"`
+		PullRequest struct {
+			HTMLURL   string    `json:"html_url"`
+			Title     string    `json:"title"`
+			CreatedAt time.Time `json:"created_at"`
+			User      struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			Number int `json:"number"`
+		} `json:"pull_request"`
+		Number int `json:"number"`
+	}{
+		Action: "opened",
+		PullRequest: struct {
+			HTMLURL   string    `json:"html_url"`
+			Title     string    `json:"title"`
+			CreatedAt time.Time `json:"created_at"`
+			User      struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			Number int `json:"number"`
+		}{
+			HTMLURL:   "https://github.com/owner/repo/pull/1",
+			Title:     "Test PR",
+			CreatedAt: time.Now(),
+			User: struct {
+				Login string `json:"login"`
+			}{
+				Login: "author",
+			},
+			Number: 1,
+		},
+		Number: 1,
+	}
+
+	c.sendDMNotificationsToTaggedUsers(
+		context.Background(),
+		"test-workspace",
+		"owner",
+		"repo",
+		1,
+		taggedUsers,
+		event,
+		checkResult,
+	)
+
+	// U123 (not in channel) should get immediate DM
+	foundImmediateDM := false
+	for _, msg := range slack.sentDirectMessages {
+		if msg.UserID == "U123" {
+			foundImmediateDM = true
+			break
+		}
+	}
+	if !foundImmediateDM {
+		t.Error("Expected immediate DM for user U123 (not in any channel)")
+	}
+
+	// U456 (in channel) should get queued DM
+	pendingDMs, err := store.PendingDMs(context.Background(), time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatal("Failed to get pending DMs:", err)
+	}
+
+	foundQueuedDM := false
+	for _, dm := range pendingDMs {
+		if dm.UserID == "U456" {
+			foundQueuedDM = true
+			break
+		}
+	}
+	if !foundQueuedDM {
+		t.Error("Expected queued DM for user U456 (in channel)")
+	}
+
+	// Verify exactly 1 immediate and 1 queued
+	if len(slack.sentDirectMessages) != 1 {
+		t.Errorf("Expected exactly 1 immediate DM, got %d", len(slack.sentDirectMessages))
+	}
+	if len(pendingDMs) != 1 {
+		t.Errorf("Expected exactly 1 queued DM, got %d", len(pendingDMs))
 	}
 }
