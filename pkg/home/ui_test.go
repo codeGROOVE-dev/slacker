@@ -143,13 +143,13 @@ func TestBuildBlocks(t *testing.T) {
 				foundBlockedPR := false
 				for _, block := range blocks {
 					if sb, ok := block.(*slack.SectionBlock); ok {
-						if sb.Text != nil && strings.Contains(sb.Text.Text, ":red_circle:") {
+						if sb.Text != nil && strings.Contains(sb.Text.Text, ":large_red_circle:") {
 							foundBlockedPR = true
 						}
 					}
 				}
 				if !foundBlockedPR {
-					t.Error("expected PR with :red_circle: indicating blocked incoming PR")
+					t.Error("expected PR with :large_red_circle: indicating blocked incoming PR")
 				}
 			},
 		},
@@ -195,13 +195,13 @@ func TestBuildBlocks(t *testing.T) {
 				foundBlocked := false
 				for _, block := range blocks {
 					if sb, ok := block.(*slack.SectionBlock); ok {
-						if sb.Text != nil && strings.Contains(sb.Text.Text, ":green_circle:") {
+						if sb.Text != nil && strings.Contains(sb.Text.Text, ":large_green_circle:") {
 							foundBlocked = true
 						}
 					}
 				}
 				if !foundBlocked {
-					t.Error("expected PR with :green_circle: for blocked outgoing PR")
+					t.Error("expected PR with :large_green_circle: for blocked outgoing PR")
 				}
 			},
 		},
@@ -410,10 +410,10 @@ func TestBuildPRSections_SortOrder(t *testing.T) {
 	}
 
 	// Verify color indicators
-	if !strings.Contains(incomingText, ":red_circle:") {
-		t.Error("incoming blocked PRs should use :red_circle:")
+	if !strings.Contains(incomingText, ":large_red_circle:") {
+		t.Error("incoming blocked PRs should use :large_red_circle:")
 	}
-	if !strings.Contains(outgoingText, ":green_circle:") {
-		t.Error("outgoing blocked PRs should use :green_circle:")
+	if !strings.Contains(outgoingText, ":large_green_circle:") {
+		t.Error("outgoing blocked PRs should use :large_green_circle:")
 	}
 }
