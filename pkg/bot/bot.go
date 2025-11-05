@@ -59,19 +59,21 @@ type messageUpdateParams struct {
 //
 //nolint:govet // Field order optimized for logical grouping over memory alignment
 type Coordinator struct {
-	processingEvents sync.WaitGroup // Tracks in-flight event processing for graceful shutdown
-	stateStore       StateStore     // Persistent state across restarts
-	sprinklerURL     string
-	workspaceName    string // Track workspace name for better logging
-	slack            SlackClient
-	github           GitHubClient
-	configManager    ConfigManager
-	notifier         *notify.Manager
-	userMapper       UserMapper
-	threadCache      *cache.ThreadCache   // In-memory cache for fast lookups
-	commitPRCache    *cache.CommitPRCache // Maps commit SHAs to PR numbers for check events
-	eventSemaphore   chan struct{}        // Limits concurrent event processing (prevents overwhelming APIs)
-	dmLocks          sync.Map             // Per-user-PR locks to prevent duplicate DMs (key: "userID:prURL")
+	processingEvents   sync.WaitGroup // Tracks in-flight event processing for graceful shutdown
+	stateStore         StateStore     // Persistent state across restarts
+	sprinklerURL       string
+	workspaceName      string // Track workspace name for better logging
+	slack              SlackClient
+	github             GitHubClient
+	configManager      ConfigManager
+	notifier           *notify.Manager
+	userMapper         UserMapper
+	threadCache        *cache.ThreadCache   // In-memory cache for fast lookups
+	commitPRCache      *cache.CommitPRCache // Maps commit SHAs to PR numbers for check events
+	eventSemaphore     chan struct{}        // Limits concurrent event processing (prevents overwhelming APIs)
+	dmLocks            sync.Map             // Per-user-PR locks to prevent duplicate DMs (key: "userID:prURL")
+	recentUpdateLogsMu sync.Mutex           // Protects recentUpdateLogs map
+	recentUpdateLogs   map[string]time.Time // Tracks recent "updating message" logs to prevent spam (key: "channelID:threadTS:state")
 }
 
 // StateStore interface for persistent state - allows dependency injection for testing.
@@ -111,16 +113,17 @@ func New(
 	stateStore StateStore,
 ) *Coordinator {
 	c := &Coordinator{
-		slack:          slackClient,
-		github:         githubClient,
-		configManager:  configManager,
-		notifier:       notifier,
-		userMapper:     usermapping.New(slackClient.API(), githubClient.InstallationToken(ctx)),
-		sprinklerURL:   sprinklerURL,
-		stateStore:     stateStore,
-		threadCache:    cache.New(),
-		commitPRCache:  cache.NewCommitPRCache(),
-		eventSemaphore: make(chan struct{}, 10), // Allow 10 concurrent events per org
+		slack:            slackClient,
+		github:           githubClient,
+		configManager:    configManager,
+		notifier:         notifier,
+		userMapper:       usermapping.New(slackClient.API(), githubClient.InstallationToken(ctx)),
+		sprinklerURL:     sprinklerURL,
+		stateStore:       stateStore,
+		threadCache:      cache.New(),
+		commitPRCache:    cache.NewCommitPRCache(),
+		eventSemaphore:   make(chan struct{}, 10), // Allow 10 concurrent events per org
+		recentUpdateLogs: make(map[string]time.Time),
 	}
 
 	// Set GitHub client in config manager for this org.
@@ -569,7 +572,7 @@ func (c *Coordinator) processEvent(ctx context.Context, msg SprinklerMessage) er
 	case "check_run", "check_suite":
 		// Check events update PR test status - handle like pull_request events
 		if msg.PRNumber > 0 {
-			slog.Info("received check event for PR, refreshing state",
+			slog.Debug("received check event for PR, refreshing state",
 				"owner", owner,
 				"repo", repo,
 				"pr", msg.PRNumber,
@@ -616,7 +619,7 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 ) {
 	prNumber := event.Number
 
-	slog.Info("PR event with pre-fetched data",
+	slog.Debug("PR event with pre-fetched data",
 		logFieldOwner, owner,
 		logFieldRepo, repo,
 		"number", prNumber,
@@ -997,12 +1000,10 @@ func (c *Coordinator) processChannelsInParallel(
 				if !exists {
 					// First time seeing this user
 					taggedUsers[userID] = info
-				} else {
+				} else if info.IsInAnyChannel {
 					// User already tagged in another channel - update IsInAnyChannel if this channel has them
-					if info.IsInAnyChannel {
-						existing.IsInAnyChannel = true
-						taggedUsers[userID] = existing
-					}
+					existing.IsInAnyChannel = true
+					taggedUsers[userID] = existing
 				}
 			}
 			taggedUsersMu.Unlock()
@@ -1270,16 +1271,44 @@ func (c *Coordinator) updateMessageIfNeeded(ctx context.Context, params messageU
 		return
 	}
 
-	slog.Info("updating message - content changed",
-		"workspace", c.workspaceName,
-		logFieldPR, fmt.Sprintf(prFormatString, params.Owner, params.Repo, params.PRNumber),
-		"channel", params.ChannelDisplay,
-		"channel_id", params.ChannelID,
-		"thread_ts", params.ThreadTS,
-		"pr_state", params.PRState,
-		"old_state", params.OldState,
-		"current_message_preview", params.CurrentText[:min(100, len(params.CurrentText))],
-		"expected_message_preview", expectedText[:min(100, len(expectedText))])
+	// Deduplicate "updating message" logs within 1 second to reduce noise from concurrent events
+	logKey := fmt.Sprintf("%s:%s:%s", params.ChannelID, params.ThreadTS, params.PRState)
+	shouldLog := true // Default to logging if map not initialized
+	if c.recentUpdateLogs != nil {
+		c.recentUpdateLogsMu.Lock()
+		if lastLogged, exists := c.recentUpdateLogs[logKey]; !exists || time.Since(lastLogged) > time.Second {
+			c.recentUpdateLogs[logKey] = time.Now()
+			shouldLog = true
+			// Clean up old entries (older than 5 seconds) to prevent memory leak
+			for key, timestamp := range c.recentUpdateLogs {
+				if time.Since(timestamp) > 5*time.Second {
+					delete(c.recentUpdateLogs, key)
+				}
+			}
+		} else {
+			shouldLog = false
+		}
+		c.recentUpdateLogsMu.Unlock()
+	}
+
+	if shouldLog {
+		slog.Info("updating message - content changed",
+			"workspace", c.workspaceName,
+			logFieldPR, fmt.Sprintf(prFormatString, params.Owner, params.Repo, params.PRNumber),
+			"channel", params.ChannelDisplay,
+			"channel_id", params.ChannelID,
+			"thread_ts", params.ThreadTS,
+			"pr_state", params.PRState,
+			"old_state", params.OldState,
+			"current_message_preview", params.CurrentText[:min(100, len(params.CurrentText))],
+			"expected_message_preview", expectedText[:min(100, len(expectedText))])
+	} else {
+		slog.Debug("suppressing duplicate 'updating message' log (within 1s)",
+			"workspace", c.workspaceName,
+			logFieldPR, fmt.Sprintf(prFormatString, params.Owner, params.Repo, params.PRNumber),
+			"channel", params.ChannelDisplay,
+			"pr_state", params.PRState)
+	}
 
 	if err := c.slack.UpdateMessage(ctx, params.ChannelID, params.ThreadTS, expectedText); err != nil {
 		slog.Error("failed to update PR message",
@@ -1326,7 +1355,7 @@ func (c *Coordinator) updateMessageIfNeeded(ctx context.Context, params messageU
 func (c *Coordinator) handlePullRequestFromSprinkler(
 	ctx context.Context, owner, repo string, prNumber int, sprinklerURL string, eventTimestamp time.Time,
 ) {
-	slog.Info("handling PR event from sprinkler using turnclient",
+	slog.Debug("handling PR event from sprinkler using turnclient",
 		logFieldOwner, owner,
 		logFieldRepo, repo,
 		"pr_number", prNumber,

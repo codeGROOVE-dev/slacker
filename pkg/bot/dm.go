@@ -346,7 +346,7 @@ func (c *Coordinator) findDMInHistory(ctx context.Context, userID, prURL string)
 // Returns (shouldQueue bool, sendAfter time.Time).
 // Channel membership is determined by caller - if channelID is non-empty, user was in at least one channel.
 func (c *Coordinator) shouldDelayNewDM(
-	ctx context.Context,
+	_ context.Context,
 	userID, channelID, channelName string,
 	owner, _ string,
 ) (bool, time.Time) {
@@ -526,7 +526,7 @@ func (c *Coordinator) sendDMNotificationsToTaggedUsers(
 		err := c.sendPRNotification(ctx, dmNotificationRequest{
 			UserID:      userInfo.UserID,
 			ChannelID:   channelID, // "delay" or empty based on channel membership
-			ChannelName: "", // not used
+			ChannelName: "",        // not used
 			Owner:       owner,
 			Repo:        repo,
 			PRNumber:    prNumber,

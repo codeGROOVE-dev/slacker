@@ -90,13 +90,10 @@ func main() {
 		AddSource: true,
 		Level:     slog.LevelInfo,
 		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
-			// Shorten source paths to relative paths for cleaner logs
+			// Use basename for source file for cleaner logs
 			if a.Key == slog.SourceKey {
 				if source, ok := a.Value.Any().(*slog.Source); ok {
-					// Find project root by looking for /slacker/ in path
-					if idx := strings.LastIndex(source.File, "/slacker/"); idx >= 0 {
-						source.File = source.File[idx+9:] // Skip "/slacker/"
-					}
+					source.File = filepath.Base(source.File)
 				}
 			}
 			return a
