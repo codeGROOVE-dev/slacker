@@ -140,9 +140,9 @@ func BuildPRSections(incoming, outgoing []PR) []slack.Block {
 			var indicator string
 			switch {
 			case prs[i].NeedsReview:
-				indicator = ":red_circle:"
+				indicator = ":large_red_circle:"
 			case prs[i].IsBlocked:
-				indicator = ":red_circle:"
+				indicator = ":large_red_circle:"
 			case prs[i].ActionKind != "":
 				indicator = ":speech_balloon:"
 			default:
@@ -207,9 +207,9 @@ func BuildPRSections(incoming, outgoing []PR) []slack.Block {
 			var indicator string
 			switch {
 			case prs[i].NeedsReview:
-				indicator = ":green_circle:"
+				indicator = ":large_green_circle:"
 			case prs[i].IsBlocked:
-				indicator = ":green_circle:"
+				indicator = ":large_green_circle:"
 			case prs[i].ActionKind != "":
 				indicator = ":speech_balloon:"
 			default:
