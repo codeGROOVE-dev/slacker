@@ -110,10 +110,15 @@ func BuildPRSections(incoming, outgoing []PR) []slack.Block {
 
 	// Incoming PRs section
 	if len(incoming) > 0 {
-		// Sort by most recent first
+		// Sort: blocked first, then by most recent within each group
 		prs := make([]PR, len(incoming))
 		copy(prs, incoming)
 		sort.Slice(prs, func(i, j int) bool {
+			iBlocked := prs[i].IsBlocked || prs[i].NeedsReview
+			jBlocked := prs[j].IsBlocked || prs[j].NeedsReview
+			if iBlocked != jBlocked {
+				return iBlocked // blocked items first
+			}
 			return prs[i].UpdatedAt.After(prs[j].UpdatedAt)
 		})
 
@@ -135,13 +140,13 @@ func BuildPRSections(incoming, outgoing []PR) []slack.Block {
 			var indicator string
 			switch {
 			case prs[i].NeedsReview:
-				indicator = ":green_square:"
+				indicator = ":large_red_square:"
 			case prs[i].IsBlocked:
 				indicator = ":large_red_square:"
 			case prs[i].ActionKind != "":
 				indicator = ":speech_balloon:"
 			default:
-				indicator = "•"
+				indicator = ":white_small_square:"
 			}
 
 			// Build line
@@ -172,10 +177,15 @@ func BuildPRSections(incoming, outgoing []PR) []slack.Block {
 
 	// Outgoing PRs section
 	if len(outgoing) > 0 {
-		// Sort by most recent first
+		// Sort: blocked first, then by most recent within each group
 		prs := make([]PR, len(outgoing))
 		copy(prs, outgoing)
 		sort.Slice(prs, func(i, j int) bool {
+			iBlocked := prs[i].IsBlocked
+			jBlocked := prs[j].IsBlocked
+			if iBlocked != jBlocked {
+				return iBlocked // blocked items first
+			}
 			return prs[i].UpdatedAt.After(prs[j].UpdatedAt)
 		})
 
@@ -197,13 +207,13 @@ func BuildPRSections(incoming, outgoing []PR) []slack.Block {
 			var indicator string
 			switch {
 			case prs[i].NeedsReview:
-				indicator = ":green_square:"
+				indicator = ":large_green_square:"
 			case prs[i].IsBlocked:
-				indicator = ":large_red_square:"
+				indicator = ":large_green_square:"
 			case prs[i].ActionKind != "":
 				indicator = ":speech_balloon:"
 			default:
-				indicator = "•"
+				indicator = ":white_small_square:"
 			}
 
 			// Build line

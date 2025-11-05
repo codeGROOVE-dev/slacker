@@ -139,17 +139,17 @@ func TestBuildBlocks(t *testing.T) {
 					t.Error("expected 'blocked on you' message in header")
 				}
 
-				// Should have PR with green square (incoming blocked indicator)
+				// Should have PR with large red square (incoming blocked indicator)
 				foundBlockedPR := false
 				for _, block := range blocks {
 					if sb, ok := block.(*slack.SectionBlock); ok {
-						if sb.Text != nil && strings.Contains(sb.Text.Text, ":green_square:") {
+						if sb.Text != nil && strings.Contains(sb.Text.Text, ":large_red_square:") {
 							foundBlockedPR = true
 						}
 					}
 				}
 				if !foundBlockedPR {
-					t.Error("expected PR with :green_square: indicating blocked incoming PR")
+					t.Error("expected PR with :large_red_square: indicating blocked incoming PR")
 				}
 			},
 		},
@@ -191,17 +191,17 @@ func TestBuildBlocks(t *testing.T) {
 					t.Error("expected 'Outgoing' section")
 				}
 
-				// Should have PR with red square (outgoing blocked indicator)
+				// Should have PR with large green square (outgoing blocked indicator)
 				foundBlocked := false
 				for _, block := range blocks {
 					if sb, ok := block.(*slack.SectionBlock); ok {
-						if sb.Text != nil && strings.Contains(sb.Text.Text, ":large_red_square:") {
+						if sb.Text != nil && strings.Contains(sb.Text.Text, ":large_green_square:") {
 							foundBlocked = true
 						}
 					}
 				}
 				if !foundBlocked {
-					t.Error("expected PR with :large_red_square: for blocked outgoing PR")
+					t.Error("expected PR with :large_green_square: for blocked outgoing PR")
 				}
 			},
 		},
@@ -308,5 +308,112 @@ func TestBuildBlocks_DividersBetweenSections(t *testing.T) {
 	// PR sections flow together without dividers between them
 	if dividerCount < 2 {
 		t.Errorf("expected at least 2 dividers, got %d", dividerCount)
+	}
+}
+
+// TestBuildPRSections_SortOrder verifies blocked PRs appear first, then by recency.
+func TestBuildPRSections_SortOrder(t *testing.T) {
+	baseTime := time.Now()
+
+	// Create incoming PRs with mixed blocked/unblocked and timestamps
+	incoming := []PR{
+		{Number: 1, Title: "Oldest non-blocked", Repository: "org/repo", URL: "https://github.com/org/repo/pull/1", UpdatedAt: baseTime.Add(-4 * time.Hour), NeedsReview: false},
+		{Number: 2, Title: "Newest blocked", Repository: "org/repo", URL: "https://github.com/org/repo/pull/2", UpdatedAt: baseTime.Add(-1 * time.Hour), NeedsReview: true},
+		{Number: 3, Title: "Middle non-blocked", Repository: "org/repo", URL: "https://github.com/org/repo/pull/3", UpdatedAt: baseTime.Add(-2 * time.Hour), NeedsReview: false},
+		{Number: 4, Title: "Oldest blocked", Repository: "org/repo", URL: "https://github.com/org/repo/pull/4", UpdatedAt: baseTime.Add(-5 * time.Hour), NeedsReview: true},
+	}
+
+	// Create outgoing PRs with mixed blocked/unblocked and timestamps
+	outgoing := []PR{
+		{Number: 5, Title: "Middle non-blocked out", Repository: "org/repo", URL: "https://github.com/org/repo/pull/5", UpdatedAt: baseTime.Add(-3 * time.Hour), IsBlocked: false},
+		{Number: 6, Title: "Newest blocked out", Repository: "org/repo", URL: "https://github.com/org/repo/pull/6", UpdatedAt: baseTime.Add(-1 * time.Hour), IsBlocked: true},
+		{Number: 7, Title: "Oldest blocked out", Repository: "org/repo", URL: "https://github.com/org/repo/pull/7", UpdatedAt: baseTime.Add(-6 * time.Hour), IsBlocked: true},
+		{Number: 8, Title: "Newest non-blocked out", Repository: "org/repo", URL: "https://github.com/org/repo/pull/8", UpdatedAt: baseTime.Add(-2 * time.Hour), IsBlocked: false},
+	}
+
+	blocks := BuildPRSections(incoming, outgoing)
+
+	// Should have 2 blocks (incoming and outgoing sections)
+	if len(blocks) != 2 {
+		t.Fatalf("expected 2 blocks, got %d", len(blocks))
+	}
+
+	// Check incoming section order
+	incomingBlock, ok := blocks[0].(*slack.SectionBlock)
+	if !ok {
+		t.Fatal("expected first block to be SectionBlock")
+	}
+	incomingText := incomingBlock.Text.Text
+
+	// Verify blocked PRs appear before non-blocked
+	// Expected order: PR#2 (newest blocked), PR#4 (oldest blocked), PR#3 (middle non-blocked), PR#1 (oldest non-blocked)
+	idx2 := strings.Index(incomingText, "repo#2")
+	idx4 := strings.Index(incomingText, "repo#4")
+	idx3 := strings.Index(incomingText, "repo#3")
+	idx1 := strings.Index(incomingText, "repo#1")
+
+	if idx2 < 0 || idx4 < 0 || idx3 < 0 || idx1 < 0 {
+		t.Fatal("not all incoming PRs found in output")
+	}
+
+	// Blocked PRs (2, 4) should come before non-blocked PRs (3, 1)
+	if idx2 > idx3 || idx2 > idx1 {
+		t.Error("blocked PR#2 should appear before non-blocked PRs")
+	}
+	if idx4 > idx3 || idx4 > idx1 {
+		t.Error("blocked PR#4 should appear before non-blocked PRs")
+	}
+
+	// Within blocked group: PR#2 (newer) should come before PR#4 (older)
+	if idx2 > idx4 {
+		t.Error("newer blocked PR#2 should appear before older blocked PR#4")
+	}
+
+	// Within non-blocked group: PR#3 (newer) should come before PR#1 (older)
+	if idx3 > idx1 {
+		t.Error("newer non-blocked PR#3 should appear before older non-blocked PR#1")
+	}
+
+	// Check outgoing section order
+	outgoingBlock, ok := blocks[1].(*slack.SectionBlock)
+	if !ok {
+		t.Fatal("expected second block to be SectionBlock")
+	}
+	outgoingText := outgoingBlock.Text.Text
+
+	// Expected order: PR#6 (newest blocked), PR#7 (oldest blocked), PR#8 (newest non-blocked), PR#5 (middle non-blocked)
+	idx6 := strings.Index(outgoingText, "repo#6")
+	idx7 := strings.Index(outgoingText, "repo#7")
+	idx8 := strings.Index(outgoingText, "repo#8")
+	idx5 := strings.Index(outgoingText, "repo#5")
+
+	if idx6 < 0 || idx7 < 0 || idx8 < 0 || idx5 < 0 {
+		t.Fatal("not all outgoing PRs found in output")
+	}
+
+	// Blocked PRs (6, 7) should come before non-blocked PRs (8, 5)
+	if idx6 > idx8 || idx6 > idx5 {
+		t.Error("blocked PR#6 should appear before non-blocked PRs")
+	}
+	if idx7 > idx8 || idx7 > idx5 {
+		t.Error("blocked PR#7 should appear before non-blocked PRs")
+	}
+
+	// Within blocked group: PR#6 (newer) should come before PR#7 (older)
+	if idx6 > idx7 {
+		t.Error("newer blocked PR#6 should appear before older blocked PR#7")
+	}
+
+	// Within non-blocked group: PR#8 (newer) should come before PR#5 (older)
+	if idx8 > idx5 {
+		t.Error("newer non-blocked PR#8 should appear before older non-blocked PR#5")
+	}
+
+	// Verify color indicators
+	if !strings.Contains(incomingText, ":large_red_square:") {
+		t.Error("incoming blocked PRs should use :large_red_square:")
+	}
+	if !strings.Contains(outgoingText, ":large_green_square:") {
+		t.Error("outgoing blocked PRs should use :large_green_square:")
 	}
 }
