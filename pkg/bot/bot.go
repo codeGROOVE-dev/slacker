@@ -71,6 +71,7 @@ type Coordinator struct {
 	threadCache      *cache.ThreadCache   // In-memory cache for fast lookups
 	commitPRCache    *cache.CommitPRCache // Maps commit SHAs to PR numbers for check events
 	eventSemaphore   chan struct{}        // Limits concurrent event processing (prevents overwhelming APIs)
+	dmLocks          sync.Map             // Per-user-PR locks to prevent duplicate DMs (key: "userID:prURL")
 }
 
 // StateStore interface for persistent state - allows dependency injection for testing.

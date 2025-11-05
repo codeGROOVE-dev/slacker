@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/codeGROOVE-dev/slacker/pkg/notify"
@@ -32,12 +33,21 @@ type dmNotificationRequest struct {
 // Updates to existing DMs happen immediately (no delay).
 // New DMs respect reminder_dm_delay (queue for later if user in channel).
 func (c *Coordinator) sendPRNotification(ctx context.Context, req dmNotificationRequest) error {
+	// Lock per user+PR to prevent concurrent goroutines from sending duplicate DMs
+	lockKey := req.UserID + ":" + req.PRURL
+	lockValue, _ := c.dmLocks.LoadOrStore(lockKey, &sync.Mutex{})
+	mu := lockValue.(*sync.Mutex) //nolint:errcheck,revive // Type assertion always succeeds - we control what's stored
+	mu.Lock()
+	defer mu.Unlock()
+
 	prState := derivePRState(req.CheckResult)
 
 	// Get last notification from datastore
 	lastNotif, exists := c.stateStore.DMMessage(ctx, req.UserID, req.PRURL)
 
 	// Idempotency: skip if state unchanged
+	// The per-user-PR lock above ensures no race conditions from concurrent calls
+	// This check ensures we only send/update when the PR state actually changes
 	if exists && lastNotif.LastState == prState {
 		slog.Debug("DM skipped - state unchanged",
 			"user", req.UserID,
@@ -282,7 +292,28 @@ func (c *Coordinator) queueDMForUser(ctx context.Context, req dmNotificationRequ
 	}
 
 	// Queue to state store - the notify scheduler will process it
-	return c.stateStore.QueuePendingDM(ctx, dm)
+	if err := c.stateStore.QueuePendingDM(ctx, dm); err != nil {
+		return err
+	}
+
+	// Save DM state immediately (with placeholder) so subsequent updates know about it
+	// This prevents duplicate DMs when multiple webhook events arrive concurrently
+	now := time.Now()
+	if err := c.stateStore.SaveDMMessage(ctx, req.UserID, req.PRURL, state.DMInfo{
+		SentAt:      now,
+		UpdatedAt:   now,
+		ChannelID:   "", // Will be filled in when actually sent
+		MessageTS:   "", // Will be filled in when actually sent
+		MessageText: "",
+		LastState:   prState,
+	}); err != nil {
+		slog.Warn("failed to save DM state after queueing",
+			"user", req.UserID,
+			"pr", req.PRURL,
+			"error", err)
+	}
+
+	return nil
 }
 
 // generateUUID creates a simple UUID for pending DM tracking.

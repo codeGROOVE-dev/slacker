@@ -701,3 +701,248 @@ func TestSendDMNotificationsToBlockedUsers(t *testing.T) {
 		t.Error("Expected DMs sent to U111 and U222")
 	}
 }
+
+// TestSendPRNotification_ConcurrentCallsNoDuplicates tests that concurrent calls don't send duplicate DMs.
+func TestSendPRNotification_ConcurrentCallsNoDuplicates(t *testing.T) {
+	store := &mockStateStore{}
+	slack := &mockSlackClient{}
+	config := &mockConfigManager{
+		dmDelay: 0, // No delay for simplicity
+	}
+
+	c := &Coordinator{
+		stateStore:    store,
+		slack:         slack,
+		configManager: config,
+		userMapper:    &mockUserMapper{},
+	}
+
+	checkResult := newCheckResponse("awaiting_review")
+	req := dmNotificationRequest{
+		CheckResult: checkResult,
+		UserID:      "U123",
+		ChannelID:   "",
+		ChannelName: "",
+		Owner:       "owner",
+		Repo:        "repo",
+		PRNumber:    1,
+		PRTitle:     "Test PR",
+		PRAuthor:    "author",
+		PRURL:       "https://github.com/owner/repo/pull/1",
+	}
+
+	// Call sendPRNotification multiple times concurrently (simulating concurrent webhook events)
+	const concurrentCalls = 10
+	errChan := make(chan error, concurrentCalls)
+
+	for range concurrentCalls {
+		go func() {
+			errChan <- c.sendPRNotification(context.Background(), req)
+		}()
+	}
+
+	// Collect errors
+	for range concurrentCalls {
+		if err := <-errChan; err != nil {
+			t.Errorf("Unexpected error from concurrent call: %v", err)
+		}
+	}
+
+	// Verify only ONE DM was actually sent (not 10!)
+	if len(slack.sentDirectMessages) != 1 {
+		t.Errorf("Expected exactly 1 DM sent despite %d concurrent calls, got %d", concurrentCalls, len(slack.sentDirectMessages))
+	}
+}
+
+// TestSendPRNotification_QueuedThenUpdated tests that queued DMs don't create duplicates on updates.
+func TestSendPRNotification_QueuedThenUpdated(t *testing.T) {
+	store := &mockStateStore{}
+	slack := &mockSlackClient{
+		isUserInChannelFunc: func(ctx context.Context, channelID, userID string) bool {
+			return true // User is in channel, so DM will be queued
+		},
+	}
+	config := &mockConfigManager{
+		dmDelay:   30, // 30 minute delay
+		workspace: "test-workspace",
+	}
+
+	c := &Coordinator{
+		stateStore:    store,
+		slack:         slack,
+		configManager: config,
+		userMapper:    &mockUserMapper{},
+	}
+
+	// First call: Queue a DM (tests_running state)
+	checkResult1 := newCheckResponse("tests_running")
+	req1 := dmNotificationRequest{
+		CheckResult: checkResult1,
+		UserID:      "U123",
+		ChannelID:   "C123",
+		ChannelName: "general",
+		Owner:       "owner",
+		Repo:        "repo",
+		PRNumber:    1,
+		PRTitle:     "Test PR",
+		PRAuthor:    "author",
+		PRURL:       "https://github.com/owner/repo/pull/1",
+	}
+
+	err := c.sendPRNotification(context.Background(), req1)
+	if err != nil {
+		t.Fatalf("First call failed: %v", err)
+	}
+
+	// Verify DM was queued
+	if len(store.pendingDMs) != 1 {
+		t.Fatalf("Expected 1 queued DM, got %d", len(store.pendingDMs))
+	}
+
+	// Verify no DM sent yet
+	if len(slack.sentDirectMessages) != 0 {
+		t.Fatalf("Expected no immediate DM, got %d", len(slack.sentDirectMessages))
+	}
+
+	// Second call immediately after: PR state changes to awaiting_review
+	// This simulates a legitimate state change that should be processed
+	checkResult2 := newCheckResponse("awaiting_review")
+	req2 := req1 // Copy
+	req2.CheckResult = checkResult2
+	req2.ChannelID = "" // No channel info this time
+
+	err = c.sendPRNotification(context.Background(), req2)
+	if err != nil {
+		t.Fatalf("Second call failed: %v", err)
+	}
+
+	// The state CHANGED, so this should send a new DM (queued DM isn't sent yet)
+	// This is correct behavior - legitimate state changes should always be processed
+	if len(slack.sentDirectMessages) != 1 {
+		t.Errorf("Expected 1 DM sent for legitimate state change, got %d DMs", len(slack.sentDirectMessages))
+	}
+
+	// Verify the sent DM has the new state
+	if len(slack.sentDirectMessages) > 0 {
+		// Check that state was updated to awaiting_review
+		savedInfo, exists := store.DMMessage(context.Background(), "U123", "https://github.com/owner/repo/pull/1")
+		if !exists {
+			t.Error("Expected DM state to be saved")
+		} else if savedInfo.LastState != "awaiting_review" {
+			t.Errorf("Expected LastState 'awaiting_review', got '%s'", savedInfo.LastState)
+		}
+	}
+}
+
+// TestUpdateDMMessagesForPR_MultipleConcurrentCalls tests that concurrent update calls don't send duplicates.
+func TestUpdateDMMessagesForPR_MultipleConcurrentCalls(t *testing.T) {
+	store := &mockStateStore{
+		dmUsers: map[string][]string{
+			"https://github.com/owner/repo/pull/1": {"U123"},
+		},
+	}
+	slack := &mockSlackClient{}
+
+	c := &Coordinator{
+		stateStore:    store,
+		slack:         slack,
+		configManager: &mockConfigManager{domain: "example.com", dmDelay: 0},
+		userMapper:    &mockUserMapper{},
+	}
+
+	checkResult := newCheckResponse("awaiting_review")
+	info := prUpdateInfo{
+		CheckResult: checkResult,
+		Owner:       "owner",
+		Repo:        "repo",
+		PRNumber:    1,
+		PRTitle:     "Test PR",
+		PRAuthor:    "author",
+		PRState:     "awaiting_review",
+		PRURL:       "https://github.com/owner/repo/pull/1",
+	}
+
+	// Call updateDMMessagesForPR multiple times concurrently (simulating multiple webhook events)
+	const concurrentCalls = 6 // This is how many duplicates the user got
+	doneChan := make(chan bool, concurrentCalls)
+
+	for range concurrentCalls {
+		go func() {
+			c.updateDMMessagesForPR(context.Background(), info)
+			doneChan <- true
+		}()
+	}
+
+	// Wait for all to complete
+	for range concurrentCalls {
+		<-doneChan
+	}
+
+	// Verify only ONE DM was actually sent (not 6!)
+	if len(slack.sentDirectMessages) != 1 {
+		t.Errorf("Expected exactly 1 DM despite %d concurrent calls, got %d DMs", concurrentCalls, len(slack.sentDirectMessages))
+	}
+}
+
+// TestSendPRNotification_RapidStateChanges tests that rapid legitimate state changes all get processed.
+func TestSendPRNotification_RapidStateChanges(t *testing.T) {
+	store := &mockStateStore{}
+	slack := &mockSlackClient{}
+	config := &mockConfigManager{
+		dmDelay: 0, // No delay for simplicity
+	}
+
+	c := &Coordinator{
+		stateStore:    store,
+		slack:         slack,
+		configManager: config,
+		userMapper:    &mockUserMapper{},
+	}
+
+	// Send 5 notifications with DIFFERENT states in rapid succession (within 30 seconds)
+	states := []string{"tests_running", "awaiting_review", "approved", "changes_requested", "awaiting_review"}
+
+	for i, state := range states {
+		checkResult := newCheckResponse(state)
+		req := dmNotificationRequest{
+			CheckResult: checkResult,
+			UserID:      "U123",
+			ChannelID:   "",
+			ChannelName: "",
+			Owner:       "owner",
+			Repo:        "repo",
+			PRNumber:    1,
+			PRTitle:     "Test PR",
+			PRAuthor:    "author",
+			PRURL:       "https://github.com/owner/repo/pull/1",
+		}
+
+		err := c.sendPRNotification(context.Background(), req)
+		if err != nil {
+			t.Errorf("Call %d with state %s failed: %v", i+1, state, err)
+		}
+
+		// Verify state was saved
+		savedInfo, exists := store.DMMessage(context.Background(), "U123", "https://github.com/owner/repo/pull/1")
+		if !exists {
+			t.Errorf("After call %d: Expected DM state to be saved", i+1)
+		} else if savedInfo.LastState != state {
+			t.Errorf("After call %d: Expected LastState '%s', got '%s'", i+1, state, savedInfo.LastState)
+		}
+	}
+
+	// First call sends DM, next 4 calls update it (or send new if update fails)
+	// We should have either 1 DM with 4 updates, or up to 5 DMs if all "updates" became new sends
+	// The key is: we should have processed all 5 state changes, not skipped any
+	totalOperations := len(slack.sentDirectMessages) + len(slack.updatedMessages)
+	if totalOperations < 4 { // At minimum: 1 send + 3 updates (one state appears twice)
+		t.Errorf("Expected at least 4 DM operations for 5 state changes (one duplicate), got %d sends + %d updates = %d total",
+			len(slack.sentDirectMessages), len(slack.updatedMessages), totalOperations)
+	}
+
+	// Verify final state is correct
+	savedInfo, _ := store.DMMessage(context.Background(), "U123", "https://github.com/owner/repo/pull/1")
+	if savedInfo.LastState != "awaiting_review" {
+		t.Errorf("Expected final state 'awaiting_review', got '%s'", savedInfo.LastState)
+	}
+}
