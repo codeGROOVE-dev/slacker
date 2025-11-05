@@ -154,7 +154,6 @@ func TestCoordinator_CreatePRThread_ChannelAlreadyID(t *testing.T) {
 
 	// Use a channel ID (starts with C)
 	threadTS, _, err := c.createPRThread(ctx, "C123456", "testorg", "testrepo", 42, "awaiting_review", pr, checkResult)
-
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

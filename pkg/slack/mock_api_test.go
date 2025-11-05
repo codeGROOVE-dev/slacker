@@ -7,8 +7,8 @@ import (
 	"github.com/slack-go/slack"
 )
 
-// mockSlackAPI implements SlackAPI for testing.
-type mockSlackAPI struct {
+// mockAPI implements API for testing.
+type mockAPI struct {
 	// Team operations
 	getTeamInfoFunc func(ctx context.Context) (*slack.TeamInfo, error)
 	authTestFunc    func(ctx context.Context) (*slack.AuthTestResponse, error)
@@ -39,14 +39,14 @@ type mockSlackAPI struct {
 
 // Team operations
 
-func (m *mockSlackAPI) GetTeamInfoContext(ctx context.Context) (*slack.TeamInfo, error) {
+func (m *mockAPI) GetTeamInfoContext(ctx context.Context) (*slack.TeamInfo, error) {
 	if m.getTeamInfoFunc != nil {
 		return m.getTeamInfoFunc(ctx)
 	}
 	return nil, errors.New("not implemented")
 }
 
-func (m *mockSlackAPI) AuthTestContext(ctx context.Context) (*slack.AuthTestResponse, error) {
+func (m *mockAPI) AuthTestContext(ctx context.Context) (*slack.AuthTestResponse, error) {
 	if m.authTestFunc != nil {
 		return m.authTestFunc(ctx)
 	}
@@ -55,35 +55,35 @@ func (m *mockSlackAPI) AuthTestContext(ctx context.Context) (*slack.AuthTestResp
 
 // Conversation operations
 
-func (m *mockSlackAPI) GetConversationInfoContext(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error) {
+func (m *mockAPI) GetConversationInfoContext(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error) {
 	if m.getConversationInfoFunc != nil {
 		return m.getConversationInfoFunc(ctx, input)
 	}
 	return nil, errors.New("not implemented")
 }
 
-func (m *mockSlackAPI) GetConversationHistoryContext(ctx context.Context, params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error) {
+func (m *mockAPI) GetConversationHistoryContext(ctx context.Context, params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error) {
 	if m.getConversationHistoryFunc != nil {
 		return m.getConversationHistoryFunc(ctx, params)
 	}
 	return nil, errors.New("not implemented")
 }
 
-func (m *mockSlackAPI) GetConversationsContext(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
+func (m *mockAPI) GetConversationsContext(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
 	if m.getConversationsFunc != nil {
 		return m.getConversationsFunc(ctx, params)
 	}
 	return nil, "", errors.New("not implemented")
 }
 
-func (m *mockSlackAPI) OpenConversationContext(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error) {
+func (m *mockAPI) OpenConversationContext(ctx context.Context, params *slack.OpenConversationParameters) (channel *slack.Channel, alreadyOpen, noOp bool, err error) {
 	if m.openConversationFunc != nil {
 		return m.openConversationFunc(ctx, params)
 	}
 	return nil, false, false, errors.New("not implemented")
 }
 
-func (m *mockSlackAPI) GetUsersInConversationContext(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error) {
+func (m *mockAPI) GetUsersInConversationContext(ctx context.Context, params *slack.GetUsersInConversationParameters) (userIDs []string, cursor string, err error) {
 	if m.getUsersInConversationFunc != nil {
 		return m.getUsersInConversationFunc(ctx, params)
 	}
@@ -92,21 +92,21 @@ func (m *mockSlackAPI) GetUsersInConversationContext(ctx context.Context, params
 
 // Message operations
 
-func (m *mockSlackAPI) PostMessageContext(ctx context.Context, channelID string, options ...slack.MsgOption) (string, string, error) {
+func (m *mockAPI) PostMessageContext(ctx context.Context, channelID string, options ...slack.MsgOption) (channel, timestamp string, err error) {
 	if m.postMessageFunc != nil {
 		return m.postMessageFunc(ctx, channelID, options...)
 	}
 	return "", "", errors.New("not implemented")
 }
 
-func (m *mockSlackAPI) UpdateMessageContext(ctx context.Context, channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error) {
+func (m *mockAPI) UpdateMessageContext(ctx context.Context, channelID, timestamp string, options ...slack.MsgOption) (channel, ts, text string, err error) {
 	if m.updateMessageFunc != nil {
 		return m.updateMessageFunc(ctx, channelID, timestamp, options...)
 	}
 	return "", "", "", errors.New("not implemented")
 }
 
-func (m *mockSlackAPI) SearchMessagesContext(ctx context.Context, query string, params slack.SearchParameters) (*slack.SearchMessages, error) {
+func (m *mockAPI) SearchMessagesContext(ctx context.Context, query string, params slack.SearchParameters) (*slack.SearchMessages, error) {
 	if m.searchMessagesFunc != nil {
 		return m.searchMessagesFunc(ctx, query, params)
 	}
@@ -115,14 +115,14 @@ func (m *mockSlackAPI) SearchMessagesContext(ctx context.Context, query string, 
 
 // Reaction operations
 
-func (m *mockSlackAPI) AddReactionContext(ctx context.Context, name string, item slack.ItemRef) error {
+func (m *mockAPI) AddReactionContext(ctx context.Context, name string, item slack.ItemRef) error {
 	if m.addReactionFunc != nil {
 		return m.addReactionFunc(ctx, name, item)
 	}
 	return errors.New("not implemented")
 }
 
-func (m *mockSlackAPI) RemoveReactionContext(ctx context.Context, name string, item slack.ItemRef) error {
+func (m *mockAPI) RemoveReactionContext(ctx context.Context, name string, item slack.ItemRef) error {
 	if m.removeReactionFunc != nil {
 		return m.removeReactionFunc(ctx, name, item)
 	}
@@ -131,14 +131,14 @@ func (m *mockSlackAPI) RemoveReactionContext(ctx context.Context, name string, i
 
 // User operations
 
-func (m *mockSlackAPI) GetUserInfoContext(ctx context.Context, userID string) (*slack.User, error) {
+func (m *mockAPI) GetUserInfoContext(ctx context.Context, userID string) (*slack.User, error) {
 	if m.getUserInfoFunc != nil {
 		return m.getUserInfoFunc(ctx, userID)
 	}
 	return nil, errors.New("not implemented")
 }
 
-func (m *mockSlackAPI) GetUserPresenceContext(ctx context.Context, userID string) (*slack.UserPresence, error) {
+func (m *mockAPI) GetUserPresenceContext(ctx context.Context, userID string) (*slack.UserPresence, error) {
 	if m.getUserPresenceFunc != nil {
 		return m.getUserPresenceFunc(ctx, userID)
 	}
@@ -147,7 +147,7 @@ func (m *mockSlackAPI) GetUserPresenceContext(ctx context.Context, userID string
 
 // View operations
 
-func (m *mockSlackAPI) PublishViewContext(ctx context.Context, request slack.PublishViewContextRequest) (*slack.ViewResponse, error) {
+func (m *mockAPI) PublishViewContext(ctx context.Context, request slack.PublishViewContextRequest) (*slack.ViewResponse, error) {
 	if m.publishViewFunc != nil {
 		return m.publishViewFunc(ctx, request)
 	}

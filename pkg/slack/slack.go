@@ -25,7 +25,7 @@ import (
 	"github.com/slack-go/slack/slackevents"
 )
 
-// Errors
+// Errors.
 var (
 	// ErrNoDMToUpdate indicates no DM exists to update.
 	ErrNoDMToUpdate = errors.New("no DM found to update")
@@ -60,7 +60,7 @@ type Client struct {
 	signingSecret     string
 	teamID            string     // Workspace team ID
 	stateStore        StateStore // State store for DM message tracking
-	api               SlackAPI   // Slack API interface for testability
+	api               API        // Slack API interface for testability
 	cache             *apiCache
 	manager           *Manager                                               // Reference to manager for cache invalidation
 	homeViewHandler   func(ctx context.Context, teamID, userID string) error // Callback for app_home_opened events
@@ -132,7 +132,7 @@ func (c *Client) getRetryDelay() time.Duration {
 // New creates a new Slack client with caching.
 func New(token, signingSecret string) *Client {
 	return &Client{
-		api:           newSlackAPIWrapper(slack.New(token)),
+		api:           newAPIWrapper(slack.New(token)),
 		signingSecret: signingSecret,
 		cache: &apiCache{
 			entries: make(map[string]cacheEntry),
@@ -162,16 +162,6 @@ func (c *Client) SetStateStore(store StateStore) {
 // SetManager sets the manager reference for cache invalidation.
 func (c *Client) SetManager(manager *Manager) {
 	c.manager = manager
-}
-
-// invalidateWorkspaceCache invalidates this workspace's client in the manager cache.
-// This forces a fresh token to be fetched from GSM on next access.
-func (c *Client) invalidateWorkspaceCache() {
-	if c.manager != nil && c.teamID != "" {
-		c.manager.InvalidateCache(c.teamID)
-		slog.Info("invalidated workspace cache due to auth event",
-			"team_id", c.teamID)
-	}
 }
 
 // WorkspaceInfo returns information about the current workspace (cached for 1 hour).
@@ -531,7 +521,7 @@ func (c *Client) SaveDMMessageInfo(ctx context.Context, userID, prURL, channelID
 		SentAt:      time.Now(),
 	}
 
-	if err := store.SaveDMMessage(userID, prURL, info); err != nil {
+	if err := store.SaveDMMessage(ctx, userID, prURL, info); err != nil {
 		return fmt.Errorf("failed to save DM message info: %w", err)
 	}
 
@@ -557,7 +547,7 @@ func (c *Client) UpdateDMMessage(ctx context.Context, userID, prURL, newText str
 	}
 
 	// Get stored DM message info
-	info, exists := store.DMMessage(userID, prURL)
+	info, exists := store.DMMessage(ctx, userID, prURL)
 	if !exists {
 		slog.Debug("no DM message found to update",
 			"user", userID,
@@ -573,7 +563,7 @@ func (c *Client) UpdateDMMessage(ctx context.Context, userID, prURL, newText str
 
 	// Update stored message text
 	info.MessageText = newText
-	if err := store.SaveDMMessage(userID, prURL, info); err != nil {
+	if err := store.SaveDMMessage(ctx, userID, prURL, info); err != nil {
 		slog.Warn("failed to update stored DM message text",
 			"user", userID,
 			"pr_url", prURL,
@@ -770,23 +760,20 @@ func (c *Client) EventsHandler(writer http.ResponseWriter, r *http.Request) {
 			c.homeViewHandlerMu.RUnlock()
 
 			if handler != nil {
-				//nolint:contextcheck // Use detached context for async event processing - prevents webhook events from being lost during shutdown
-				go func(teamID, userID string) {
-					homeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer cancel()
+				homeCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+				defer cancel()
 
-					if err := handler(homeCtx, teamID, userID); err != nil {
-						slog.Error("home view handler failed",
-							"team_id", teamID,
-							"user", userID,
-							"error", err)
-					} else {
-						slog.Info("successfully rendered home view",
-							"team_id", teamID,
-							"user", userID,
-							"trigger", "slack_event")
-					}
-				}(c.teamID, evt.User)
+				if err := handler(homeCtx, c.teamID, evt.User); err != nil {
+					slog.Error("home view handler failed",
+						"team_id", c.teamID,
+						"user", evt.User,
+						"error", err)
+				} else {
+					slog.Info("successfully rendered home view",
+						"team_id", c.teamID,
+						"user", evt.User,
+						"trigger", "slack_event")
+				}
 			} else {
 				slog.Debug("no home view handler registered", "user", evt.User)
 			}
@@ -807,12 +794,20 @@ func (c *Client) EventsHandler(writer http.ResponseWriter, r *http.Request) {
 			// Tokens revoked - invalidate workspace client cache to force refresh
 			slog.Warn("tokens revoked event received - invalidating workspace cache",
 				"team_id", c.teamID)
-			c.invalidateWorkspaceCache()
+			if c.manager != nil && c.teamID != "" {
+				c.manager.InvalidateCache(c.teamID)
+				slog.Info("invalidated workspace cache due to auth event",
+					"team_id", c.teamID)
+			}
 		case *slackevents.AppUninstalledEvent:
 			// App uninstalled - invalidate workspace client cache
 			slog.Warn("app uninstalled event received",
 				"team_id", c.teamID)
-			c.invalidateWorkspaceCache()
+			if c.manager != nil && c.teamID != "" {
+				c.manager.InvalidateCache(c.teamID)
+				slog.Info("invalidated workspace cache due to auth event",
+					"team_id", c.teamID)
+			}
 		}
 	}
 
@@ -864,8 +859,7 @@ func (c *Client) InteractionsHandler(writer http.ResponseWriter, r *http.Request
 	switch interaction.Type {
 	case slack.InteractionTypeBlockActions:
 		// Handle block actions (buttons, selects, etc.).
-		//nolint:contextcheck // handleBlockAction spawns async goroutines with detached contexts - this is intentional
-		c.handleBlockAction(&interaction)
+		c.handleBlockAction(r.Context(), &interaction)
 	case slack.InteractionTypeViewSubmission:
 		// Handle modal submissions.
 		slog.Debug("received view submission", "interaction", interaction)
@@ -882,7 +876,7 @@ func (c *Client) InteractionsHandler(writer http.ResponseWriter, r *http.Request
 }
 
 // handleBlockAction handles block action interactions (button clicks, etc.).
-func (c *Client) handleBlockAction(interaction *slack.InteractionCallback) {
+func (c *Client) handleBlockAction(ctx context.Context, interaction *slack.InteractionCallback) {
 	// Process each action in the callback
 	for _, action := range interaction.ActionCallback.BlockActions {
 		slog.Debug("processing block action",
@@ -892,43 +886,44 @@ func (c *Client) handleBlockAction(interaction *slack.InteractionCallback) {
 
 		switch action.ActionID {
 		case "refresh_dashboard":
-			// Trigger home view refresh
-			c.homeViewHandlerMu.RLock()
-			handler := c.homeViewHandler
-			c.homeViewHandlerMu.RUnlock()
-
-			if handler != nil {
-				// Refresh asynchronously to avoid blocking the response
-				go func(teamID, userID string) {
-					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer cancel()
-
-					slog.Info("refreshing dashboard via button click",
-						"team_id", teamID,
-						"user_id", userID,
-						"trigger", "refresh_button")
-
-					if err := handler(ctx, teamID, userID); err != nil {
-						slog.Error("failed to refresh dashboard",
-							"team_id", teamID,
-							"user_id", userID,
-							"trigger", "refresh_button",
-							"error", err)
-					} else {
-						slog.Info("successfully refreshed dashboard",
-							"team_id", teamID,
-							"user_id", userID,
-							"trigger", "refresh_button")
-					}
-				}(interaction.Team.ID, interaction.User.ID)
-			} else {
-				slog.Warn("refresh requested but no home view handler registered",
-					"user", interaction.User.ID)
-			}
-
+			c.handleRefreshDashboard(ctx, interaction)
 		default:
 			slog.Debug("unhandled action_id", "action_id", action.ActionID)
 		}
+	}
+}
+
+// handleRefreshDashboard handles the refresh dashboard button action.
+func (c *Client) handleRefreshDashboard(ctx context.Context, interaction *slack.InteractionCallback) {
+	c.homeViewHandlerMu.RLock()
+	handler := c.homeViewHandler
+	c.homeViewHandlerMu.RUnlock()
+
+	if handler == nil {
+		slog.Warn("refresh requested but no home view handler registered",
+			"user", interaction.User.ID)
+		return
+	}
+
+	handlerCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	slog.Info("refreshing dashboard via button click",
+		"team_id", interaction.Team.ID,
+		"user_id", interaction.User.ID,
+		"trigger", "refresh_button")
+
+	if err := handler(handlerCtx, interaction.Team.ID, interaction.User.ID); err != nil {
+		slog.Error("failed to refresh dashboard",
+			"team_id", interaction.Team.ID,
+			"user_id", interaction.User.ID,
+			"trigger", "refresh_button",
+			"error", err)
+	} else {
+		slog.Info("successfully refreshed dashboard",
+			"team_id", interaction.Team.ID,
+			"user_id", interaction.User.ID,
+			"trigger", "refresh_button")
 	}
 }
 
@@ -1129,9 +1124,9 @@ func (c *Client) SearchMessages(ctx context.Context, query string, params *slack
 }
 
 // API returns the underlying Slack API client for compatibility.
-// This unwraps the SlackAPI interface to return the raw *slack.Client.
+// This unwraps the API interface to return the raw *slack.Client.
 // Only use this when integrating with code that hasn't been refactored
-// to use the SlackAPI interface yet.
+// to use the API interface yet.
 func (c *Client) API() *slack.Client {
 	if wrapper, ok := c.api.(*slackAPIWrapper); ok {
 		return wrapper.RawClient()
@@ -1271,14 +1266,69 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 	slog.Debug("channel not in cache, fetching from Slack API", "channel", channelName)
 
 	// Try to find the channel - first try public and private channels
+	channels, cursor, err := c.fetchConversationsWithRetry(ctx, []string{"public_channel", "private_channel"}, "")
+	if err != nil {
+		slog.Warn("failed to get public+private conversations, trying public only",
+			"error", err,
+			"error_type", fmt.Sprintf("%T", err),
+			"channel", channelName)
+
+		// Fallback: try public channels only (might not have private channel permissions)
+		channels, cursor, err = c.fetchConversationsWithRetry(ctx, []string{"public_channel"}, "")
+		if err != nil {
+			slog.Error("failed to get conversations for channel resolution",
+				"error", err,
+				"error_type", fmt.Sprintf("%T", err),
+				"error_string", err.Error(),
+				"channel", channelName,
+				"attempted_types", []string{"public_channel", "private_channel"},
+				"fallback_types", []string{"public_channel"},
+				"api_method", "GetConversationsContext")
+			return channelName // Return original name if we can't resolve
+		}
+		slog.Debug("successfully retrieved public channels only", "channel", channelName, "count", len(channels))
+	}
+
+	// Search through initial page
+	if resolvedID, found := c.searchChannelsForName(channels, channelName, cacheKey); found {
+		return resolvedID
+	}
+
+	// If we have more pages, search them too
+	for cursor != "" {
+		channels, cursor, err = c.fetchConversationsWithRetry(ctx, []string{"public_channel", "private_channel"}, cursor)
+		if err != nil {
+			slog.Warn("failed to get additional conversations for channel resolution", "error", err)
+			break
+		}
+
+		if resolvedID, found := c.searchChannelsForName(channels, channelName, cacheKey); found {
+			return resolvedID
+		}
+	}
+
+	slog.Warn("could not resolve channel name to ID",
+		"channel", channelName,
+		"team_id", c.teamID)
+	// Cache the failure for SHORT time (user might create channel or fix typo)
+	c.cache.set(cacheKey, channelName, 45*time.Second)
+	slog.Info("caching channel resolution failure briefly to allow for channel creation",
+		"channel", channelName, "cache_ttl", "45s")
+	return channelName // Return original if not found
+}
+
+// fetchConversationsWithRetry fetches conversations with retry logic.
+func (c *Client) fetchConversationsWithRetry(ctx context.Context, types []string, cursor string) ([]slack.Channel, string, error) {
 	var channels []slack.Channel
-	var cursor string
+	var nextCursor string
+
 	err := retry.Do(
 		func() error {
 			var err error
-			channels, cursor, err = c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
-				Types: []string{"public_channel", "private_channel"},
-				Limit: 200,
+			channels, nextCursor, err = c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
+				Types:  types,
+				Limit:  200,
+				Cursor: cursor,
 			})
 			if err != nil {
 				if isRateLimitError(err) {
@@ -1296,111 +1346,22 @@ func (c *Client) ResolveChannelID(ctx context.Context, channelName string) strin
 		retry.LastErrorOnly(true),
 		retry.Context(ctx),
 	)
-	if err != nil {
-		slog.Warn("failed to get public+private conversations, trying public only",
-			"error", err,
-			"error_type", fmt.Sprintf("%T", err),
-			"channel", channelName)
 
-		// Fallback: try public channels only (might not have private channel permissions)
-		err = retry.Do(
-			func() error {
-				var err error
-				channels, cursor, err = c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
-					Types: []string{"public_channel"},
-					Limit: 200,
-				})
-				if err != nil {
-					if isRateLimitError(err) {
-						return err // Retry
-					}
-					return retry.Unrecoverable(err)
-				}
-				return nil
-			},
-			retry.Attempts(5),
-			retry.Delay(c.getRetryDelay()),
-			retry.MaxDelay(2*time.Minute),
-			retry.DelayType(retry.BackOffDelay),
-			retry.MaxJitter(time.Second),
-			retry.LastErrorOnly(true),
-			retry.Context(ctx),
-		)
-		if err != nil {
-			slog.Error("failed to get conversations for channel resolution",
-				"error", err,
-				"error_type", fmt.Sprintf("%T", err),
-				"error_string", err.Error(),
-				"channel", channelName,
-				"attempted_types", []string{"public_channel", "private_channel"},
-				"fallback_types", []string{"public_channel"},
-				"api_method", "GetConversationsContext")
-			return channelName // Return original name if we can't resolve
-		}
-		slog.Debug("successfully retrieved public channels only", "channel", channelName, "count", len(channels))
-	}
+	return channels, nextCursor, err
+}
 
-	// Search through channels
+// searchChannelsForName searches a list of channels for a matching name and caches the result.
+// Returns (channelID, found).
+func (c *Client) searchChannelsForName(channels []slack.Channel, channelName, cacheKey string) (string, bool) {
 	for i := range channels {
-		channel := &channels[i]
-		if channel.Name == channelName {
-			slog.Debug("resolved channel name to ID", "name", channelName, "id", channel.ID)
+		if channels[i].Name == channelName {
+			slog.Debug("resolved channel name to ID", "name", channelName, "id", channels[i].ID)
 			// Cache the successful resolution for 1 hour (channels are stable, invalidated by events)
-			c.cache.set(cacheKey, channel.ID, time.Hour)
-			return channel.ID
+			c.cache.set(cacheKey, channels[i].ID, time.Hour)
+			return channels[i].ID, true
 		}
 	}
-
-	// If we have more pages, search them too
-	for cursor != "" {
-		err = retry.Do(
-			func() error {
-				var err error
-				channels, cursor, err = c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
-					Types:  []string{"public_channel", "private_channel"},
-					Limit:  200,
-					Cursor: cursor,
-				})
-				if err != nil {
-					if isRateLimitError(err) {
-						return err // Retry
-					}
-					return retry.Unrecoverable(err)
-				}
-				return nil
-			},
-			retry.Attempts(5),
-			retry.Delay(c.getRetryDelay()),
-			retry.MaxDelay(2*time.Minute),
-			retry.DelayType(retry.BackOffDelay),
-			retry.MaxJitter(time.Second),
-			retry.LastErrorOnly(true),
-			retry.Context(ctx),
-		)
-		if err != nil {
-			slog.Warn("failed to get additional conversations for channel resolution", "error", err)
-			break
-		}
-
-		for i := range channels {
-			channel := &channels[i]
-			if channel.Name == channelName {
-				slog.Debug("resolved channel name to ID", "name", channelName, "id", channel.ID)
-				// Cache the successful resolution for 1 hour (channels are stable, invalidated by events)
-				c.cache.set(cacheKey, channel.ID, time.Hour)
-				return channel.ID
-			}
-		}
-	}
-
-	slog.Warn("could not resolve channel name to ID",
-		"channel", channelName,
-		"team_id", c.teamID)
-	// Cache the failure for SHORT time (user might create channel or fix typo)
-	c.cache.set(cacheKey, channelName, 45*time.Second)
-	slog.Info("caching channel resolution failure briefly to allow for channel creation",
-		"channel", channelName, "cache_ttl", "45s")
-	return channelName // Return original if not found
+	return "", false
 }
 
 // IsUserInChannel checks if a specific user is a member of the specified channel.

@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -8,9 +9,10 @@ import (
 )
 
 func TestCoordinator_saveThread(t *testing.T) {
+	ctx := context.Background()
 	// Create mock state store
 	mockStore := &mockStateStore{
-		threads: make(map[string]ThreadInfo),
+		threads: make(map[string]cache.ThreadInfo),
 	}
 
 	// Create coordinator with mock
@@ -24,7 +26,7 @@ func TestCoordinator_saveThread(t *testing.T) {
 	repo := "testrepo"
 	number := 123
 	channelID := "C123"
-	info := ThreadInfo{
+	info := cache.ThreadInfo{
 		ThreadTS:      "1234567890.123456",
 		MessageText:   "Test PR message",
 		ChannelID:     channelID,
@@ -33,7 +35,7 @@ func TestCoordinator_saveThread(t *testing.T) {
 		LastEventTime: time.Now(),
 	}
 
-	c.saveThread(owner, repo, number, channelID, info)
+	c.saveThread(ctx, owner, repo, number, channelID, info)
 
 	// Verify thread was saved to cache
 	cacheKey := owner + "/" + repo + "#123:" + channelID

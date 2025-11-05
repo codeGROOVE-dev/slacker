@@ -26,8 +26,6 @@ func TestPostThread(t *testing.T) {
 		cache:  &apiCache{entries: make(map[string]cacheEntry)},
 	}
 
-	ctx := context.Background()
-
 	tests := []struct {
 		name           string
 		channelID      string
@@ -43,6 +41,7 @@ func TestPostThread(t *testing.T) {
 			attachments: nil,
 			expectError: false,
 			validateResult: func(t *testing.T, messages []*slacktest.PostedMessage) {
+				t.Helper()
 				if len(messages) != 1 {
 					t.Fatalf("expected 1 message, got %d", len(messages))
 				}
@@ -61,6 +60,7 @@ func TestPostThread(t *testing.T) {
 			attachments: nil,
 			expectError: false,
 			validateResult: func(t *testing.T, messages []*slacktest.PostedMessage) {
+				t.Helper()
 				if len(messages) != 1 {
 					t.Fatalf("expected 1 message, got %d", len(messages))
 				}
@@ -76,6 +76,7 @@ func TestPostThread(t *testing.T) {
 			attachments: nil,
 			expectError: false,
 			validateResult: func(t *testing.T, messages []*slacktest.PostedMessage) {
+				t.Helper()
 				if len(messages) != 1 {
 					t.Fatalf("expected 1 message, got %d", len(messages))
 				}
@@ -85,6 +86,8 @@ func TestPostThread(t *testing.T) {
 			},
 		},
 	}
+
+	ctx := context.Background()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -107,7 +110,7 @@ func TestPostThread(t *testing.T) {
 				t.Error("expected non-empty message timestamp")
 			}
 
-			messages := mockSlack.GetPostedMessages()
+			messages := mockSlack.PostedMessages()
 			tt.validateResult(t, messages)
 		})
 	}
@@ -179,7 +182,7 @@ func TestUpdateMessage(t *testing.T) {
 			}
 
 			// Verify update was recorded
-			updates := mockSlack.GetUpdatedMessages()
+			updates := mockSlack.UpdatedMessages()
 			if len(updates) != 1 {
 				t.Fatalf("expected 1 update, got %d", len(updates))
 			}
@@ -201,6 +204,7 @@ func TestUpdateMessage(t *testing.T) {
 
 // TestSendDirectMessage verifies that DMs are sent to the correct users.
 func TestSendDirectMessage(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
 	mockSlack := slacktest.New()
@@ -215,8 +219,6 @@ func TestSendDirectMessage(t *testing.T) {
 		teamID: "T123",
 		cache:  &apiCache{entries: make(map[string]cacheEntry)},
 	}
-
-	ctx := context.Background()
 
 	tests := []struct {
 		name        string
@@ -270,7 +272,7 @@ func TestSendDirectMessage(t *testing.T) {
 			}
 
 			// Verify DM was sent
-			messages := mockSlack.GetPostedMessages()
+			messages := mockSlack.PostedMessages()
 			if len(messages) != 1 {
 				t.Fatalf("expected 1 DM, got %d", len(messages))
 			}
@@ -289,6 +291,7 @@ func TestSendDirectMessage(t *testing.T) {
 
 // TestMessageMutationSequence verifies that we can post, then update the same message.
 func TestMessageMutationSequence(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
 	mockSlack := slacktest.New()
@@ -304,8 +307,6 @@ func TestMessageMutationSequence(t *testing.T) {
 		cache:  &apiCache{entries: make(map[string]cacheEntry)},
 	}
 
-	ctx := context.Background()
-
 	// Step 1: Post initial message
 	initialText := ":test_tube: Tests running"
 	messageTS, err := client.PostThread(ctx, "C123", initialText, nil)
@@ -318,7 +319,7 @@ func TestMessageMutationSequence(t *testing.T) {
 	}
 
 	// Verify initial post
-	messages := mockSlack.GetPostedMessages()
+	messages := mockSlack.PostedMessages()
 	if len(messages) != 1 {
 		t.Fatalf("expected 1 posted message, got %d", len(messages))
 	}
@@ -334,7 +335,7 @@ func TestMessageMutationSequence(t *testing.T) {
 	}
 
 	// Verify update
-	updates := mockSlack.GetUpdatedMessages()
+	updates := mockSlack.UpdatedMessages()
 	if len(updates) != 1 {
 		t.Fatalf("expected 1 updated message, got %d", len(updates))
 	}
@@ -353,7 +354,7 @@ func TestMessageMutationSequence(t *testing.T) {
 	}
 
 	// Verify second update
-	updates = mockSlack.GetUpdatedMessages()
+	updates = mockSlack.UpdatedMessages()
 	if len(updates) != 2 {
 		t.Fatalf("expected 2 total updates, got %d", len(updates))
 	}
@@ -364,6 +365,7 @@ func TestMessageMutationSequence(t *testing.T) {
 
 // TestDMMutationSequence verifies that we can send a DM, then update it.
 func TestDMMutationSequence(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
 	mockSlack := slacktest.New()
@@ -378,8 +380,6 @@ func TestDMMutationSequence(t *testing.T) {
 		cache:  &apiCache{entries: make(map[string]cacheEntry)},
 	}
 
-	ctx := context.Background()
-
 	// Step 1: Send initial DM
 	initialText := ":hourglass: Your review is needed on PR #123"
 	dmChannelID, messageTS, err := client.SendDirectMessage(ctx, "U001", initialText)
@@ -392,7 +392,7 @@ func TestDMMutationSequence(t *testing.T) {
 	}
 
 	// Verify initial DM
-	messages := mockSlack.GetPostedMessages()
+	messages := mockSlack.PostedMessages()
 	if len(messages) != 1 {
 		t.Fatalf("expected 1 DM sent, got %d", len(messages))
 	}
@@ -405,7 +405,7 @@ func TestDMMutationSequence(t *testing.T) {
 	}
 
 	// Verify update
-	updates := mockSlack.GetUpdatedMessages()
+	updates := mockSlack.UpdatedMessages()
 	if len(updates) != 1 {
 		t.Fatalf("expected 1 DM update, got %d", len(updates))
 	}
@@ -419,6 +419,7 @@ func TestDMMutationSequence(t *testing.T) {
 
 // TestMultipleChannelPosts verifies posting to multiple channels works correctly.
 func TestMultipleChannelPosts(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
 	mockSlack := slacktest.New()
@@ -437,8 +438,6 @@ func TestMultipleChannelPosts(t *testing.T) {
 		teamID: "T123",
 		cache:  &apiCache{entries: make(map[string]cacheEntry)},
 	}
-
-	ctx := context.Background()
 
 	// Post same PR to multiple channels
 	channels := []struct {
@@ -460,7 +459,7 @@ func TestMultipleChannelPosts(t *testing.T) {
 	}
 
 	// Verify all posts
-	messages := mockSlack.GetPostedMessages()
+	messages := mockSlack.PostedMessages()
 	if len(messages) != 3 {
 		t.Fatalf("expected 3 messages (one per channel), got %d", len(messages))
 	}

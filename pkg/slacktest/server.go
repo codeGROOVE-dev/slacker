@@ -33,9 +33,9 @@ type Server struct {
 	dmChannels map[string]string // userID -> dmChannelID
 
 	// Request tracking for assertions
-	PostedMessages  []*PostedMessage
-	UpdatedMessages []*UpdatedMessage
-	EmailLookups    []string
+	postedMessages  []*PostedMessage
+	updatedMessages []*UpdatedMessage
+	emailLookups    []string
 }
 
 // Channel represents a Slack channel.
@@ -80,9 +80,9 @@ func New() *Server {
 		botInChannels:   make(map[string]bool),
 		channelMessages: make(map[string][]*Message),
 		dmChannels:      make(map[string]string),
-		PostedMessages:  make([]*PostedMessage, 0),
-		UpdatedMessages: make([]*UpdatedMessage, 0),
-		EmailLookups:    make([]string, 0),
+		postedMessages:  make([]*PostedMessage, 0),
+		updatedMessages: make([]*UpdatedMessage, 0),
+		emailLookups:    make([]string, 0),
 	}
 
 	mux := http.NewServeMux()
@@ -144,34 +144,34 @@ func (s *Server) AddMessage(channelID, text, timestamp string) {
 	})
 }
 
-// GetPostedMessages returns all messages posted via chat.postMessage.
-func (s *Server) GetPostedMessages() []*PostedMessage {
+// PostedMessages returns all messages posted via chat.postMessage.
+func (s *Server) PostedMessages() []*PostedMessage {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.PostedMessages
+	return s.postedMessages
 }
 
-// GetUpdatedMessages returns all messages updated via chat.update.
-func (s *Server) GetUpdatedMessages() []*UpdatedMessage {
+// UpdatedMessages returns all messages updated via chat.update.
+func (s *Server) UpdatedMessages() []*UpdatedMessage {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.UpdatedMessages
+	return s.updatedMessages
 }
 
-// GetEmailLookups returns all emails that were looked up.
-func (s *Server) GetEmailLookups() []string {
+// EmailLookups returns all emails that were looked up.
+func (s *Server) EmailLookups() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.EmailLookups
+	return s.emailLookups
 }
 
 // Reset clears all tracking data (but keeps configuration).
 func (s *Server) Reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.PostedMessages = make([]*PostedMessage, 0)
-	s.UpdatedMessages = make([]*UpdatedMessage, 0)
-	s.EmailLookups = make([]string, 0)
+	s.postedMessages = make([]*PostedMessage, 0)
+	s.updatedMessages = make([]*UpdatedMessage, 0)
+	s.emailLookups = make([]string, 0)
 }
 
 func (s *Server) handleUserLookupByEmail(w http.ResponseWriter, r *http.Request) {
@@ -186,7 +186,7 @@ func (s *Server) handleUserLookupByEmail(w http.ResponseWriter, r *http.Request)
 	}
 
 	s.mu.Lock()
-	s.EmailLookups = append(s.EmailLookups, email)
+	s.emailLookups = append(s.emailLookups, email)
 	user, exists := s.usersByEmail[email]
 	s.mu.Unlock()
 
@@ -283,7 +283,7 @@ func (s *Server) handleChatPostMessage(w http.ResponseWriter, r *http.Request) {
 	timestamp := time.Now().Format("1504898400.123456")
 
 	s.mu.Lock()
-	s.PostedMessages = append(s.PostedMessages, &PostedMessage{
+	s.postedMessages = append(s.postedMessages, &PostedMessage{
 		Channel:   channel,
 		Text:      text,
 		Timestamp: time.Now(),
@@ -316,7 +316,7 @@ func (s *Server) handleChatUpdate(w http.ResponseWriter, r *http.Request) {
 	ts := r.FormValue("ts")
 
 	s.mu.Lock()
-	s.UpdatedMessages = append(s.UpdatedMessages, &UpdatedMessage{
+	s.updatedMessages = append(s.updatedMessages, &UpdatedMessage{
 		Channel:   channel,
 		Timestamp: ts,
 		Text:      text,

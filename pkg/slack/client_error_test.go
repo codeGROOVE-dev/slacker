@@ -10,6 +10,7 @@ import (
 
 // TestPostThread_BotNotInChannel tests error when bot is not in channel.
 func TestPostThread_BotNotInChannel(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
 	mockSlack := slacktest.New()
@@ -25,8 +26,6 @@ func TestPostThread_BotNotInChannel(t *testing.T) {
 		cache:  &apiCache{entries: make(map[string]cacheEntry)},
 	}
 
-	ctx := context.Background()
-
 	_, err := client.PostThread(ctx, "C123", "Test message", nil)
 	if err == nil {
 		t.Fatal("expected error when bot not in channel, got nil")
@@ -40,6 +39,7 @@ func TestPostThread_BotNotInChannel(t *testing.T) {
 
 // TestPostThread_LongText tests posting message with text longer than 100 characters.
 func TestPostThread_LongText(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
 	mockSlack := slacktest.New()
@@ -55,8 +55,6 @@ func TestPostThread_LongText(t *testing.T) {
 		cache:  &apiCache{entries: make(map[string]cacheEntry)},
 	}
 
-	ctx := context.Background()
-
 	// Create text longer than 100 chars (triggers preview truncation in logging)
 	longText := "This is a very long message that exceeds one hundred characters to test the text preview truncation logic in the logging code"
 	messageTS, err := client.PostThread(ctx, "C123", longText, nil)
@@ -68,7 +66,7 @@ func TestPostThread_LongText(t *testing.T) {
 		t.Error("expected non-empty message timestamp")
 	}
 
-	messages := mockSlack.GetPostedMessages()
+	messages := mockSlack.PostedMessages()
 	if len(messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(messages))
 	}
@@ -81,6 +79,7 @@ func TestPostThread_LongText(t *testing.T) {
 
 // TestSendDirectMessage_LongText tests sending DM with long text.
 func TestSendDirectMessage_LongText(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
 	mockSlack := slacktest.New()
@@ -94,8 +93,6 @@ func TestSendDirectMessage_LongText(t *testing.T) {
 		teamID: "T123",
 		cache:  &apiCache{entries: make(map[string]cacheEntry)},
 	}
-
-	ctx := context.Background()
 
 	// Long text (>100 chars) triggers preview truncation in logs
 	longText := "This is a very long direct message that exceeds one hundred characters to test the text preview truncation logic in the logging code"

@@ -6,9 +6,11 @@ import (
 	"github.com/slack-go/slack"
 )
 
-// SlackAPI defines the interface for Slack API operations.
+// API defines the interface for Slack API operations.
 // This abstraction allows for easier testing by enabling mock implementations.
-type SlackAPI interface {
+//
+//nolint:dupl,interfacebloat // Interface duplicated in mock for testing; 15 methods reasonable for full Slack API wrapper
+type API interface {
 	// Team operations.
 	GetTeamInfoContext(ctx context.Context) (*slack.TeamInfo, error)
 	AuthTestContext(ctx context.Context) (*slack.AuthTestResponse, error)
@@ -37,19 +39,19 @@ type SlackAPI interface {
 	PublishViewContext(ctx context.Context, request slack.PublishViewContextRequest) (*slack.ViewResponse, error)
 }
 
-// slackAPIWrapper wraps the real Slack client to implement SlackAPI interface.
+// slackAPIWrapper wraps the real Slack client to implement API interface.
 type slackAPIWrapper struct {
 	client *slack.Client
 }
 
-// newSlackAPIWrapper creates a new wrapper around the Slack client.
-func newSlackAPIWrapper(client *slack.Client) SlackAPI {
+// newAPIWrapper creates a new wrapper around the Slack client.
+func newAPIWrapper(client *slack.Client) API {
 	return &slackAPIWrapper{client: client}
 }
 
 // RawClient returns the underlying *slack.Client for compatibility.
 // This should only be used when integrating with code that hasn't been
-// refactored to use the SlackAPI interface yet.
+// refactored to use the API interface yet.
 func (w *slackAPIWrapper) RawClient() *slack.Client {
 	return w.client
 }

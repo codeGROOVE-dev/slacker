@@ -418,6 +418,7 @@ func TestFindOrCreatePRThread_CreateThreadError(t *testing.T) {
 
 	checkResult := &turn.CheckResponse{}
 
+	//nolint:dogsled // Multiple return values intentionally ignored - only testing error case
 	_, _, _, err := c.findOrCreatePRThread(ctx, "C123", "testorg", "testrepo", 42, "awaiting_review", pullRequest, checkResult)
 	if err == nil {
 		t.Error("expected error when thread creation fails")

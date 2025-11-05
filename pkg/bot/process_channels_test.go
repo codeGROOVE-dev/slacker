@@ -71,8 +71,8 @@ func TestProcessChannelsInParallel_NoValidChannels(t *testing.T) {
 	event := struct {
 		Action      string `json:"action"`
 		PullRequest struct {
-			HTMLURL   string `json:"html_url"`
-			Title     string `json:"title"`
+			HTMLURL   string    `json:"html_url"`
+			Title     string    `json:"title"`
 			CreatedAt time.Time `json:"created_at"`
 			User      struct {
 				Login string `json:"login"`
@@ -167,8 +167,8 @@ func TestProcessPRForChannel_ChannelResolutionFailed(t *testing.T) {
 	event := struct {
 		Action      string `json:"action"`
 		PullRequest struct {
-			HTMLURL   string `json:"html_url"`
-			Title     string `json:"title"`
+			HTMLURL   string    `json:"html_url"`
+			Title     string    `json:"title"`
 			CreatedAt time.Time `json:"created_at"`
 			User      struct {
 				Login string `json:"login"`
@@ -248,8 +248,8 @@ func TestProcessChannelsInParallel_HappyPath(t *testing.T) {
 	event := struct {
 		Action      string `json:"action"`
 		PullRequest struct {
-			HTMLURL   string `json:"html_url"`
-			Title     string `json:"title"`
+			HTMLURL   string    `json:"html_url"`
+			Title     string    `json:"title"`
 			CreatedAt time.Time `json:"created_at"`
 			User      struct {
 				Login string `json:"login"`
@@ -331,8 +331,8 @@ func TestProcessChannelsInParallel_SomeChannelsInvalid(t *testing.T) {
 	event := struct {
 		Action      string `json:"action"`
 		PullRequest struct {
-			HTMLURL   string `json:"html_url"`
-			Title     string `json:"title"`
+			HTMLURL   string    `json:"html_url"`
+			Title     string    `json:"title"`
 			CreatedAt time.Time `json:"created_at"`
 			User      struct {
 				Login string `json:"login"`

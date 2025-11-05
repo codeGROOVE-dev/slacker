@@ -33,7 +33,7 @@ func TestMockServerUserLookup(t *testing.T) {
 	}
 
 	// Verify email lookup was tracked
-	lookups := server.GetEmailLookups()
+	lookups := server.EmailLookups()
 	if len(lookups) != 1 {
 		t.Errorf("Expected 1 email lookup, got %d", len(lookups))
 	}
@@ -127,7 +127,7 @@ func TestMockServerPostMessage(t *testing.T) {
 	}
 
 	// Verify message was posted
-	messages := server.GetPostedMessages()
+	messages := server.PostedMessages()
 	if len(messages) != 1 {
 		t.Fatalf("Expected 1 posted message, got %d", len(messages))
 	}
@@ -151,13 +151,14 @@ func TestMockServerUpdateMessage(t *testing.T) {
 	client := slack.New("test-token", slack.OptionAPIURL(server.URL+"/api/"))
 
 	// Update the message
+	//nolint:dogsled // Slack API returns multiple values, only error is needed for this test
 	_, _, _, err := client.UpdateMessage("C001", "1234567.890", slack.MsgOptionText("Updated message", false))
 	if err != nil {
 		t.Fatalf("UpdateMessage failed: %v", err)
 	}
 
 	// Verify message was updated
-	updates := server.GetUpdatedMessages()
+	updates := server.UpdatedMessages()
 	if len(updates) != 1 {
 		t.Fatalf("Expected 1 updated message, got %d", len(updates))
 	}
@@ -186,10 +187,13 @@ func TestMockServerReset(t *testing.T) {
 	client := slack.New("test-token", slack.OptionAPIURL(server.URL+"/api/"))
 
 	// Post a message
-	_, _, _ = client.PostMessage("C001", slack.MsgOptionText("Test", false))
+	_, _, err := client.PostMessage("C001", slack.MsgOptionText("Test", false))
+	if err != nil {
+		t.Fatalf("failed to post message: %v", err)
+	}
 
 	// Verify data exists
-	if len(server.GetPostedMessages()) != 1 {
+	if len(server.PostedMessages()) != 1 {
 		t.Fatal("Expected posted message before reset")
 	}
 
@@ -197,12 +201,12 @@ func TestMockServerReset(t *testing.T) {
 	server.Reset()
 
 	// Verify data was cleared
-	if len(server.GetPostedMessages()) != 0 {
-		t.Errorf("Expected no posted messages after reset, got %d", len(server.GetPostedMessages()))
+	if len(server.PostedMessages()) != 0 {
+		t.Errorf("Expected no posted messages after reset, got %d", len(server.PostedMessages()))
 	}
 
-	if len(server.GetEmailLookups()) != 0 {
-		t.Errorf("Expected no email lookups after reset, got %d", len(server.GetEmailLookups()))
+	if len(server.EmailLookups()) != 0 {
+		t.Errorf("Expected no email lookups after reset, got %d", len(server.EmailLookups()))
 	}
 }
 
@@ -255,7 +259,7 @@ func TestMockServerConversationsOpen(t *testing.T) {
 	}
 
 	// Should generate a DM channel ID
-	if len(channel.ID) == 0 {
+	if channel.ID == "" {
 		t.Error("Expected non-empty channel ID")
 	}
 }

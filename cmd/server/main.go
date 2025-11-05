@@ -249,8 +249,8 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	// Get GitHub token from one of the installations
 	var githubToken string
 	for _, org := range githubManager.AllOrgs() {
-		if client, ok := githubManager.ClientForOrg(org); ok {
-			githubToken = client.InstallationToken(ctx)
+		if ghClient, ok := githubManager.ClientForOrg(org); ok {
+			githubToken = ghClient.InstallationToken(ctx)
 			break
 		}
 	}
@@ -671,8 +671,6 @@ func (cm *coordinatorManager) handleRefreshInstallations(ctx context.Context) {
 // runBotCoordinators manages bot coordinators for all GitHub installations.
 // It spawns one coordinator per org and refreshes the list every 5 minutes.
 // Failed coordinators are automatically restarted every minute.
-//
-//nolint:interfacebloat // Interface mirrors state.Store for local type safety
 func runBotCoordinators(
 	ctx context.Context,
 	slackManager *slack.Manager,
@@ -733,7 +731,7 @@ func runBotCoordinators(
 
 	// Run cleanup once on startup
 	go func() {
-		if err := stateStore.Cleanup(); err != nil {
+		if err := stateStore.Cleanup(context.Background()); err != nil {
 			slog.Warn("initial state cleanup failed", "error", err)
 		}
 	}()
@@ -767,7 +765,7 @@ func runBotCoordinators(
 		case <-cleanupTicker.C:
 			// Periodic cleanup of old state data
 			go func() {
-				if err := stateStore.Cleanup(); err != nil {
+				if err := stateStore.Cleanup(context.Background()); err != nil {
 					slog.Warn("state cleanup failed", "error", err)
 				} else {
 					slog.Debug("state cleanup completed successfully")

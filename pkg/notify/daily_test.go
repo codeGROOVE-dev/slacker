@@ -297,18 +297,22 @@ func TestEnrichPR(t *testing.T) {
 			enriched := scheduler.enrichPR(tt.pr, checkResult, "testuser", tt.action)
 
 			// Verify all expected fields
+			//nolint:errcheck // Type assertion in test is safe
 			if enriched.ActionKind != tt.wantFields["ActionKind"].(string) {
 				t.Errorf("ActionKind = %q, want %q", enriched.ActionKind, tt.wantFields["ActionKind"])
 			}
 
+			//nolint:errcheck // Type assertion in test is safe
 			if enriched.ActionReason != tt.wantFields["ActionReason"].(string) {
 				t.Errorf("ActionReason = %q, want %q", enriched.ActionReason, tt.wantFields["ActionReason"])
 			}
 
+			//nolint:errcheck // Type assertion in test is safe
 			if enriched.NeedsReview != tt.wantFields["NeedsReview"].(bool) {
 				t.Errorf("NeedsReview = %v, want %v", enriched.NeedsReview, tt.wantFields["NeedsReview"])
 			}
 
+			//nolint:errcheck // Type assertion in test is safe
 			if enriched.IsBlocked != tt.wantFields["IsBlocked"].(bool) {
 				t.Errorf("IsBlocked = %v, want %v", enriched.IsBlocked, tt.wantFields["IsBlocked"])
 			}
@@ -420,6 +424,7 @@ func TestFormatDigestMessage_EmptyPRLists(t *testing.T) {
 
 // TestCheckAndSend_NoOrgs tests when there are no organizations configured.
 func TestCheckAndSend_NoOrgs(t *testing.T) {
+	ctx := context.Background()
 	mockGitHubMgr := &mockGitHubManager{
 		allOrgsFunc: func() []string {
 			return []string{} // No orgs
@@ -433,14 +438,13 @@ func TestCheckAndSend_NoOrgs(t *testing.T) {
 		slackManager:  &mockSlackManagerWithClient{},
 	}
 
-	ctx := context.Background()
-
 	// Should not crash
 	scheduler.CheckAndSend(ctx)
 }
 
 // TestCheckAndSend_DailyRemindersDisabled tests when daily reminders are disabled.
 func TestCheckAndSend_DailyRemindersDisabled(t *testing.T) {
+	ctx := context.Background()
 	mockGitHubMgr := &mockGitHubManager{
 		allOrgsFunc: func() []string {
 			return []string{"test-org"}
@@ -459,8 +463,6 @@ func TestCheckAndSend_DailyRemindersDisabled(t *testing.T) {
 		stateStore:    &mockStateProvider{},
 		slackManager:  &mockSlackManagerWithClient{},
 	}
-
-	ctx := context.Background()
 
 	// Should not crash and should skip processing
 	scheduler.CheckAndSend(ctx)

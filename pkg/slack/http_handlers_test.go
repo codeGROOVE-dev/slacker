@@ -16,9 +16,9 @@ import (
 )
 
 // generateValidSignature creates a valid Slack signature for testing.
-func generateValidSignature(secret, timestamp, body string) string {
+func generateValidSignature(timestamp, body string) string {
 	sig := fmt.Sprintf("v0:%s:%s", timestamp, body)
-	h := hmac.New(sha256.New, []byte(secret))
+	h := hmac.New(sha256.New, []byte("test-secret"))
 	h.Write([]byte(sig))
 	return "v0=" + hex.EncodeToString(h.Sum(nil))
 }
@@ -33,7 +33,10 @@ func TestEventsHandler_URLVerification(t *testing.T) {
 		"challenge": challenge,
 		"token":     "test-token",
 	}
-	bodyBytes, _ := json.Marshal(body)
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("failed to marshal body: %v", err)
+	}
 
 	client := &Client{
 		signingSecret: "test-secret",
@@ -44,7 +47,7 @@ func TestEventsHandler_URLVerification(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/slack/events", bytes.NewBuffer(bodyBytes))
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
-	signature := generateValidSignature("test-secret", timestamp, string(bodyBytes))
+	signature := generateValidSignature(timestamp, string(bodyBytes))
 	req.Header.Set("X-Slack-Signature", signature)
 	req.Header.Set("X-Slack-Request-Timestamp", timestamp)
 
@@ -134,7 +137,7 @@ func TestEventsHandler_ParseEventError(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/slack/events", bytes.NewBuffer(body))
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
-	signature := generateValidSignature("test-secret", timestamp, string(body))
+	signature := generateValidSignature(timestamp, string(body))
 	req.Header.Set("X-Slack-Signature", signature)
 	req.Header.Set("X-Slack-Request-Timestamp", timestamp)
 
@@ -162,7 +165,7 @@ func TestEventsHandler_URLVerificationUnmarshalError(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/slack/events", bytes.NewBuffer(body))
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
-	signature := generateValidSignature("test-secret", timestamp, string(body))
+	signature := generateValidSignature(timestamp, string(body))
 	req.Header.Set("X-Slack-Signature", signature)
 	req.Header.Set("X-Slack-Request-Timestamp", timestamp)
 
@@ -220,7 +223,7 @@ func TestEventsHandler_AppHomeOpened(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/slack/events", bytes.NewBuffer(bodyBytes))
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
-	signature := generateValidSignature("test-secret", timestamp, string(bodyBytes))
+	signature := generateValidSignature(timestamp, string(bodyBytes))
 	req.Header.Set("X-Slack-Signature", signature)
 	req.Header.Set("X-Slack-Request-Timestamp", timestamp)
 
@@ -281,7 +284,7 @@ func TestEventsHandler_MessageEvent(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/slack/events", bytes.NewBuffer(bodyBytes))
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
-	signature := generateValidSignature("test-secret", timestamp, string(bodyBytes))
+	signature := generateValidSignature(timestamp, string(bodyBytes))
 	req.Header.Set("X-Slack-Signature", signature)
 	req.Header.Set("X-Slack-Request-Timestamp", timestamp)
 
@@ -322,7 +325,7 @@ func TestEventsHandler_AppMentionEvent(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/slack/events", bytes.NewBuffer(bodyBytes))
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
-	signature := generateValidSignature("test-secret", timestamp, string(bodyBytes))
+	signature := generateValidSignature(timestamp, string(bodyBytes))
 	req.Header.Set("X-Slack-Signature", signature)
 	req.Header.Set("X-Slack-Request-Timestamp", timestamp)
 
@@ -364,7 +367,7 @@ func TestEventsHandler_AppHomeOpenedNoHandler(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/slack/events", bytes.NewBuffer(bodyBytes))
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
-	signature := generateValidSignature("test-secret", timestamp, string(bodyBytes))
+	signature := generateValidSignature(timestamp, string(bodyBytes))
 	req.Header.Set("X-Slack-Signature", signature)
 	req.Header.Set("X-Slack-Request-Timestamp", timestamp)
 

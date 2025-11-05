@@ -167,12 +167,13 @@ func TestNew_WithGitHubClient(t *testing.T) {
 }
 
 func TestSaveThread(t *testing.T) {
+	ctx := context.Background()
 	mockSlack := &mockSlackClient{}
 	configMgr := NewMockConfig().Build()
 
 	mockState := &mockStateStore{
 		processedEvents: make(map[string]bool),
-		threads:         make(map[string]ThreadInfo),
+		threads:         make(map[string]cache.ThreadInfo),
 	}
 
 	c := &Coordinator{
@@ -185,12 +186,12 @@ func TestSaveThread(t *testing.T) {
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
-	threadInfo := ThreadInfo{
+	threadInfo := cache.ThreadInfo{
 		ChannelID: "C123456",
 		ThreadTS:  "1234567890.123456",
 	}
 
-	c.saveThread("testorg", "testrepo", 42, "C123456", threadInfo)
+	c.saveThread(ctx, "testorg", "testrepo", 42, "C123456", threadInfo)
 
 	// Check cache
 	key := "testorg/testrepo#42:C123456"
@@ -220,12 +221,13 @@ func TestSaveThread(t *testing.T) {
 }
 
 func TestSaveThread_PersistenceError(t *testing.T) {
+	ctx := context.Background()
 	mockSlack := &mockSlackClient{}
 	configMgr := NewMockConfig().Build()
 
 	mockState := &mockStateStore{
 		processedEvents: make(map[string]bool),
-		threads:         make(map[string]ThreadInfo),
+		threads:         make(map[string]cache.ThreadInfo),
 		saveThreadErr:   errors.New("database error"),
 	}
 
@@ -239,13 +241,13 @@ func TestSaveThread_PersistenceError(t *testing.T) {
 		eventSemaphore: make(chan struct{}, 10),
 	}
 
-	threadInfo := ThreadInfo{
+	threadInfo := cache.ThreadInfo{
 		ChannelID: "C123456",
 		ThreadTS:  "1234567890.123456",
 	}
 
 	// Should still save to cache even if persistence fails
-	c.saveThread("testorg", "testrepo", 42, "C123456", threadInfo)
+	c.saveThread(ctx, "testorg", "testrepo", 42, "C123456", threadInfo)
 
 	// Check cache (should succeed)
 	key := "testorg/testrepo#42:C123456"
@@ -268,7 +270,7 @@ func TestSaveThread_PersistenceError(t *testing.T) {
 func TestThreadCache_Set(t *testing.T) {
 	threadCache := cache.New()
 
-	threadInfo := ThreadInfo{
+	threadInfo := cache.ThreadInfo{
 		ChannelID:   "C123456",
 		ThreadTS:    "1234567890.123456",
 		MessageText: "Test message",

@@ -9,8 +9,10 @@ import (
 	"github.com/slack-go/slack"
 )
 
-// TestSlackAPIWrapperIntegration tests the actual slackAPIWrapper with a mock HTTP server.
-func TestSlackAPIWrapperIntegration(t *testing.T) {
+// TestAPIWrapperIntegration tests the actual slackAPIWrapper with a mock HTTP server.
+//
+//nolint:maintidx // Integration test covering all API methods with mock server - complexity acceptable
+func TestAPIWrapperIntegration(t *testing.T) {
 	t.Parallel()
 
 	// Create a mock HTTP server that responds to Slack API calls
@@ -21,44 +23,60 @@ func TestSlackAPIWrapperIntegration(t *testing.T) {
 
 		switch r.URL.Path {
 		case "/api/team.info":
-			w.Write([]byte(`{"ok":true,"team":{"id":"T123","name":"Test Team"}}`))
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_, _ = w.Write([]byte(`{"ok":true,"team":{"id":"T123","name":"Test Team"}}`))
 		case "/api/auth.test":
-			w.Write([]byte(`{"ok":true,"user_id":"U123","team_id":"T123"}`))
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_, _ = w.Write([]byte(`{"ok":true,"user_id":"U123","team_id":"T123"}`))
 		case "/api/conversations.info":
-			w.Write([]byte(`{"ok":true,"channel":{"id":"C123","name":"test"}}`))
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_, _ = w.Write([]byte(`{"ok":true,"channel":{"id":"C123","name":"test"}}`))
 		case "/api/conversations.history":
-			w.Write([]byte(`{"ok":true,"messages":[]}`))
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_, _ = w.Write([]byte(`{"ok":true,"messages":[]}`))
 		case "/api/conversations.list":
-			w.Write([]byte(`{"ok":true,"channels":[]}`))
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_, _ = w.Write([]byte(`{"ok":true,"channels":[]}`))
 		case "/api/conversations.open":
-			w.Write([]byte(`{"ok":true,"channel":{"id":"D123"}}`))
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_, _ = w.Write([]byte(`{"ok":true,"channel":{"id":"D123"}}`))
 		case "/api/conversations.members":
-			w.Write([]byte(`{"ok":true,"members":["U001","U002"]}`))
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_, _ = w.Write([]byte(`{"ok":true,"members":["U001","U002"]}`))
 		case "/api/chat.postMessage":
-			w.Write([]byte(`{"ok":true,"channel":"C123","ts":"1234567890.123456"}`))
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_, _ = w.Write([]byte(`{"ok":true,"channel":"C123","ts":"1234567890.123456"}`))
 		case "/api/chat.update":
-			w.Write([]byte(`{"ok":true,"channel":"C123","ts":"1234567890.123456"}`))
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_, _ = w.Write([]byte(`{"ok":true,"channel":"C123","ts":"1234567890.123456"}`))
 		case "/api/search.messages":
-			w.Write([]byte(`{"ok":true,"messages":{"matches":[]}}`))
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_, _ = w.Write([]byte(`{"ok":true,"messages":{"matches":[]}}`))
 		case "/api/reactions.add":
-			w.Write([]byte(`{"ok":true}`))
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_, _ = w.Write([]byte(`{"ok":true}`))
 		case "/api/reactions.remove":
-			w.Write([]byte(`{"ok":true}`))
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_, _ = w.Write([]byte(`{"ok":true}`))
 		case "/api/users.info":
-			w.Write([]byte(`{"ok":true,"user":{"id":"U123","name":"testuser"}}`))
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"U123","name":"testuser"}}`))
 		case "/api/users.getPresence":
-			w.Write([]byte(`{"ok":true,"presence":"active"}`))
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_, _ = w.Write([]byte(`{"ok":true,"presence":"active"}`))
 		case "/api/views.publish":
-			w.Write([]byte(`{"ok":true}`))
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_, _ = w.Write([]byte(`{"ok":true}`))
 		default:
-			w.Write([]byte(`{"ok":true}`))
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_, _ = w.Write([]byte(`{"ok":true}`))
 		}
 	}))
 	defer server.Close()
 
 	// Create Slack client pointing to mock server
 	slackClient := slack.New("test-token", slack.OptionAPIURL(server.URL+"/api/"))
-	wrapper := newSlackAPIWrapper(slackClient)
+	wrapper := newAPIWrapper(slackClient)
 
 	ctx := context.Background()
 

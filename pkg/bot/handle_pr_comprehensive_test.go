@@ -272,13 +272,13 @@ func TestHandlePullRequestEventWithData_DuplicateBlockedUsers(t *testing.T) {
 
 // TestHandlePullRequestEventWithData_ExtractStateFromTurnclient tests state extraction.
 func TestHandlePullRequestEventWithData_ExtractStateFromTurnclient(t *testing.T) {
-	ctx := context.Background()
 
 	c := NewTestCoordinator().
 		WithState(NewMockState().Build()).
 		WithSlack(NewMockSlack().Build()).
 		WithConfig(NewMockConfig().Build()).
 		Build()
+	ctx := context.Background()
 
 	tests := []struct {
 		name          string
@@ -351,4 +351,3 @@ func TestHandlePullRequestEventWithData_ExtractStateFromTurnclient(t *testing.T)
 		})
 	}
 }
-

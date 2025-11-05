@@ -25,8 +25,9 @@ func testCoordinator(mockState *mockStateStore) *Coordinator {
 }
 
 func TestCoordinator_SaveThread(t *testing.T) {
+	ctx := context.Background()
 	mockState := &mockStateStore{
-		threads: make(map[string]ThreadInfo),
+		threads: make(map[string]cache.ThreadInfo),
 	}
 	c := testCoordinator(mockState)
 
@@ -35,7 +36,7 @@ func TestCoordinator_SaveThread(t *testing.T) {
 	number := 42
 	channelID := "C123456"
 
-	info := ThreadInfo{
+	info := cache.ThreadInfo{
 		ThreadTS:      "1234567890.123456",
 		MessageText:   "Test PR #42",
 		ChannelID:     channelID,
@@ -43,7 +44,7 @@ func TestCoordinator_SaveThread(t *testing.T) {
 		LastEventTime: time.Now(),
 	}
 
-	c.saveThread(owner, repo, number, channelID, info)
+	c.saveThread(ctx, owner, repo, number, channelID, info)
 
 	// Verify saved to cache
 	cacheKey := "testorg/testrepo#42:C123456"
@@ -256,7 +257,6 @@ func TestCoordinator_CreatePRThread(t *testing.T) {
 	}
 
 	threadTS, messageText, err := c.createPRThread(ctx, "C123", "testorg", "testrepo", 42, "awaiting_review", pr, checkResult)
-
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

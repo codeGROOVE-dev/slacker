@@ -1,4 +1,3 @@
-// Package usermapping provides GitHub-to-Slack user mapping functionality.
 package usermapping
 
 import (
@@ -33,7 +32,7 @@ type ReverseMapping struct {
 }
 
 // NewReverseService creates a new reverse mapping service (Slack → GitHub).
-func NewReverseService(slackClient *slack.Client, githubToken string) *ReverseService {
+func NewReverseService(_ *slack.Client, githubToken string) *ReverseService {
 	return &ReverseService{
 		orgCache:  ghmailto.NewOrgCacheService(githubToken),
 		cache:     make(map[string]*ReverseMapping),
@@ -42,7 +41,7 @@ func NewReverseService(slackClient *slack.Client, githubToken string) *ReverseSe
 }
 
 // SetOverrides updates the manual user mapping overrides from config.
-// Format: githubUsername -> email
+// Format: githubUsername -> email.
 func (s *ReverseService) SetOverrides(overrides map[string]string) {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
@@ -82,7 +81,7 @@ func (s *ReverseService) LookupGitHub(ctx context.Context, slackClient SlackAPI,
 		slog.Warn("Slack user has no email",
 			"slack_user_id", slackUserID,
 			"slack_username", slackUser.Name)
-		return nil, fmt.Errorf("Slack user has no email: %s", slackUserID)
+		return nil, fmt.Errorf("slack user has no email: %s", slackUserID)
 	}
 
 	// Check if this email has a config override
@@ -150,6 +149,8 @@ func (s *ReverseService) LookupGitHub(ctx context.Context, slackClient SlackAPI,
 
 // reverseEmailLookup performs the actual reverse lookup: email → GitHub username.
 // Uses the org-wide identity cache for fast, reliable lookups.
+//
+//nolint:revive // Function signature length is acceptable for clarity
 func (s *ReverseService) reverseEmailLookup(ctx context.Context, email, organization string) (username string, confidence int, matchMethod string, err error) {
 	slog.Info("starting reverse email lookup via org cache",
 		"email", email,

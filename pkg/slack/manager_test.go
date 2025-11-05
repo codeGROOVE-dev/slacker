@@ -63,7 +63,9 @@ func TestManagerSetHomeViewHandler(t *testing.T) {
 	}
 
 	// Verify handler works
-	_ = client.homeViewHandler(context.Background(), "T123", "U123")
+	if err := client.homeViewHandler(context.Background(), "T123", "U123"); err != nil {
+		t.Errorf("unexpected error from handler: %v", err)
+	}
 	if !handlerCalled {
 		t.Error("expected handler to be called")
 	}

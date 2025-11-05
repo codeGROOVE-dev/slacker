@@ -137,7 +137,7 @@ func TestCheckEventIntegration_CacheHit(t *testing.T) {
 
 	// Create coordinator with real commit cache
 	coord := &Coordinator{
-		stateStore: mockStore,
+		stateStore:    mockStore,
 		commitPRCache: cache.NewCommitPRCache(),
 		github: &mockGitHubClientForCache{
 			// Mock should NOT be called if cache works
@@ -185,7 +185,7 @@ func TestCheckEventIntegration_CacheMissFallback(t *testing.T) {
 
 	// Create coordinator with empty cache
 	coord := &Coordinator{
-		stateStore: mockStore,
+		stateStore:    mockStore,
 		commitPRCache: cache.NewCommitPRCache(),
 		github: &mockGitHubClientForCache{
 			// Mock SHOULD be called on cache miss

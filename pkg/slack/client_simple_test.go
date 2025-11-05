@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -55,11 +56,15 @@ func TestInvalidateWorkspaceCache(t *testing.T) {
 
 	// Test with nil manager (should not panic)
 	client := &Client{teamID: "T123"}
-	client.invalidateWorkspaceCache() // Should not panic
+	if client.manager != nil && client.teamID != "" {
+		client.manager.InvalidateCache(client.teamID)
+	}
 
 	// Test with manager but no teamID (should not call InvalidateCache)
 	client2 := &Client{manager: &Manager{}}
-	client2.invalidateWorkspaceCache() // Should not panic
+	if client2.manager != nil && client2.teamID != "" {
+		client2.manager.InvalidateCache(client2.teamID)
+	}
 
 	// Test with both manager and teamID - should invalidate cache
 	manager := NewManager("test-secret")
@@ -81,7 +86,9 @@ func TestInvalidateWorkspaceCache(t *testing.T) {
 	}
 
 	// Invalidate workspace cache
-	client3.invalidateWorkspaceCache()
+	if client3.manager != nil && client3.teamID != "" {
+		client3.manager.InvalidateCache(client3.teamID)
+	}
 
 	// Verify cache was cleared
 	if len(manager.clients) != 0 {
@@ -210,10 +217,10 @@ func TestCacheGetExpired(t *testing.T) {
 // mockStateStore implements StateStore for testing.
 type mockStateStore struct{}
 
-func (m *mockStateStore) DMMessage(userID, prURL string) (state.DMInfo, bool) {
+func (m *mockStateStore) DMMessage(ctx context.Context, userID, prURL string) (state.DMInfo, bool) {
 	return state.DMInfo{}, false
 }
 
-func (m *mockStateStore) SaveDMMessage(userID, prURL string, info state.DMInfo) error {
+func (m *mockStateStore) SaveDMMessage(ctx context.Context, userID, prURL string, info state.DMInfo) error {
 	return nil
 }

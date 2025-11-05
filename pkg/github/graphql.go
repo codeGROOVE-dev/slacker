@@ -184,7 +184,7 @@ func (c *SearchClient) searchPRs(ctx context.Context, query, org string) ([]PRSn
 }
 
 // extractOwnerRepo extracts owner and repo from a repository URL.
-// Example: "https://api.github.com/repos/owner/repo" -> "owner", "repo"
+// Example: "https://api.github.com/repos/owner/repo" -> "owner", "repo".
 func extractOwnerRepo(repoURL string) (owner, repo string) {
 	// URL format: https://api.github.com/repos/owner/repo
 	const prefix = "https://api.github.com/repos/"
@@ -194,7 +194,7 @@ func extractOwnerRepo(repoURL string) (owner, repo string) {
 
 	path := repoURL[len(prefix):]
 	// Split on first slash to get owner/repo
-	for i := 0; i < len(path); i++ {
+	for i := range len(path) {
 		if path[i] == '/' {
 			return path[:i], path[i+1:]
 		}

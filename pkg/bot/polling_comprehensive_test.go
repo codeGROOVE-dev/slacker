@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 	"github.com/codeGROOVE-dev/slacker/pkg/github"
 	"github.com/slack-go/slack"
 )
@@ -37,7 +38,7 @@ func TestUpdateClosedPRThread_ThreadInStateStore(t *testing.T) {
 		Build()
 
 	mockState := NewMockState().
-		WithThread("testorg", "testrepo", 42, "C_ENG", ThreadInfo{
+		WithThread("testorg", "testrepo", 42, "C_ENG", cache.ThreadInfo{
 			ThreadTS:    "1234.567",
 			ChannelID:   "C_ENG",
 			MessageText: "old message",
@@ -255,7 +256,7 @@ func TestUpdateClosedPRThread_UpdateMessageError(t *testing.T) {
 		Build()
 
 	mockState := NewMockState().
-		WithThread("testorg", "testrepo", 42, "C_ENG", ThreadInfo{
+		WithThread("testorg", "testrepo", 42, "C_ENG", cache.ThreadInfo{
 			ThreadTS:    "1234.567",
 			ChannelID:   "C_ENG",
 			MessageText: "old message",
@@ -312,11 +313,11 @@ func TestUpdateClosedPRThread_MultipleChannels(t *testing.T) {
 		Build()
 
 	mockState := NewMockState().
-		WithThread("testorg", "testrepo", 42, "C_ENG", ThreadInfo{
+		WithThread("testorg", "testrepo", 42, "C_ENG", cache.ThreadInfo{
 			ThreadTS:  "1111.111",
 			ChannelID: "C_ENG",
 		}).
-		WithThread("testorg", "testrepo", 42, "C_QA", ThreadInfo{
+		WithThread("testorg", "testrepo", 42, "C_QA", cache.ThreadInfo{
 			ThreadTS:  "2222.222",
 			ChannelID: "C_QA",
 		}).
@@ -371,7 +372,7 @@ func TestUpdateClosedPRThread_ClosedNotMerged(t *testing.T) {
 		Build()
 
 	mockState := NewMockState().
-		WithThread("testorg", "testrepo", 42, "C_ENG", ThreadInfo{
+		WithThread("testorg", "testrepo", 42, "C_ENG", cache.ThreadInfo{
 			ThreadTS:  "1234.567",
 			ChannelID: "C_ENG",
 		}).

@@ -7,28 +7,28 @@ import (
 	"github.com/slack-go/slack"
 )
 
-// MockSlackAPIBuilder provides a fluent API for building mockSlackAPI instances.
+// MockAPIBuilder provides a fluent API for building mockAPI instances.
 // This makes test setup much more readable and maintainable.
 //
 // Example:
 //
-//	mockAPI := NewMockSlackAPI().
+//	mockAPI := NewMockAPI().
 //		WithPostMessageSuccess("C123", "1234.567").
 //		WithGetTeamInfo(&slack.TeamInfo{Domain: "test"}).
 //		Build()
-type MockSlackAPIBuilder struct {
-	mock *mockSlackAPI
+type MockAPIBuilder struct {
+	mock *mockAPI
 }
 
-// NewMockSlackAPI creates a new mock Slack API builder with sensible defaults.
-func NewMockSlackAPI() *MockSlackAPIBuilder {
-	return &MockSlackAPIBuilder{
-		mock: &mockSlackAPI{},
+// NewMockAPI creates a new mock Slack API builder with sensible defaults.
+func NewMockAPI() *MockAPIBuilder {
+	return &MockAPIBuilder{
+		mock: &mockAPI{},
 	}
 }
 
 // WithPostMessageSuccess configures the mock to successfully post messages.
-func (b *MockSlackAPIBuilder) WithPostMessageSuccess(channelID, timestamp string) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithPostMessageSuccess(channelID, timestamp string) *MockAPIBuilder {
 	b.mock.postMessageFunc = func(ctx context.Context, cid string, options ...slack.MsgOption) (string, string, error) {
 		return channelID, timestamp, nil
 	}
@@ -36,7 +36,7 @@ func (b *MockSlackAPIBuilder) WithPostMessageSuccess(channelID, timestamp string
 }
 
 // WithPostMessageError configures the mock to fail when posting messages.
-func (b *MockSlackAPIBuilder) WithPostMessageError(err error) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithPostMessageError(err error) *MockAPIBuilder {
 	b.mock.postMessageFunc = func(ctx context.Context, channelID string, options ...slack.MsgOption) (string, string, error) {
 		return "", "", err
 	}
@@ -44,7 +44,7 @@ func (b *MockSlackAPIBuilder) WithPostMessageError(err error) *MockSlackAPIBuild
 }
 
 // WithUpdateMessageSuccess configures the mock to successfully update messages.
-func (b *MockSlackAPIBuilder) WithUpdateMessageSuccess() *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithUpdateMessageSuccess() *MockAPIBuilder {
 	b.mock.updateMessageFunc = func(ctx context.Context, channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error) {
 		return channelID, timestamp, "", nil
 	}
@@ -52,7 +52,7 @@ func (b *MockSlackAPIBuilder) WithUpdateMessageSuccess() *MockSlackAPIBuilder {
 }
 
 // WithUpdateMessageError configures the mock to fail when updating messages.
-func (b *MockSlackAPIBuilder) WithUpdateMessageError(err error) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithUpdateMessageError(err error) *MockAPIBuilder {
 	b.mock.updateMessageFunc = func(ctx context.Context, channelID, timestamp string, options ...slack.MsgOption) (string, string, string, error) {
 		return "", "", "", err
 	}
@@ -60,7 +60,7 @@ func (b *MockSlackAPIBuilder) WithUpdateMessageError(err error) *MockSlackAPIBui
 }
 
 // WithGetTeamInfo configures the team info returned by the mock.
-func (b *MockSlackAPIBuilder) WithGetTeamInfo(info *slack.TeamInfo) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithGetTeamInfo(info *slack.TeamInfo) *MockAPIBuilder {
 	b.mock.getTeamInfoFunc = func(ctx context.Context) (*slack.TeamInfo, error) {
 		return info, nil
 	}
@@ -68,7 +68,7 @@ func (b *MockSlackAPIBuilder) WithGetTeamInfo(info *slack.TeamInfo) *MockSlackAP
 }
 
 // WithGetTeamInfoError configures the mock to fail when getting team info.
-func (b *MockSlackAPIBuilder) WithGetTeamInfoError(err error) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithGetTeamInfoError(err error) *MockAPIBuilder {
 	b.mock.getTeamInfoFunc = func(ctx context.Context) (*slack.TeamInfo, error) {
 		return nil, err
 	}
@@ -76,7 +76,7 @@ func (b *MockSlackAPIBuilder) WithGetTeamInfoError(err error) *MockSlackAPIBuild
 }
 
 // WithAuthTestSuccess configures the mock to successfully authenticate.
-func (b *MockSlackAPIBuilder) WithAuthTestSuccess(userID, teamID string) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithAuthTestSuccess(userID, teamID string) *MockAPIBuilder {
 	b.mock.authTestFunc = func(ctx context.Context) (*slack.AuthTestResponse, error) {
 		return &slack.AuthTestResponse{
 			UserID: userID,
@@ -87,7 +87,7 @@ func (b *MockSlackAPIBuilder) WithAuthTestSuccess(userID, teamID string) *MockSl
 }
 
 // WithAuthTestError configures the mock to fail authentication.
-func (b *MockSlackAPIBuilder) WithAuthTestError(err error) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithAuthTestError(err error) *MockAPIBuilder {
 	b.mock.authTestFunc = func(ctx context.Context) (*slack.AuthTestResponse, error) {
 		return nil, err
 	}
@@ -95,7 +95,7 @@ func (b *MockSlackAPIBuilder) WithAuthTestError(err error) *MockSlackAPIBuilder 
 }
 
 // WithGetConversationInfo configures the conversation info returned by the mock.
-func (b *MockSlackAPIBuilder) WithGetConversationInfo(channel *slack.Channel) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithGetConversationInfo(channel *slack.Channel) *MockAPIBuilder {
 	b.mock.getConversationInfoFunc = func(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error) {
 		return channel, nil
 	}
@@ -103,7 +103,7 @@ func (b *MockSlackAPIBuilder) WithGetConversationInfo(channel *slack.Channel) *M
 }
 
 // WithGetConversationInfoError configures the mock to fail when getting conversation info.
-func (b *MockSlackAPIBuilder) WithGetConversationInfoError(err error) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithGetConversationInfoError(err error) *MockAPIBuilder {
 	b.mock.getConversationInfoFunc = func(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error) {
 		return nil, err
 	}
@@ -111,7 +111,7 @@ func (b *MockSlackAPIBuilder) WithGetConversationInfoError(err error) *MockSlack
 }
 
 // WithGetConversationHistory configures the conversation history returned by the mock.
-func (b *MockSlackAPIBuilder) WithGetConversationHistory(messages []slack.Message) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithGetConversationHistory(messages []slack.Message) *MockAPIBuilder {
 	b.mock.getConversationHistoryFunc = func(ctx context.Context, params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error) {
 		return &slack.GetConversationHistoryResponse{
 			Messages: messages,
@@ -121,7 +121,7 @@ func (b *MockSlackAPIBuilder) WithGetConversationHistory(messages []slack.Messag
 }
 
 // WithGetConversationHistoryError configures the mock to fail when getting conversation history.
-func (b *MockSlackAPIBuilder) WithGetConversationHistoryError(err error) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithGetConversationHistoryError(err error) *MockAPIBuilder {
 	b.mock.getConversationHistoryFunc = func(ctx context.Context, params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error) {
 		return nil, err
 	}
@@ -129,7 +129,7 @@ func (b *MockSlackAPIBuilder) WithGetConversationHistoryError(err error) *MockSl
 }
 
 // WithGetUserInfo configures the user info returned by the mock.
-func (b *MockSlackAPIBuilder) WithGetUserInfo(user *slack.User) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithGetUserInfo(user *slack.User) *MockAPIBuilder {
 	b.mock.getUserInfoFunc = func(ctx context.Context, userID string) (*slack.User, error) {
 		return user, nil
 	}
@@ -137,7 +137,7 @@ func (b *MockSlackAPIBuilder) WithGetUserInfo(user *slack.User) *MockSlackAPIBui
 }
 
 // WithGetUserInfoError configures the mock to fail when getting user info.
-func (b *MockSlackAPIBuilder) WithGetUserInfoError(err error) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithGetUserInfoError(err error) *MockAPIBuilder {
 	b.mock.getUserInfoFunc = func(ctx context.Context, userID string) (*slack.User, error) {
 		return nil, err
 	}
@@ -145,7 +145,7 @@ func (b *MockSlackAPIBuilder) WithGetUserInfoError(err error) *MockSlackAPIBuild
 }
 
 // WithGetUserPresence configures the user presence returned by the mock.
-func (b *MockSlackAPIBuilder) WithGetUserPresence(presence string) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithGetUserPresence(presence string) *MockAPIBuilder {
 	b.mock.getUserPresenceFunc = func(ctx context.Context, userID string) (*slack.UserPresence, error) {
 		return &slack.UserPresence{
 			Presence: presence,
@@ -155,7 +155,7 @@ func (b *MockSlackAPIBuilder) WithGetUserPresence(presence string) *MockSlackAPI
 }
 
 // WithGetUserPresenceError configures the mock to fail when getting user presence.
-func (b *MockSlackAPIBuilder) WithGetUserPresenceError(err error) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithGetUserPresenceError(err error) *MockAPIBuilder {
 	b.mock.getUserPresenceFunc = func(ctx context.Context, userID string) (*slack.UserPresence, error) {
 		return nil, err
 	}
@@ -163,7 +163,7 @@ func (b *MockSlackAPIBuilder) WithGetUserPresenceError(err error) *MockSlackAPIB
 }
 
 // WithOpenConversation configures the conversation returned when opening a DM.
-func (b *MockSlackAPIBuilder) WithOpenConversation(channel *slack.Channel) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithOpenConversation(channel *slack.Channel) *MockAPIBuilder {
 	b.mock.openConversationFunc = func(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error) {
 		return channel, false, false, nil
 	}
@@ -171,7 +171,7 @@ func (b *MockSlackAPIBuilder) WithOpenConversation(channel *slack.Channel) *Mock
 }
 
 // WithOpenConversationError configures the mock to fail when opening conversations.
-func (b *MockSlackAPIBuilder) WithOpenConversationError(err error) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithOpenConversationError(err error) *MockAPIBuilder {
 	b.mock.openConversationFunc = func(ctx context.Context, params *slack.OpenConversationParameters) (*slack.Channel, bool, bool, error) {
 		return nil, false, false, err
 	}
@@ -179,7 +179,7 @@ func (b *MockSlackAPIBuilder) WithOpenConversationError(err error) *MockSlackAPI
 }
 
 // WithSearchMessages configures the search results returned by the mock.
-func (b *MockSlackAPIBuilder) WithSearchMessages(messages *slack.SearchMessages) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithSearchMessages(messages *slack.SearchMessages) *MockAPIBuilder {
 	b.mock.searchMessagesFunc = func(ctx context.Context, query string, params slack.SearchParameters) (*slack.SearchMessages, error) {
 		return messages, nil
 	}
@@ -187,7 +187,7 @@ func (b *MockSlackAPIBuilder) WithSearchMessages(messages *slack.SearchMessages)
 }
 
 // WithSearchMessagesError configures the mock to fail when searching messages.
-func (b *MockSlackAPIBuilder) WithSearchMessagesError(err error) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithSearchMessagesError(err error) *MockAPIBuilder {
 	b.mock.searchMessagesFunc = func(ctx context.Context, query string, params slack.SearchParameters) (*slack.SearchMessages, error) {
 		return nil, err
 	}
@@ -195,7 +195,7 @@ func (b *MockSlackAPIBuilder) WithSearchMessagesError(err error) *MockSlackAPIBu
 }
 
 // WithGetUsersInConversation configures the users in a conversation.
-func (b *MockSlackAPIBuilder) WithGetUsersInConversation(users []string) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithGetUsersInConversation(users []string) *MockAPIBuilder {
 	b.mock.getUsersInConversationFunc = func(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error) {
 		return users, "", nil
 	}
@@ -203,7 +203,7 @@ func (b *MockSlackAPIBuilder) WithGetUsersInConversation(users []string) *MockSl
 }
 
 // WithGetUsersInConversationError configures the mock to fail when getting users in conversation.
-func (b *MockSlackAPIBuilder) WithGetUsersInConversationError(err error) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithGetUsersInConversationError(err error) *MockAPIBuilder {
 	b.mock.getUsersInConversationFunc = func(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error) {
 		return nil, "", err
 	}
@@ -211,7 +211,7 @@ func (b *MockSlackAPIBuilder) WithGetUsersInConversationError(err error) *MockSl
 }
 
 // WithGetConversations configures the conversations returned by the mock.
-func (b *MockSlackAPIBuilder) WithGetConversations(channels []slack.Channel) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithGetConversations(channels []slack.Channel) *MockAPIBuilder {
 	b.mock.getConversationsFunc = func(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
 		return channels, "", nil
 	}
@@ -219,15 +219,15 @@ func (b *MockSlackAPIBuilder) WithGetConversations(channels []slack.Channel) *Mo
 }
 
 // WithGetConversationsError configures the mock to fail when getting conversations.
-func (b *MockSlackAPIBuilder) WithGetConversationsError(err error) *MockSlackAPIBuilder {
+func (b *MockAPIBuilder) WithGetConversationsError(err error) *MockAPIBuilder {
 	b.mock.getConversationsFunc = func(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error) {
 		return nil, "", err
 	}
 	return b
 }
 
-// Build returns the configured mockSlackAPI.
-func (b *MockSlackAPIBuilder) Build() *mockSlackAPI {
+// Build returns the configured mockAPI.
+func (b *MockAPIBuilder) Build() *mockAPI {
 	return b.mock
 }
 

@@ -1,11 +1,11 @@
 package bot
 
 import (
-	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 	"context"
 	"testing"
 	"time"
 
+	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 )
 
 func TestProcessEvent_EmptyMessage(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 	"github.com/codeGROOVE-dev/slacker/pkg/github"
 )
 
@@ -49,6 +50,7 @@ func TestPollAndReconcile_EmptyPRList(t *testing.T) {
 
 // TestPollAndReconcile_ContextCancellation tests graceful shutdown on context cancellation.
 func TestPollAndReconcile_ContextCancellation(t *testing.T) {
+	ctx := context.Background()
 	// Create a context that's already canceled
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
@@ -112,6 +114,7 @@ func TestStartupReconciliation_HappyPath(t *testing.T) {
 
 // TestStartupReconciliation_ContextCancellation tests cancellation handling.
 func TestStartupReconciliation_ContextCancellation(t *testing.T) {
+	ctx := context.Background()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
@@ -143,7 +146,7 @@ func TestUpdateClosedPRThread_HappyPath(t *testing.T) {
 
 	// Pre-populate state store with existing thread using builder
 	mockState := NewMockState().
-		WithThread("testorg", "testrepo", 42, "C123", ThreadInfo{
+		WithThread("testorg", "testrepo", 42, "C123", cache.ThreadInfo{
 			ThreadTS:    "1234.567",
 			ChannelID:   "C123",
 			MessageText: ":hourglass: Test PR",

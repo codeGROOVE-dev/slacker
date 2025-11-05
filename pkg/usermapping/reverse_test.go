@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	ghmailto "github.com/codeGROOVE-dev/gh-mailto/pkg/gh-mailto"
 	"github.com/slack-go/slack"
 )
 
@@ -30,29 +29,8 @@ func (m *mockSlackClient) GetUserInfo(userID string) (*slack.User, error) {
 	return nil, &slack.SlackErrorResponse{Err: "user_not_found"}
 }
 
-// mockOrgCache implements the org cache for testing.
-func createMockOrgCache(org string, identities []ghmailto.OrgIdentity) *ghmailto.OrgIdentityCache {
-	cache := &ghmailto.OrgIdentityCache{
-		Organization:  org,
-		CachedAt:      time.Now(),
-		Identities:    identities,
-		EmailToGitHub: make(map[string]string),
-		GitHubToEmail: make(map[string]string),
-		TotalMembers:  len(identities),
-	}
-
-	for i := range identities {
-		identity := &identities[i]
-		if identity.PrimaryEmail != "" {
-			cache.GitHubToEmail[identity.GitHubUsername] = identity.PrimaryEmail
-			cache.EmailToGitHub[identity.PrimaryEmail] = identity.GitHubUsername
-		}
-	}
-
-	return cache
-}
-
 func TestReverseMapping_ConfigOverride(t *testing.T) {
+	ctx := context.Background()
 	mockSlack := &mockSlackClient{
 		users: map[string]*slack.User{
 			"U12345": {
@@ -70,7 +48,6 @@ func TestReverseMapping_ConfigOverride(t *testing.T) {
 		"githubuser": "test@company.com",
 	})
 
-	ctx := context.Background()
 	mapping, err := service.LookupGitHub(ctx, mockSlack, "U12345", "test-org", "company.com")
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -90,6 +67,7 @@ func TestReverseMapping_ConfigOverride(t *testing.T) {
 }
 
 func TestReverseMapping_CacheHit(t *testing.T) {
+	ctx := context.Background()
 	mockSlack := &mockSlackClient{
 		users: map[string]*slack.User{
 			"U12345": {
@@ -115,7 +93,6 @@ func TestReverseMapping_CacheHit(t *testing.T) {
 		Confidence:     90,
 	}
 
-	ctx := context.Background()
 	mapping, err := service.LookupGitHub(ctx, mockSlack, "U12345", "test-org", "company.com")
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -189,13 +166,13 @@ func TestReverseMapping_ClearCache(t *testing.T) {
 }
 
 func TestReverseMapping_SlackUserNotFound(t *testing.T) {
+	ctx := context.Background()
 	mockSlack := &mockSlackClient{
 		users: map[string]*slack.User{},
 	}
 
 	service := NewReverseService(nil, "fake-token")
 
-	ctx := context.Background()
 	_, err := service.LookupGitHub(ctx, mockSlack, "U99999", "test-org", "company.com")
 	if err == nil {
 		t.Fatal("expected error for non-existent Slack user, got nil")
@@ -203,6 +180,7 @@ func TestReverseMapping_SlackUserNotFound(t *testing.T) {
 }
 
 func TestReverseMapping_NoEmail(t *testing.T) {
+	ctx := context.Background()
 	mockSlack := &mockSlackClient{
 		users: map[string]*slack.User{
 			"U12345": {
@@ -217,7 +195,6 @@ func TestReverseMapping_NoEmail(t *testing.T) {
 
 	service := NewReverseService(nil, "fake-token")
 
-	ctx := context.Background()
 	_, err := service.LookupGitHub(ctx, mockSlack, "U12345", "test-org", "company.com")
 	if err == nil {
 		t.Fatal("expected error for user with no email, got nil")
@@ -244,6 +221,7 @@ func TestReverseMapping_SetOverrides(t *testing.T) {
 }
 
 func TestReverseMapping_WrongOrgDomain(t *testing.T) {
+	ctx := context.Background()
 	mockSlack := &mockSlackClient{
 		users: map[string]*slack.User{
 			"U12345": {
@@ -258,7 +236,6 @@ func TestReverseMapping_WrongOrgDomain(t *testing.T) {
 
 	service := NewReverseService(nil, "fake-token")
 
-	ctx := context.Background()
 	_, err := service.LookupGitHub(ctx, mockSlack, "U12345", "test-org", "company.com")
 	if err == nil {
 		t.Fatal("expected error for mismatched email domain, got nil")

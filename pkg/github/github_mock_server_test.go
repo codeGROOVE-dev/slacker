@@ -100,11 +100,12 @@ func NewMockGitHubServer() *MockGitHubServer {
 
 	// Pull request endpoints
 	mux.HandleFunc("/repos/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/commits/") && strings.Contains(r.URL.Path, "/pulls") {
+		switch {
+		case strings.Contains(r.URL.Path, "/commits/") && strings.Contains(r.URL.Path, "/pulls"):
 			mock.handleListPRsForCommit(w, r)
-		} else if strings.Contains(r.URL.Path, "/pulls") {
+		case strings.Contains(r.URL.Path, "/pulls"):
 			mock.handleListPRs(w, r)
-		} else {
+		default:
 			http.NotFound(w, r)
 		}
 	})
@@ -116,7 +117,7 @@ func NewMockGitHubServer() *MockGitHubServer {
 	mux.HandleFunc("/rate_limit", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"resources": map[string]interface{}{
 				"core": map[string]interface{}{
 					"limit":     5000,
@@ -124,17 +125,21 @@ func NewMockGitHubServer() *MockGitHubServer {
 					"reset":     time.Now().Add(1 * time.Hour).Unix(),
 				},
 			},
-		})
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 	})
 
 	// Installation repositories endpoint for token validation
 	mux.HandleFunc("/installation/repositories", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"total_count":  0,
 			"repositories": []interface{}{},
-		})
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 	})
 
 	mock.server = httptest.NewServer(mux)
@@ -187,7 +192,9 @@ func (m *MockGitHubServer) handleListInstallations(w http.ResponseWriter, r *htt
 
 	// Return installations
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(m.installations)
+	if err := json.NewEncoder(w).Encode(m.installations); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // handleGetInstallation handles GET /app/installations/{id}.
@@ -210,7 +217,9 @@ func (m *MockGitHubServer) handleGetInstallation(w http.ResponseWriter, r *http.
 	for _, inst := range m.installations {
 		if inst.ID == id {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(inst)
+			if err := json.NewEncoder(w).Encode(inst); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
 			return
 		}
 	}
@@ -278,7 +287,9 @@ func (m *MockGitHubServer) handleCreateInstallationToken(w http.ResponseWriter, 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(token)
+	if err := json.NewEncoder(w).Encode(token); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // handleListPRsForCommit handles GET /repos/{owner}/{repo}/commits/{sha}/pulls.
@@ -306,7 +317,8 @@ func (m *MockGitHubServer) handleListPRsForCommit(w http.ResponseWriter, r *http
 				// Find the PR details
 				repoKey := owner + "/" + repo
 				if repoPRs, ok := m.pullRequests[repoKey]; ok {
-					for _, pr := range repoPRs {
+					for i := range repoPRs {
+						pr := &repoPRs[i]
 						if pr.Number == prNum {
 							prs = append(prs, &github.PullRequest{
 								Number:    github.Int(pr.Number),
@@ -326,7 +338,9 @@ func (m *MockGitHubServer) handleListPRsForCommit(w http.ResponseWriter, r *http
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(prs)
+	if err := json.NewEncoder(w).Encode(prs); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // handleListPRs handles GET /repos/{owner}/{repo}/pulls.
@@ -353,7 +367,8 @@ func (m *MockGitHubServer) handleListPRs(w http.ResponseWriter, r *http.Request)
 	// Filter PRs by state
 	var prs []*github.PullRequest
 	if repoPRs, ok := m.pullRequests[key]; ok {
-		for _, pr := range repoPRs {
+		for i := range repoPRs {
+			pr := &repoPRs[i]
 			if state == "all" || pr.State == state {
 				prs = append(prs, &github.PullRequest{
 					Number:    github.Int(pr.Number),
@@ -369,7 +384,9 @@ func (m *MockGitHubServer) handleListPRs(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(prs)
+	if err := json.NewEncoder(w).Encode(prs); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // handleSearchIssues handles GET /search/issues (used for PR search).
@@ -404,7 +421,8 @@ func (m *MockGitHubServer) handleSearchIssues(w http.ResponseWriter, r *http.Req
 			continue
 		}
 
-		for _, pr := range prs {
+		for i := range prs {
+			pr := &prs[i]
 			// Check state filter in query
 			if strings.Contains(query, "is:open") && pr.State != "open" {
 				continue
@@ -433,5 +451,7 @@ func (m *MockGitHubServer) handleSearchIssues(w http.ResponseWriter, r *http.Req
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }

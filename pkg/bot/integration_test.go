@@ -7,6 +7,7 @@ import (
 	"time"
 
 	ghmailto "github.com/codeGROOVE-dev/gh-mailto/pkg/gh-mailto"
+	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/slacker/pkg/notify"
 	"github.com/codeGROOVE-dev/slacker/pkg/slack"
 	"github.com/codeGROOVE-dev/slacker/pkg/slacktest"
@@ -14,12 +15,10 @@ import (
 	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 	slackapi "github.com/slack-go/slack"
-	"github.com/codeGROOVE-dev/slacker/pkg/config"
 )
 
 // TestUserMappingIntegration tests the complete flow of mapping GitHub users to Slack users.
 func TestUserMappingIntegration(t *testing.T) {
-	ctx := context.Background()
 
 	// Setup mock Slack server
 	mockSlack := slacktest.New()
@@ -27,6 +26,8 @@ func TestUserMappingIntegration(t *testing.T) {
 
 	// Add test users
 	mockSlack.AddUser("alice@example.com", "U001", "alice")
+	ctx := context.Background()
+
 	mockSlack.AddUser("bob@example.com", "U002", "bob")
 
 	// Create Slack client pointing to mock server
@@ -91,7 +92,7 @@ func TestUserMappingIntegration(t *testing.T) {
 	}
 
 	// Verify email lookups were performed
-	emailLookups := mockSlack.GetEmailLookups()
+	emailLookups := mockSlack.EmailLookups()
 	if len(emailLookups) < 3 {
 		t.Errorf("Expected at least 3 email lookups, got %d", len(emailLookups))
 	}
@@ -314,7 +315,7 @@ func TestDMDelayLogicIntegration(t *testing.T) {
 			time.Sleep(50 * time.Millisecond)
 
 			// Verify
-			postedMessages := mockSlack.GetPostedMessages()
+			postedMessages := mockSlack.PostedMessages()
 			dmCount := 0
 			for _, msg := range postedMessages {
 				if strings.HasPrefix(msg.Channel, "D") {

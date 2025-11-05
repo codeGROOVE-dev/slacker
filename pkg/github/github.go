@@ -34,9 +34,9 @@ type Client struct {
 	appID             string
 	installationToken string
 	organization      string
+	baseURL           string
 	installationID    int64
 	tokenMutex        sync.RWMutex
-	baseURL           string // Optional: override GitHub API base URL for testing
 }
 
 // refreshingTokenSource implements oauth2.TokenSource that automatically refreshes tokens.
@@ -447,11 +447,11 @@ func (c *Client) InstallationToken(ctx context.Context) string {
 // Manager manages multiple GitHub App installations.
 type Manager struct {
 	privateKey            *rsa.PrivateKey
-	clients               map[string]*Client // org -> client
+	clients               map[string]*Client
 	appID                 string
-	allowPersonalAccounts bool   // Allow processing personal accounts (default: false for DoS protection)
-	baseURL               string // Optional: override GitHub API base URL for testing
+	baseURL               string
 	mu                    sync.RWMutex
+	allowPersonalAccounts bool
 }
 
 // NewManager creates a new installation manager.

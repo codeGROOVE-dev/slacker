@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -633,7 +634,7 @@ func TestNewDailyDigestScheduler(t *testing.T) {
 type mockSlackManager struct{}
 
 func (m *mockSlackManager) Client(ctx context.Context, teamID string) (SlackClient, error) {
-	return nil, nil
+	return nil, errors.New("not implemented")
 }
 
 // mockConfigManager implements the config interface needed by New and ConfigProvider.

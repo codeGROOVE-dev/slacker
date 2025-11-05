@@ -10,12 +10,11 @@ import (
 )
 
 func TestUserInfo(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
-	ctx := context.Background()
-
 	t.Run("success", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getUserInfoFunc: func(ctx context.Context, userID string) (*slack.User, error) {
 				return &slack.User{
 					ID:   userID,
@@ -39,7 +38,7 @@ func TestUserInfo(t *testing.T) {
 	})
 
 	t.Run("user_not_found", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getUserInfoFunc: func(ctx context.Context, userID string) (*slack.User, error) {
 				return nil, errors.New("user_not_found")
 			},
@@ -57,12 +56,11 @@ func TestUserInfo(t *testing.T) {
 }
 
 func TestUserPresence(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
-	ctx := context.Background()
-
 	t.Run("active", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getUserPresenceFunc: func(ctx context.Context, userID string) (*slack.UserPresence, error) {
 				return &slack.UserPresence{
 					Presence: "active",
@@ -85,7 +83,7 @@ func TestUserPresence(t *testing.T) {
 	})
 
 	t.Run("away", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getUserPresenceFunc: func(ctx context.Context, userID string) (*slack.UserPresence, error) {
 				return &slack.UserPresence{
 					Presence: "away",
@@ -108,7 +106,7 @@ func TestUserPresence(t *testing.T) {
 	})
 
 	t.Run("error", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getUserPresenceFunc: func(ctx context.Context, userID string) (*slack.UserPresence, error) {
 				return nil, errors.New("user_not_found")
 			},
@@ -123,15 +121,15 @@ func TestUserPresence(t *testing.T) {
 			t.Fatal("expected error")
 		}
 	})
+	//nolint:tparallel // Tests share resources, cannot run subtests in parallel
 }
 
 func TestIsUserActive(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
-	ctx := context.Background()
-
 	t.Run("active", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getUserPresenceFunc: func(ctx context.Context, userID string) (*slack.UserPresence, error) {
 				return &slack.UserPresence{
 					Presence: "active",
@@ -149,7 +147,7 @@ func TestIsUserActive(t *testing.T) {
 	})
 
 	t.Run("away", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getUserPresenceFunc: func(ctx context.Context, userID string) (*slack.UserPresence, error) {
 				return &slack.UserPresence{
 					Presence: "away",
@@ -167,7 +165,7 @@ func TestIsUserActive(t *testing.T) {
 	})
 
 	t.Run("error", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getUserPresenceFunc: func(ctx context.Context, userID string) (*slack.UserPresence, error) {
 				return nil, errors.New("api error")
 			},
@@ -182,16 +180,16 @@ func TestIsUserActive(t *testing.T) {
 		if client.IsUserActive(ctx, "U123") {
 			t.Error("expected false on error")
 		}
+		//nolint:tparallel // Tests share resources, cannot run subtests in parallel
 	})
 }
 
 func TestUserTimezone(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
-	ctx := context.Background()
-
 	t.Run("has_timezone", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getUserInfoFunc: func(ctx context.Context, userID string) (*slack.User, error) {
 				return &slack.User{
 					ID: userID,
@@ -218,7 +216,7 @@ func TestUserTimezone(t *testing.T) {
 	})
 
 	t.Run("no_timezone_defaults_to_utc", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getUserInfoFunc: func(ctx context.Context, userID string) (*slack.User, error) {
 				return &slack.User{
 					ID: userID,
@@ -246,7 +244,7 @@ func TestUserTimezone(t *testing.T) {
 
 	t.Run("cached_value", func(t *testing.T) {
 		callCount := 0
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getUserInfoFunc: func(ctx context.Context, userID string) (*slack.User, error) {
 				callCount++
 				if callCount == 1 {
@@ -295,7 +293,7 @@ func TestUserTimezone(t *testing.T) {
 	})
 
 	t.Run("error", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getUserInfoFunc: func(ctx context.Context, userID string) (*slack.User, error) {
 				return nil, errors.New("api error")
 			},
@@ -311,17 +309,17 @@ func TestUserTimezone(t *testing.T) {
 		_, err := client.UserTimezone(ctx, "U123")
 		if err == nil {
 			t.Fatal("expected error")
+			//nolint:tparallel // Tests share resources, cannot run subtests in parallel
 		}
 	})
 }
 
 func TestWorkspaceInfo(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
-	ctx := context.Background()
-
 	t.Run("success", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getTeamInfoFunc: func(ctx context.Context) (*slack.TeamInfo, error) {
 				return &slack.TeamInfo{
 					ID:   "T123",
@@ -353,7 +351,7 @@ func TestWorkspaceInfo(t *testing.T) {
 
 	t.Run("cached_value", func(t *testing.T) {
 		callCount := 0
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getTeamInfoFunc: func(ctx context.Context) (*slack.TeamInfo, error) {
 				callCount++
 				if callCount == 1 {
@@ -403,7 +401,7 @@ func TestWorkspaceInfo(t *testing.T) {
 
 	t.Run("invalidate_and_refresh", func(t *testing.T) {
 		callCount := 0
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getTeamInfoFunc: func(ctx context.Context) (*slack.TeamInfo, error) {
 				callCount++
 				if callCount == 1 {
@@ -455,7 +453,7 @@ func TestWorkspaceInfo(t *testing.T) {
 	})
 
 	t.Run("error", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getTeamInfoFunc: func(ctx context.Context) (*slack.TeamInfo, error) {
 				return nil, errors.New("api error")
 			},
@@ -475,7 +473,7 @@ func TestWorkspaceInfo(t *testing.T) {
 	})
 
 	t.Run("incorrect_cache_type", func(t *testing.T) {
-		api := &mockSlackAPI{
+		api := &mockAPI{
 			getTeamInfoFunc: func(ctx context.Context) (*slack.TeamInfo, error) {
 				return &slack.TeamInfo{
 					ID:   "T456",
@@ -501,6 +499,7 @@ func TestWorkspaceInfo(t *testing.T) {
 		}
 
 		if info.Name != "Fresh Workspace" {
+			//nolint:tparallel // Tests share resources, cannot run subtests in parallel
 			t.Errorf("expected 'Fresh Workspace' after cache invalidation, got %s", info.Name)
 		}
 	})

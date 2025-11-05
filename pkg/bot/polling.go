@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 	"github.com/codeGROOVE-dev/slacker/pkg/github"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
@@ -89,7 +90,7 @@ func (c *Coordinator) pollAndReconcileWithSearcher(ctx context.Context, searcher
 		eventKey := makePollEventKey(pr.URL, pr.UpdatedAt)
 
 		// Skip if already processed (by webhook or previous poll)
-		if c.stateStore.WasProcessed(eventKey) {
+		if c.stateStore.WasProcessed(ctx, eventKey) {
 			slog.Debug("skipping PR - already processed",
 				"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 				"pr_updated", pr.UpdatedAt)
@@ -105,7 +106,7 @@ func (c *Coordinator) pollAndReconcileWithSearcher(ctx context.Context, searcher
 			errorCount++
 		} else {
 			// Mark as processed
-			if err := c.stateStore.MarkProcessed(eventKey, 24*time.Hour); err != nil {
+			if err := c.stateStore.MarkProcessed(ctx, eventKey, 24*time.Hour); err != nil {
 				slog.Warn("failed to mark poll event as processed",
 					"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 					"error", err)
@@ -145,7 +146,7 @@ func (c *Coordinator) pollAndReconcileWithSearcher(ctx context.Context, searcher
 			eventKey := makeClosedPREventKey(pr.URL, pr.State, pr.UpdatedAt)
 
 			// Skip if already processed
-			if c.stateStore.WasProcessed(eventKey) {
+			if c.stateStore.WasProcessed(ctx, eventKey) {
 				slog.Debug("skipping closed PR - already processed",
 					"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 					"state", pr.State)
@@ -162,7 +163,7 @@ func (c *Coordinator) pollAndReconcileWithSearcher(ctx context.Context, searcher
 				closedErrorCount++
 			} else {
 				// Mark as processed
-				if err := c.stateStore.MarkProcessed(eventKey, 24*time.Hour); err != nil {
+				if err := c.stateStore.MarkProcessed(ctx, eventKey, 24*time.Hour); err != nil {
 					slog.Warn("failed to mark closed PR event as processed",
 						"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 						"error", err)
@@ -322,7 +323,7 @@ func (c *Coordinator) updateClosedPRThread(ctx context.Context, pr *github.PRSna
 			continue
 		}
 
-		info, ok := c.stateStore.Thread(pr.Owner, pr.Repo, pr.Number, id)
+		info, ok := c.stateStore.Thread(ctx, pr.Owner, pr.Repo, pr.Number, id)
 		if !ok {
 			// Thread not in persistent storage - search channel history as fallback
 			// This handles cases where state was lost or thread created before persistence was added
@@ -345,7 +346,7 @@ func (c *Coordinator) updateClosedPRThread(ctx context.Context, pr *github.PRSna
 			}
 
 			// Found via channel history - reconstruct ThreadInfo
-			info = ThreadInfo{
+			info = cache.ThreadInfo{
 				ThreadTS:    threadTS,
 				ChannelID:   id,
 				MessageText: messageText,
@@ -353,7 +354,7 @@ func (c *Coordinator) updateClosedPRThread(ctx context.Context, pr *github.PRSna
 			}
 
 			// Persist for future use (avoid redundant searches)
-			if err := c.stateStore.SaveThread(pr.Owner, pr.Repo, pr.Number, id, info); err != nil {
+			if err := c.stateStore.SaveThread(ctx, pr.Owner, pr.Repo, pr.Number, id, info); err != nil {
 				slog.Warn("failed to persist recovered thread",
 					"pr", prKey,
 					"error", err)
@@ -404,7 +405,7 @@ func emojiForPRState(state string) (string, error) {
 
 // replaceEmojiPrefix replaces the emoji prefix in a message.
 // This is a pure function that can be easily tested.
-// Format: ":emoji: Title • repo#123 by @user"
+// Format: ":emoji: Title • repo#123 by @user".
 func replaceEmojiPrefix(text, newEmoji string) string {
 	i := strings.Index(text, " ")
 	if i == -1 {
@@ -414,7 +415,7 @@ func replaceEmojiPrefix(text, newEmoji string) string {
 }
 
 // updateThreadForClosedPR updates a single thread's message to reflect closed/merged state.
-func (c *Coordinator) updateThreadForClosedPR(ctx context.Context, pr *github.PRSnapshot, channelID string, info ThreadInfo) error {
+func (c *Coordinator) updateThreadForClosedPR(ctx context.Context, pr *github.PRSnapshot, channelID string, info cache.ThreadInfo) error {
 	emoji, err := emojiForPRState(pr.State)
 	if err != nil {
 		return err
@@ -495,7 +496,7 @@ func (c *Coordinator) StartupReconciliation(ctx context.Context) {
 		eventKey := makeReconcileEventKey(pr.URL, pr.UpdatedAt)
 
 		// Check if we already processed this exact PR update (via webhook or previous reconciliation)
-		if c.stateStore.WasProcessed(eventKey) {
+		if c.stateStore.WasProcessed(ctx, eventKey) {
 			skippedCount++
 			slog.Debug("skipping PR - already processed this update",
 				"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
@@ -505,7 +506,7 @@ func (c *Coordinator) StartupReconciliation(ctx context.Context) {
 		}
 
 		// Check notification state
-		lastNotified := c.stateStore.LastNotification(pr.URL)
+		lastNotified := c.stateStore.LastNotification(ctx, pr.URL)
 
 		// Determine if we should notify
 		reason, shouldNotify := shouldReconcilePR(pr.UpdatedAt, lastNotified)
@@ -533,13 +534,13 @@ func (c *Coordinator) StartupReconciliation(ctx context.Context) {
 		} else {
 			reconciledCount++
 			// Mark as processed to prevent duplicate processing
-			if err := c.stateStore.MarkProcessed(eventKey, 24*time.Hour); err != nil {
+			if err := c.stateStore.MarkProcessed(ctx, eventKey, 24*time.Hour); err != nil {
 				slog.Warn("failed to mark reconciliation event as processed",
 					"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 					"error", err)
 			}
 			// Record that we notified
-			if err := c.stateStore.RecordNotification(pr.URL, time.Now()); err != nil {
+			if err := c.stateStore.RecordNotification(ctx, pr.URL, time.Now()); err != nil {
 				slog.Warn("failed to record notification",
 					"pr", formatPRIdentifier(pr.Owner, pr.Repo, pr.Number),
 					"error", err)

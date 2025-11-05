@@ -262,7 +262,7 @@ func TestHandleSprinklerEvent_Deduplication(t *testing.T) {
 	c.handleSprinklerEvent(ctx, event, "testorg")
 
 	// Verify event was marked as processed
-	if !mockState.WasProcessed("unique-123") {
+	if !mockState.WasProcessed(ctx, "unique-123") {
 		t.Error("expected event to be marked as processed")
 	}
 
@@ -309,7 +309,7 @@ func TestHandleSprinklerEvent_PullRequestWithNumber(t *testing.T) {
 	c.handleSprinklerEvent(ctx, event, "testorg")
 
 	// Verify event was processed (marked in state store)
-	if !mockState.WasProcessed("pr-event-123") {
+	if !mockState.WasProcessed(ctx, "pr-event-123") {
 		t.Error("expected PR event to be marked as processed")
 	}
 
@@ -359,7 +359,7 @@ func TestHandleSprinklerEvent_CheckEventWithCommit(t *testing.T) {
 	c.handleSprinklerEvent(ctx, event, "testorg")
 
 	// Verify event was processed
-	if !mockState.WasProcessed("check-event-123") {
+	if !mockState.WasProcessed(ctx, "check-event-123") {
 		t.Error("expected check event to be marked as processed")
 	}
 }
@@ -606,7 +606,6 @@ func TestHandleAuthError_RefreshSuccess(t *testing.T) {
 	mockGH.token = "new-token"
 
 	newClient, err := c.handleAuthError(ctx, "testorg", createConfig)
-
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}
@@ -763,7 +762,7 @@ func TestHandleSprinklerEvent_DatabaseError(t *testing.T) {
 	c.handleSprinklerEvent(ctx, event, "testorg")
 
 	// Event should NOT be marked as processed due to database error
-	if mockState.WasProcessed("db-error-123") {
+	if mockState.WasProcessed(ctx, "db-error-123") {
 		t.Error("expected event NOT to be marked as processed after database error")
 	}
 }

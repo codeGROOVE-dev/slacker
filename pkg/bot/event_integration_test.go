@@ -31,13 +31,13 @@ func TestIntegration_FindOrCreatePRThread_CreateNew(t *testing.T) {
 	}
 
 	mockState := &mockStateStore{
-		threads: make(map[string]ThreadInfo),
+		threads: make(map[string]cache.ThreadInfo),
 	}
 
 	c := &Coordinator{
-		slack:         mockSlack,
-		stateStore:    mockState,
-		configManager: NewMockConfig().Build(),
+		slack:          mockSlack,
+		stateStore:     mockState,
+		configManager:  NewMockConfig().Build(),
 		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
@@ -66,7 +66,6 @@ func TestIntegration_FindOrCreatePRThread_CreateNew(t *testing.T) {
 
 	threadTS, wasNew, messageText, err := c.findOrCreatePRThread(
 		ctx, "C123", "testorg", "testrepo", 42, "awaiting_review", pr, checkResult)
-
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,13 +144,13 @@ func TestIntegration_FindOrCreatePRThread_FindExisting(t *testing.T) {
 	}
 
 	mockState := &mockStateStore{
-		threads: make(map[string]ThreadInfo),
+		threads: make(map[string]cache.ThreadInfo),
 	}
 
 	c := &Coordinator{
-		slack:         mockSlack,
-		stateStore:    mockState,
-		configManager: NewMockConfig().Build(),
+		slack:          mockSlack,
+		stateStore:     mockState,
+		configManager:  NewMockConfig().Build(),
 		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}
@@ -180,7 +179,6 @@ func TestIntegration_FindOrCreatePRThread_FindExisting(t *testing.T) {
 
 	threadTS, wasNew, messageText, err := c.findOrCreatePRThread(
 		ctx, "C123", "testorg", "testrepo", 42, "awaiting_review", pr, checkResult)
-
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -219,13 +217,13 @@ func TestIntegration_ThreadCache_Cleanup(t *testing.T) {
 	// Add some threads with different ages using the public API
 	// Note: We can't manually set UpdatedAt, so this test verifies that
 	// Cleanup() works with the public API's timestamp management
-	threadCache.Set("old#1:C123", ThreadInfo{
+	threadCache.Set("old#1:C123", cache.ThreadInfo{
 		ThreadTS: "1234.567",
 	})
-	threadCache.Set("recent#1:C123", ThreadInfo{
+	threadCache.Set("recent#1:C123", cache.ThreadInfo{
 		ThreadTS: "2345.678",
 	})
-	threadCache.Set("new#1:C123", ThreadInfo{
+	threadCache.Set("new#1:C123", cache.ThreadInfo{
 		ThreadTS: "3456.789",
 	})
 
@@ -265,13 +263,13 @@ func TestIntegration_FindOrCreatePRThread_ConcurrentCreation(t *testing.T) {
 	}
 
 	mockState := &mockStateStore{
-		threads: make(map[string]ThreadInfo),
+		threads: make(map[string]cache.ThreadInfo),
 	}
 
 	c := &Coordinator{
-		slack:         mockSlack,
-		stateStore:    mockState,
-		configManager: NewMockConfig().Build(),
+		slack:          mockSlack,
+		stateStore:     mockState,
+		configManager:  NewMockConfig().Build(),
 		threadCache:    cache.New(),
 		eventSemaphore: make(chan struct{}, 10),
 	}

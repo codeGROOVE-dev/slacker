@@ -1,6 +1,7 @@
 package state
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,22 +10,10 @@ import (
 
 func TestNewJSONStore(t *testing.T) {
 	// Use temp dir for test
-	tempDir, err := os.MkdirTemp("", "slacker-state-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	tempDir := t.TempDir()
 
 	// Override cache dir for testing
-	oldCacheDir := os.Getenv("XDG_CACHE_HOME")
-	os.Setenv("XDG_CACHE_HOME", tempDir)
-	defer func() {
-		if oldCacheDir != "" {
-			os.Setenv("XDG_CACHE_HOME", oldCacheDir)
-		} else {
-			os.Unsetenv("XDG_CACHE_HOME")
-		}
-	}()
+	t.Setenv("XDG_CACHE_HOME", tempDir)
 
 	store, err := NewJSONStore()
 	if err != nil {
@@ -36,15 +25,13 @@ func TestNewJSONStore(t *testing.T) {
 	}
 
 	// Clean up
-	store.Close()
+	//nolint:errcheck // Test cleanup error can be ignored
+	_ = store.Close()
 }
 
 func TestJSONStore_ThreadOperations(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "slacker-state-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	ctx := context.Background()
+	tempDir := t.TempDir()
 
 	store := &JSONStore{
 		baseDir:       tempDir,
@@ -57,7 +44,7 @@ func TestJSONStore_ThreadOperations(t *testing.T) {
 	}
 
 	// Test non-existent thread
-	_, exists := store.Thread("owner", "repo", 123, "C123")
+	_, exists := store.Thread(ctx, "owner", "repo", 123, "C123")
 	if exists {
 		t.Error("expected thread to not exist")
 	}
@@ -70,13 +57,12 @@ func TestJSONStore_ThreadOperations(t *testing.T) {
 		MessageText: "Test PR",
 	}
 
-	err = store.SaveThread("owner", "repo", 123, "C123", threadInfo)
-	if err != nil {
+	if err := store.SaveThread(ctx, "owner", "repo", 123, "C123", threadInfo); err != nil {
 		t.Fatalf("unexpected error saving thread: %v", err)
 	}
 
 	// Retrieve saved thread
-	retrieved, exists := store.Thread("owner", "repo", 123, "C123")
+	retrieved, exists := store.Thread(ctx, "owner", "repo", 123, "C123")
 	if !exists {
 		t.Fatal("expected thread to exist")
 	}
@@ -87,8 +73,9 @@ func TestJSONStore_ThreadOperations(t *testing.T) {
 }
 
 func TestJSONStore_DMOperations(t *testing.T) {
+	ctx := context.Background()
 	store := &JSONStore{
-		baseDir:       os.TempDir(),
+		baseDir:       t.TempDir(),
 		threads:       make(map[string]ThreadInfo),
 		dms:           make(map[string]time.Time),
 		dmMessages:    make(map[string]DMInfo),
@@ -98,20 +85,20 @@ func TestJSONStore_DMOperations(t *testing.T) {
 	}
 
 	// Test non-existent DM
-	_, exists := store.LastDM("U001", "https://github.com/test/repo/pull/123")
+	_, exists := store.LastDM(ctx, "U001", "https://github.com/test/repo/pull/123")
 	if exists {
 		t.Error("expected DM to not exist")
 	}
 
 	// Record DM
 	sentAt := time.Now()
-	err := store.RecordDM("U001", "https://github.com/test/repo/pull/123", sentAt)
+	err := store.RecordDM(ctx, "U001", "https://github.com/test/repo/pull/123", sentAt)
 	if err != nil {
 		t.Fatalf("unexpected error recording DM: %v", err)
 	}
 
 	// Retrieve recorded DM
-	retrieved, exists := store.LastDM("U001", "https://github.com/test/repo/pull/123")
+	retrieved, exists := store.LastDM(ctx, "U001", "https://github.com/test/repo/pull/123")
 	if !exists {
 		t.Fatal("expected DM to exist")
 	}
@@ -122,11 +109,8 @@ func TestJSONStore_DMOperations(t *testing.T) {
 }
 
 func TestJSONStore_Persistence(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "slacker-state-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	ctx := context.Background()
+	tempDir := t.TempDir()
 
 	// Create first store instance
 	store1 := &JSONStore{
@@ -146,11 +130,12 @@ func TestJSONStore_Persistence(t *testing.T) {
 		LastState:   "awaiting_review",
 		MessageText: "Test PR",
 	}
-	store1.SaveThread("owner", "repo", 123, "C123", threadInfo)
+	if err := store1.SaveThread(ctx, "owner", "repo", 123, "C123", threadInfo); err != nil {
+		t.Fatalf("failed to save thread: %v", err)
+	}
 
 	// Save to disk
-	err = store1.save()
-	if err != nil {
+	if err := store1.save(); err != nil {
 		t.Fatalf("unexpected error saving: %v", err)
 	}
 
@@ -166,13 +151,12 @@ func TestJSONStore_Persistence(t *testing.T) {
 	}
 
 	// Load from disk
-	err = store2.load()
-	if err != nil {
+	if err := store2.load(); err != nil {
 		t.Fatalf("unexpected error loading: %v", err)
 	}
 
 	// Verify data persisted
-	retrieved, exists := store2.Thread("owner", "repo", 123, "C123")
+	retrieved, exists := store2.Thread(ctx, "owner", "repo", 123, "C123")
 	if !exists {
 		t.Fatal("expected thread to exist after reload")
 	}
@@ -183,8 +167,9 @@ func TestJSONStore_Persistence(t *testing.T) {
 }
 
 func TestJSONStore_ListDMUsers(t *testing.T) {
+	ctx := context.Background()
 	store := &JSONStore{
-		baseDir:       os.TempDir(),
+		baseDir:       t.TempDir(),
 		threads:       make(map[string]ThreadInfo),
 		dms:           make(map[string]time.Time),
 		dmMessages:    make(map[string]DMInfo),
@@ -203,23 +188,26 @@ func TestJSONStore_ListDMUsers(t *testing.T) {
 		MessageText: "Test DM",
 	}
 
-	store.SaveDMMessage("U001", prURL, dmInfo)
-	store.SaveDMMessage("U002", prURL, dmInfo)
-	store.SaveDMMessage("U003", prURL, dmInfo)
+	if err := store.SaveDMMessage(ctx, "U001", prURL, dmInfo); err != nil {
+		t.Fatalf("failed to save DM for U001: %v", err)
+	}
+	if err := store.SaveDMMessage(ctx, "U002", prURL, dmInfo); err != nil {
+		t.Fatalf("failed to save DM for U002: %v", err)
+	}
+	if err := store.SaveDMMessage(ctx, "U003", prURL, dmInfo); err != nil {
+		t.Fatalf("failed to save DM for U003: %v", err)
+	}
 
 	// List users
-	users := store.ListDMUsers(prURL)
+	users := store.ListDMUsers(ctx, prURL)
 	if len(users) != 3 {
 		t.Fatalf("expected 3 users, got %d", len(users))
 	}
 }
 
 func TestJSONStore_Cleanup(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "slacker-state-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	ctx := context.Background()
+	tempDir := t.TempDir()
 
 	store := &JSONStore{
 		baseDir:       tempDir,
@@ -240,8 +228,7 @@ func TestJSONStore_Cleanup(t *testing.T) {
 	store.threads[threadKey("owner", "repo", 2, "C456")] = ThreadInfo{UpdatedAt: recentTime}
 
 	// Run cleanup
-	err = store.Cleanup()
-	if err != nil {
+	if err := store.Cleanup(ctx); err != nil {
 		t.Fatalf("unexpected error during cleanup: %v", err)
 	}
 
@@ -252,11 +239,7 @@ func TestJSONStore_Cleanup(t *testing.T) {
 }
 
 func TestJSONStore_SaveLoad_RoundTrip(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "slacker-state-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	tempDir := t.TempDir()
 
 	store := &JSONStore{
 		baseDir:       tempDir,
@@ -277,8 +260,7 @@ func TestJSONStore_SaveLoad_RoundTrip(t *testing.T) {
 	store.modified = true // Mark as modified so save() actually writes
 
 	// Save
-	err = store.save()
-	if err != nil {
+	if err := store.save(); err != nil {
 		t.Fatalf("unexpected error saving: %v", err)
 	}
 
@@ -299,8 +281,7 @@ func TestJSONStore_SaveLoad_RoundTrip(t *testing.T) {
 		notifications: make(map[string]time.Time),
 	}
 
-	err = store2.load()
-	if err != nil {
+	if err := store2.load(); err != nil {
 		t.Fatalf("unexpected error loading: %v", err)
 	}
 
@@ -317,11 +298,8 @@ func TestJSONStore_SaveLoad_RoundTrip(t *testing.T) {
 }
 
 func TestJSONStore_PendingDMOperations(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "slacker-state-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	ctx := context.Background()
+	tempDir := t.TempDir()
 
 	store := &JSONStore{
 		baseDir:       tempDir,
@@ -335,7 +313,7 @@ func TestJSONStore_PendingDMOperations(t *testing.T) {
 	}
 
 	// Test retrieval when no pending DMs exist
-	pending, err := store.GetPendingDMs(time.Now())
+	pending, err := store.PendingDMs(ctx, time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs: %v", err)
 	}
@@ -364,8 +342,7 @@ func TestJSONStore_PendingDMOperations(t *testing.T) {
 		SendAfter:     now.Add(-5 * time.Minute), // 5 minutes ago - ready to send
 	}
 
-	err = store.QueuePendingDM(dm1)
-	if err != nil {
+	if err := store.QueuePendingDM(ctx, &dm1); err != nil {
 		t.Fatalf("unexpected error queueing DM: %v", err)
 	}
 
@@ -389,13 +366,12 @@ func TestJSONStore_PendingDMOperations(t *testing.T) {
 		SendAfter:     now.Add(10 * time.Minute), // 10 minutes from now - not ready yet
 	}
 
-	err = store.QueuePendingDM(dm2)
-	if err != nil {
+	if err := store.QueuePendingDM(ctx, &dm2); err != nil {
 		t.Fatalf("unexpected error queueing second DM: %v", err)
 	}
 
 	// Get pending DMs that are ready to send
-	pending, err = store.GetPendingDMs(now)
+	pending, err = store.PendingDMs(ctx, now)
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs: %v", err)
 	}
@@ -417,7 +393,7 @@ func TestJSONStore_PendingDMOperations(t *testing.T) {
 
 	// Get pending DMs 15 minutes from now - both should be ready
 	future := now.Add(15 * time.Minute)
-	pending, err = store.GetPendingDMs(future)
+	pending, err = store.PendingDMs(ctx, future)
 	if err != nil {
 		t.Fatalf("unexpected error getting future pending DMs: %v", err)
 	}
@@ -427,13 +403,12 @@ func TestJSONStore_PendingDMOperations(t *testing.T) {
 	}
 
 	// Remove one DM
-	err = store.RemovePendingDM("dm-001")
-	if err != nil {
+	if err := store.RemovePendingDM(ctx, "dm-001"); err != nil {
 		t.Fatalf("unexpected error removing DM: %v", err)
 	}
 
 	// Now only dm2 should remain
-	pending, err = store.GetPendingDMs(future)
+	pending, err = store.PendingDMs(ctx, future)
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs after removal: %v", err)
 	}
@@ -447,18 +422,14 @@ func TestJSONStore_PendingDMOperations(t *testing.T) {
 	}
 
 	// Remove non-existent DM should not error
-	err = store.RemovePendingDM("dm-999")
-	if err != nil {
+	if err := store.RemovePendingDM(ctx, "dm-999"); err != nil {
 		t.Errorf("unexpected error removing non-existent DM: %v", err)
 	}
 }
 
 func TestJSONStore_PendingDMPersistence(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "slacker-state-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	ctx := context.Background()
+	tempDir := t.TempDir()
 
 	// Create first store instance
 	store1 := &JSONStore{
@@ -489,12 +460,15 @@ func TestJSONStore_PendingDMPersistence(t *testing.T) {
 		SendAfter: now.Add(10 * time.Minute),
 	}
 
-	store1.QueuePendingDM(dm1)
-	store1.QueuePendingDM(dm2)
+	if err := store1.QueuePendingDM(ctx, &dm1); err != nil {
+		t.Fatalf("failed to queue dm1: %v", err)
+	}
+	if err := store1.QueuePendingDM(ctx, &dm2); err != nil {
+		t.Fatalf("failed to queue dm2: %v", err)
+	}
 
 	// Save to disk (happens automatically in QueuePendingDM via modified flag)
-	err = store1.save()
-	if err != nil {
+	if err := store1.save(); err != nil {
 		t.Fatalf("unexpected error saving: %v", err)
 	}
 
@@ -511,14 +485,13 @@ func TestJSONStore_PendingDMPersistence(t *testing.T) {
 	}
 
 	// Load from disk
-	err = store2.load()
-	if err != nil {
+	if err := store2.load(); err != nil {
 		t.Fatalf("unexpected error loading: %v", err)
 	}
 
 	// Verify pending DMs persisted
 	future := now.Add(15 * time.Minute)
-	pending, err := store2.GetPendingDMs(future)
+	pending, err := store2.PendingDMs(ctx, future)
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs: %v", err)
 	}
@@ -542,11 +515,8 @@ func TestJSONStore_PendingDMPersistence(t *testing.T) {
 }
 
 func TestJSONStore_PendingDMCleanup(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "slacker-state-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	ctx := context.Background()
+	tempDir := t.TempDir()
 
 	store := &JSONStore{
 		baseDir:       tempDir,
@@ -570,7 +540,9 @@ func TestJSONStore_PendingDMCleanup(t *testing.T) {
 		QueuedAt:  oldTime,
 		SendAfter: oldTime,
 	}
-	store.QueuePendingDM(oldDM)
+	if err := store.QueuePendingDM(ctx, &oldDM); err != nil {
+		t.Fatalf("failed to queue old DM: %v", err)
+	}
 
 	// Add a recent pending DM
 	recentDM := PendingDM{
@@ -580,16 +552,17 @@ func TestJSONStore_PendingDMCleanup(t *testing.T) {
 		QueuedAt:  now,
 		SendAfter: now.Add(10 * time.Minute),
 	}
-	store.QueuePendingDM(recentDM)
+	if err := store.QueuePendingDM(ctx, &recentDM); err != nil {
+		t.Fatalf("failed to queue recent DM: %v", err)
+	}
 
 	// Run cleanup
-	err = store.Cleanup()
-	if err != nil {
+	if err := store.Cleanup(ctx); err != nil {
 		t.Fatalf("unexpected error during cleanup: %v", err)
 	}
 
 	// Verify old DM was removed
-	pending, err := store.GetPendingDMs(now.Add(24 * time.Hour))
+	pending, err := store.PendingDMs(ctx, now.Add(24*time.Hour))
 	if err != nil {
 		t.Fatalf("unexpected error getting pending DMs: %v", err)
 	}
@@ -604,8 +577,9 @@ func TestJSONStore_PendingDMCleanup(t *testing.T) {
 }
 
 func TestJSONStore_DMMessage(t *testing.T) {
+	ctx := context.Background()
 	store := &JSONStore{
-		baseDir:       os.TempDir(),
+		baseDir:       t.TempDir(),
 		threads:       make(map[string]ThreadInfo),
 		dms:           make(map[string]time.Time),
 		dmMessages:    make(map[string]DMInfo),
@@ -619,7 +593,7 @@ func TestJSONStore_DMMessage(t *testing.T) {
 	userID := "U001"
 
 	// Test non-existent DM message
-	_, exists := store.DMMessage(userID, prURL)
+	_, exists := store.DMMessage(ctx, userID, prURL)
 	if exists {
 		t.Error("expected DM message to not exist")
 	}
@@ -631,10 +605,12 @@ func TestJSONStore_DMMessage(t *testing.T) {
 		MessageTS:   "1234567890.123456",
 		MessageText: "Test DM message",
 	}
-	store.SaveDMMessage(userID, prURL, dmInfo)
+	if err := store.SaveDMMessage(ctx, userID, prURL, dmInfo); err != nil {
+		t.Fatalf("failed to save DM message: %v", err)
+	}
 
 	// Retrieve saved DM message
-	retrieved, exists := store.DMMessage(userID, prURL)
+	retrieved, exists := store.DMMessage(ctx, userID, prURL)
 	if !exists {
 		t.Fatal("expected DM message to exist")
 	}
@@ -648,8 +624,9 @@ func TestJSONStore_DMMessage(t *testing.T) {
 }
 
 func TestJSONStore_DigestOperations(t *testing.T) {
+	ctx := context.Background()
 	store := &JSONStore{
-		baseDir:       os.TempDir(),
+		baseDir:       t.TempDir(),
 		threads:       make(map[string]ThreadInfo),
 		dms:           make(map[string]time.Time),
 		dmMessages:    make(map[string]DMInfo),
@@ -663,20 +640,20 @@ func TestJSONStore_DigestOperations(t *testing.T) {
 	date := "2025-10-30"
 
 	// Test non-existent digest
-	_, exists := store.LastDigest(userID, date)
+	_, exists := store.LastDigest(ctx, userID, date)
 	if exists {
 		t.Error("expected digest to not exist")
 	}
 
 	// Record digest
 	sentAt := time.Now()
-	err := store.RecordDigest(userID, date, sentAt)
+	err := store.RecordDigest(ctx, userID, date, sentAt)
 	if err != nil {
 		t.Fatalf("unexpected error recording digest: %v", err)
 	}
 
 	// Retrieve digest
-	retrieved, exists := store.LastDigest(userID, date)
+	retrieved, exists := store.LastDigest(ctx, userID, date)
 	if !exists {
 		t.Fatal("expected digest to exist")
 	}
@@ -687,8 +664,9 @@ func TestJSONStore_DigestOperations(t *testing.T) {
 }
 
 func TestJSONStore_EventProcessing(t *testing.T) {
+	ctx := context.Background()
 	store := &JSONStore{
-		baseDir:       os.TempDir(),
+		baseDir:       t.TempDir(),
 		threads:       make(map[string]ThreadInfo),
 		dms:           make(map[string]time.Time),
 		dmMessages:    make(map[string]DMInfo),
@@ -701,25 +679,26 @@ func TestJSONStore_EventProcessing(t *testing.T) {
 	eventKey := "pull_request:123:opened"
 
 	// Test unprocessed event
-	if store.WasProcessed(eventKey) {
+	if store.WasProcessed(ctx, eventKey) {
 		t.Error("expected event to not be processed")
 	}
 
 	// Mark event as processed
-	err := store.MarkProcessed(eventKey, 24*time.Hour)
+	err := store.MarkProcessed(ctx, eventKey, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("unexpected error marking event as processed: %v", err)
 	}
 
 	// Check if event was processed
-	if !store.WasProcessed(eventKey) {
+	if !store.WasProcessed(ctx, eventKey) {
 		t.Error("expected event to be processed")
 	}
 }
 
 func TestJSONStore_NotificationOperations(t *testing.T) {
+	ctx := context.Background()
 	store := &JSONStore{
-		baseDir:       os.TempDir(),
+		baseDir:       t.TempDir(),
 		threads:       make(map[string]ThreadInfo),
 		dms:           make(map[string]time.Time),
 		dmMessages:    make(map[string]DMInfo),
@@ -732,20 +711,20 @@ func TestJSONStore_NotificationOperations(t *testing.T) {
 	prURL := "https://github.com/test/repo/pull/123"
 
 	// Test non-existent notification (should return zero time)
-	lastNotif := store.LastNotification(prURL)
+	lastNotif := store.LastNotification(ctx, prURL)
 	if !lastNotif.IsZero() {
 		t.Error("expected zero time for non-existent notification")
 	}
 
 	// Record notification
 	notifiedAt := time.Now()
-	err := store.RecordNotification(prURL, notifiedAt)
+	err := store.RecordNotification(ctx, prURL, notifiedAt)
 	if err != nil {
 		t.Fatalf("unexpected error recording notification: %v", err)
 	}
 
 	// Retrieve notification
-	retrieved := store.LastNotification(prURL)
+	retrieved := store.LastNotification(ctx, prURL)
 	if retrieved.IsZero() {
 		t.Fatal("expected non-zero notification time")
 	}

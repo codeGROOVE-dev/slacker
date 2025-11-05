@@ -79,21 +79,21 @@ type notifyEntity struct {
 
 // Pending DM entity.
 type pendingDMEntity struct {
-	WorkspaceID   string    `datastore:"workspace_id"`
-	UserID        string    `datastore:"user_id"`
-	PROwner       string    `datastore:"pr_owner"`
-	PRRepo        string    `datastore:"pr_repo"`
-	PRNumber      int       `datastore:"pr_number"`
-	PRURL         string    `datastore:"pr_url"`
+	QueuedAt      time.Time `datastore:"queued_at"`
+	SendAfter     time.Time `datastore:"send_after"`
 	PRTitle       string    `datastore:"pr_title,noindex"`
+	PRRepo        string    `datastore:"pr_repo"`
+	PRURL         string    `datastore:"pr_url"`
+	WorkspaceID   string    `datastore:"workspace_id"`
 	PRAuthor      string    `datastore:"pr_author"`
 	PRState       string    `datastore:"pr_state"`
 	WorkflowState string    `datastore:"workflow_state"`
 	NextActions   string    `datastore:"next_actions,noindex"`
 	ChannelID     string    `datastore:"channel_id"`
 	ChannelName   string    `datastore:"channel_name"`
-	QueuedAt      time.Time `datastore:"queued_at"`
-	SendAfter     time.Time `datastore:"send_after"`
+	PROwner       string    `datastore:"pr_owner"`
+	UserID        string    `datastore:"user_id"`
+	PRNumber      int       `datastore:"pr_number"`
 }
 
 // NewDatastoreStore creates a new Datastore-backed store with in-memory cache.
@@ -154,11 +154,11 @@ func NewDatastoreStore(ctx context.Context, projectID, databaseID string) (*Data
 }
 
 // Thread retrieves thread info with memory-first, then Datastore fallback.
-func (s *DatastoreStore) Thread(owner, repo string, number int, channelID string) (ThreadInfo, bool) {
+func (s *DatastoreStore) Thread(ctx context.Context, owner, repo string, number int, channelID string) (ThreadInfo, bool) {
 	key := threadKey(owner, repo, number, channelID)
 
 	// Fast path: Check memory cache first
-	info, exists := s.memory.Thread(owner, repo, number, channelID)
+	info, exists := s.memory.Thread(ctx, owner, repo, number, channelID)
 	if exists {
 		return info, true
 	}
@@ -169,13 +169,13 @@ func (s *DatastoreStore) Thread(owner, repo string, number int, channelID string
 	}
 
 	// Try Datastore with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
 
 	dsKey := datastore.NameKey(kindThread, key, nil)
 	var entity threadEntity
 
-	err := s.ds.Get(ctx, dsKey, &entity)
+	err := s.ds.Get(timeoutCtx, dsKey, &entity)
 	if err != nil {
 		if !errors.Is(err, datastore.ErrNoSuchEntity) {
 			slog.Debug("Datastore get failed, using cache",
@@ -195,7 +195,7 @@ func (s *DatastoreStore) Thread(owner, repo string, number int, channelID string
 	}
 
 	// Update memory cache (sync - fast)
-	if err := s.memory.SaveThread(owner, repo, number, channelID, result); err != nil {
+	if err := s.memory.SaveThread(ctx, owner, repo, number, channelID, result); err != nil {
 		slog.Debug("failed to update memory cache for thread", "error", err)
 	}
 
@@ -203,11 +203,11 @@ func (s *DatastoreStore) Thread(owner, repo string, number int, channelID string
 }
 
 // SaveThread saves thread info to memory and Datastore.
-func (s *DatastoreStore) SaveThread(owner, repo string, number int, channelID string, info ThreadInfo) error {
+func (s *DatastoreStore) SaveThread(ctx context.Context, owner, repo string, number int, channelID string, info ThreadInfo) error {
 	key := threadKey(owner, repo, number, channelID)
 
 	// Always save to memory (fast, local)
-	if err := s.memory.SaveThread(owner, repo, number, channelID, info); err != nil {
+	if err := s.memory.SaveThread(ctx, owner, repo, number, channelID, info); err != nil {
 		slog.Warn("failed to save thread to memory", "error", err)
 	}
 
@@ -219,34 +219,33 @@ func (s *DatastoreStore) SaveThread(owner, repo string, number int, channelID st
 	// Capture client for safe concurrent access
 	ds := s.ds
 
-	// Save to Datastore asynchronously (don't block)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
+	// Save to Datastore with timeout
+	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 
-		dsKey := datastore.NameKey(kindThread, key, nil)
-		entity := &threadEntity{
-			ThreadTS:      info.ThreadTS,
-			ChannelID:     info.ChannelID,
-			MessageText:   info.MessageText,
-			UpdatedAt:     time.Now(),
-			LastEventTime: info.LastEventTime,
-		}
+	dsKey := datastore.NameKey(kindThread, key, nil)
+	entity := &threadEntity{
+		ThreadTS:      info.ThreadTS,
+		ChannelID:     info.ChannelID,
+		MessageText:   info.MessageText,
+		UpdatedAt:     time.Now(),
+		LastEventTime: info.LastEventTime,
+	}
 
-		if _, err := ds.Put(ctx, dsKey, entity); err != nil {
-			slog.Error("failed to save thread to Datastore",
-				"key", key,
-				"error", err)
-		}
-	}()
+	if _, err := ds.Put(timeoutCtx, dsKey, entity); err != nil {
+		slog.Error("failed to save thread to Datastore",
+			"key", key,
+			"error", err)
+		return err
+	}
 
 	return nil
 }
 
 // LastDM retrieves last DM time with Datastore-first, memory fallback.
-func (s *DatastoreStore) LastDM(userID, prURL string) (time.Time, bool) {
+func (s *DatastoreStore) LastDM(ctx context.Context, userID, prURL string) (time.Time, bool) {
 	// Check memory first (fast)
-	t, exists := s.memory.LastDM(userID, prURL)
+	t, exists := s.memory.LastDM(ctx, userID, prURL)
 	if exists {
 		return t, true
 	}
@@ -257,35 +256,30 @@ func (s *DatastoreStore) LastDM(userID, prURL string) (time.Time, bool) {
 	}
 
 	// Try Datastore
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
 
 	key := dmKey(userID, prURL)
 	dsKey := datastore.NameKey(kindDM, key, nil)
 	var entity dmEntity
 
-	err := s.ds.Get(ctx, dsKey, &entity)
+	err := s.ds.Get(timeoutCtx, dsKey, &entity)
 	if err != nil {
 		return time.Time{}, false
 	}
 
-	// Capture memory store for safe concurrent access
-	mem := s.memory
-
-	// Update memory cache async
-	go func() {
-		if err := mem.RecordDM(userID, prURL, entity.SentAt); err != nil {
-			slog.Debug("failed to update memory cache for DM", "error", err)
-		}
-	}()
+	// Update memory cache
+	if err := s.memory.RecordDM(ctx, userID, prURL, entity.SentAt); err != nil {
+		slog.Debug("failed to update memory cache for DM", "error", err)
+	}
 
 	return entity.SentAt, true
 }
 
 // RecordDM saves DM timestamp to both stores.
-func (s *DatastoreStore) RecordDM(userID, prURL string, sentAt time.Time) error {
+func (s *DatastoreStore) RecordDM(ctx context.Context, userID, prURL string, sentAt time.Time) error {
 	// Save to memory
-	if err := s.memory.RecordDM(userID, prURL, sentAt); err != nil {
+	if err := s.memory.RecordDM(ctx, userID, prURL, sentAt); err != nil {
 		slog.Warn("failed to record DM in memory", "error", err)
 	}
 
@@ -297,33 +291,32 @@ func (s *DatastoreStore) RecordDM(userID, prURL string, sentAt time.Time) error 
 	// Capture client for safe concurrent access
 	ds := s.ds
 
-	// Save to Datastore async
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
+	// Save to Datastore with timeout
+	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 
-		key := dmKey(userID, prURL)
-		dsKey := datastore.NameKey(kindDM, key, nil)
-		entity := &dmEntity{
-			UserID: userID,
-			PRURL:  prURL,
-			SentAt: sentAt,
-		}
+	key := dmKey(userID, prURL)
+	dsKey := datastore.NameKey(kindDM, key, nil)
+	entity := &dmEntity{
+		UserID: userID,
+		PRURL:  prURL,
+		SentAt: sentAt,
+	}
 
-		if _, err := ds.Put(ctx, dsKey, entity); err != nil {
-			slog.Error("failed to record DM in Datastore",
-				"user", userID,
-				"error", err)
-		}
-	}()
+	if _, err := ds.Put(timeoutCtx, dsKey, entity); err != nil {
+		slog.Error("failed to record DM in Datastore",
+			"user", userID,
+			"error", err)
+		return err
+	}
 
 	return nil
 }
 
 // DMMessage retrieves DM message info with Datastore-first, memory fallback.
-func (s *DatastoreStore) DMMessage(userID, prURL string) (DMInfo, bool) {
+func (s *DatastoreStore) DMMessage(ctx context.Context, userID, prURL string) (DMInfo, bool) {
 	// Check memory first (fast)
-	info, exists := s.memory.DMMessage(userID, prURL)
+	info, exists := s.memory.DMMessage(ctx, userID, prURL)
 	if exists {
 		return info, true
 	}
@@ -334,14 +327,14 @@ func (s *DatastoreStore) DMMessage(userID, prURL string) (DMInfo, bool) {
 	}
 
 	// Try Datastore
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
 
 	key := dmKey(userID, prURL)
 	dsKey := datastore.NameKey(kindDMMessage, key, nil)
 	var entity dmMessageEntity
 
-	err := s.ds.Get(ctx, dsKey, &entity)
+	err := s.ds.Get(timeoutCtx, dsKey, &entity)
 	if err != nil {
 		return DMInfo{}, false
 	}
@@ -349,23 +342,18 @@ func (s *DatastoreStore) DMMessage(userID, prURL string) (DMInfo, bool) {
 	// Found in Datastore - update memory cache and return
 	result := DMInfo(entity)
 
-	// Capture memory store for safe concurrent access
-	mem := s.memory
-
-	// Update memory cache async
-	go func() {
-		if err := mem.SaveDMMessage(userID, prURL, result); err != nil {
-			slog.Debug("failed to update memory cache for DM message", "error", err)
-		}
-	}()
+	// Update memory cache
+	if err := s.memory.SaveDMMessage(ctx, userID, prURL, result); err != nil {
+		slog.Debug("failed to update memory cache for DM message", "error", err)
+	}
 
 	return result, true
 }
 
 // SaveDMMessage saves DM message info to both stores.
-func (s *DatastoreStore) SaveDMMessage(userID, prURL string, info DMInfo) error {
+func (s *DatastoreStore) SaveDMMessage(ctx context.Context, userID, prURL string, info DMInfo) error {
 	// Always save to memory first (fast, local)
-	if err := s.memory.SaveDMMessage(userID, prURL, info); err != nil {
+	if err := s.memory.SaveDMMessage(ctx, userID, prURL, info); err != nil {
 		slog.Warn("failed to save DM message to memory", "error", err)
 	}
 
@@ -377,36 +365,35 @@ func (s *DatastoreStore) SaveDMMessage(userID, prURL string, info DMInfo) error 
 	// Capture client for safe concurrent access
 	ds := s.ds
 
-	// Save to Datastore async
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
+	// Save to Datastore with timeout
+	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 
-		key := dmKey(userID, prURL)
-		dsKey := datastore.NameKey(kindDMMessage, key, nil)
-		entity := &dmMessageEntity{
-			ChannelID:   info.ChannelID,
-			MessageTS:   info.MessageTS,
-			MessageText: info.MessageText,
-			UpdatedAt:   time.Now(),
-			SentAt:      info.SentAt,
-		}
+	key := dmKey(userID, prURL)
+	dsKey := datastore.NameKey(kindDMMessage, key, nil)
+	entity := &dmMessageEntity{
+		ChannelID:   info.ChannelID,
+		MessageTS:   info.MessageTS,
+		MessageText: info.MessageText,
+		UpdatedAt:   time.Now(),
+		SentAt:      info.SentAt,
+	}
 
-		if _, err := ds.Put(ctx, dsKey, entity); err != nil {
-			slog.Error("failed to save DM message to Datastore",
-				"user", userID,
-				"error", err)
-		}
-	}()
+	if _, err := ds.Put(timeoutCtx, dsKey, entity); err != nil {
+		slog.Error("failed to save DM message to Datastore",
+			"user", userID,
+			"error", err)
+		return err
+	}
 
 	return nil
 }
 
 // ListDMUsers returns all user IDs who have received DMs for a given PR.
 // Queries both memory cache and Datastore to ensure data persists across restarts.
-func (s *DatastoreStore) ListDMUsers(prURL string) []string {
+func (s *DatastoreStore) ListDMUsers(ctx context.Context, prURL string) []string {
 	// Check memory cache first (fast path)
-	users := s.memory.ListDMUsers(prURL)
+	users := s.memory.ListDMUsers(ctx, prURL)
 	if len(users) > 0 || s.disabled || s.ds == nil {
 		return users
 	}
@@ -419,11 +406,11 @@ func (s *DatastoreStore) ListDMUsers(prURL string) []string {
 	// 4. Results populate memory cache for future fast lookups
 	//
 	// Alternative considered: Ancestor queries require schema change (breaking existing data)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	query := datastore.NewQuery(kindDMMessage).KeysOnly().Limit(1000)
-	keys, err := s.ds.AllKeys(ctx, query)
+	keys, err := s.ds.AllKeys(timeoutCtx, query)
 	if err != nil {
 		slog.Warn("failed to query Datastore for DM users",
 			"pr_url", prURL,
@@ -456,9 +443,9 @@ func (s *DatastoreStore) ListDMUsers(prURL string) []string {
 }
 
 // LastDigest retrieves last digest time.
-func (s *DatastoreStore) LastDigest(userID, date string) (time.Time, bool) {
+func (s *DatastoreStore) LastDigest(ctx context.Context, userID, date string) (time.Time, bool) {
 	// Check memory first
-	t, exists := s.memory.LastDigest(userID, date)
+	t, exists := s.memory.LastDigest(ctx, userID, date)
 	if exists {
 		return t, true
 	}
@@ -469,27 +456,22 @@ func (s *DatastoreStore) LastDigest(userID, date string) (time.Time, bool) {
 	}
 
 	// Try Datastore
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
 
 	key := digestKey(userID, date)
 	dsKey := datastore.NameKey(kindDigest, key, nil)
 	var entity digestEntity
 
-	err := s.ds.Get(ctx, dsKey, &entity)
+	err := s.ds.Get(timeoutCtx, dsKey, &entity)
 	if err != nil {
 		return time.Time{}, false
 	}
 
-	// Capture memory store for safe concurrent access
-	mem := s.memory
-
 	// Update cache
-	go func() {
-		if err := mem.RecordDigest(userID, date, entity.SentAt); err != nil {
-			slog.Debug("failed to update memory cache for digest", "error", err)
-		}
-	}()
+	if err := s.memory.RecordDigest(ctx, userID, date, entity.SentAt); err != nil {
+		slog.Debug("failed to update memory cache for digest", "error", err)
+	}
 
 	return entity.SentAt, true
 }
@@ -497,9 +479,9 @@ func (s *DatastoreStore) LastDigest(userID, date string) (time.Time, bool) {
 // RecordDigest saves digest timestamp to memory and attempts persistence to Datastore.
 // Memory is always updated (primary storage for runtime). Datastore is best-effort for restart recovery.
 // Degrades gracefully: logs errors but continues operating if Datastore unavailable.
-func (s *DatastoreStore) RecordDigest(userID, date string, sentAt time.Time) error {
+func (s *DatastoreStore) RecordDigest(ctx context.Context, userID, date string, sentAt time.Time) error {
 	// Always save to memory first (primary storage, must succeed)
-	if err := s.memory.RecordDigest(userID, date, sentAt); err != nil {
+	if err := s.memory.RecordDigest(ctx, userID, date, sentAt); err != nil {
 		slog.Warn("failed to record digest in memory", "error", err)
 	}
 
@@ -510,7 +492,7 @@ func (s *DatastoreStore) RecordDigest(userID, date string, sentAt time.Time) err
 
 	// Best-effort persistence to Datastore for restart recovery
 	// Synchronous write for maximum reliability, but don't fail operation if it doesn't work
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	key := digestKey(userID, date)
@@ -521,7 +503,7 @@ func (s *DatastoreStore) RecordDigest(userID, date string, sentAt time.Time) err
 		SentAt: sentAt,
 	}
 
-	if _, err := s.ds.Put(ctx, dsKey, entity); err != nil {
+	if _, err := s.ds.Put(timeoutCtx, dsKey, entity); err != nil {
 		slog.Error("failed to persist digest to Datastore - may send duplicate after restart",
 			"user", userID,
 			"date", date,
@@ -534,9 +516,9 @@ func (s *DatastoreStore) RecordDigest(userID, date string, sentAt time.Time) err
 }
 
 // WasProcessed checks if an event was already processed (distributed check).
-func (s *DatastoreStore) WasProcessed(eventKey string) bool {
+func (s *DatastoreStore) WasProcessed(ctx context.Context, eventKey string) bool {
 	// Check memory first (fast)
-	if s.memory.WasProcessed(eventKey) {
+	if s.memory.WasProcessed(ctx, eventKey) {
 		return true
 	}
 
@@ -546,25 +528,20 @@ func (s *DatastoreStore) WasProcessed(eventKey string) bool {
 	}
 
 	// Check Datastore (cross-instance coordination)
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
 
 	dsKey := datastore.NameKey(kindEvent, eventKey, nil)
 	var entity eventEntity
 
-	err := s.ds.Get(ctx, dsKey, &entity)
+	err := s.ds.Get(timeoutCtx, dsKey, &entity)
 	exists := err == nil
 
 	if exists {
-		// Capture memory store for safe concurrent access
-		mem := s.memory
-
 		// Update local cache
-		go func() {
-			if err := mem.MarkProcessed(eventKey, 24*time.Hour); err != nil {
-				slog.Debug("failed to update memory cache for event", "error", err)
-			}
-		}()
+		if err := s.memory.MarkProcessed(ctx, eventKey, 24*time.Hour); err != nil {
+			slog.Debug("failed to update memory cache for event", "error", err)
+		}
 	}
 
 	return exists
@@ -572,9 +549,9 @@ func (s *DatastoreStore) WasProcessed(eventKey string) bool {
 
 // MarkProcessed marks an event as processed (distributed coordination).
 // Returns error if already processed by another instance (enables race detection).
-func (s *DatastoreStore) MarkProcessed(eventKey string, ttl time.Duration) error {
+func (s *DatastoreStore) MarkProcessed(ctx context.Context, eventKey string, ttl time.Duration) error {
 	// Mark in memory first for fast local lookups
-	if err := s.memory.MarkProcessed(eventKey, ttl); err != nil {
+	if err := s.memory.MarkProcessed(ctx, eventKey, ttl); err != nil {
 		slog.Warn("failed to mark event in memory", "error", err)
 	}
 
@@ -586,12 +563,12 @@ func (s *DatastoreStore) MarkProcessed(eventKey string, ttl time.Duration) error
 	// Use transaction for compare-and-swap semantics
 	// Timeout: 10 seconds for transaction (Google recommends up to 60s idle timeout)
 	// This accounts for cold starts, network latency, and transaction overhead
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	dsKey := datastore.NameKey(kindEvent, eventKey, nil)
 
-	_, err := s.ds.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
+	_, err := s.ds.RunInTransaction(timeoutCtx, func(tx *datastore.Transaction) error {
 		var existing eventEntity
 		err := tx.Get(dsKey, &existing)
 
@@ -631,19 +608,19 @@ func (s *DatastoreStore) MarkProcessed(eventKey string, ttl time.Duration) error
 }
 
 // LastNotification retrieves when a PR was last notified about.
-func (s *DatastoreStore) LastNotification(prURL string) time.Time {
+func (s *DatastoreStore) LastNotification(ctx context.Context, prURL string) time.Time {
 	// Datastore disabled
 	if s.disabled || s.ds == nil {
 		return time.Time{}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
 
 	dsKey := datastore.NameKey(kindNotify, prURL, nil)
 	var entity notifyEntity
 
-	err := s.ds.Get(ctx, dsKey, &entity)
+	err := s.ds.Get(timeoutCtx, dsKey, &entity)
 	if err != nil {
 		return time.Time{}
 	}
@@ -652,7 +629,7 @@ func (s *DatastoreStore) LastNotification(prURL string) time.Time {
 }
 
 // RecordNotification records when we notified about a PR.
-func (s *DatastoreStore) RecordNotification(prURL string, notifiedAt time.Time) error {
+func (s *DatastoreStore) RecordNotification(ctx context.Context, prURL string, notifiedAt time.Time) error {
 	// Skip if disabled
 	if s.disabled || s.ds == nil {
 		return nil
@@ -661,29 +638,28 @@ func (s *DatastoreStore) RecordNotification(prURL string, notifiedAt time.Time) 
 	// Capture client for safe concurrent access
 	ds := s.ds
 
-	// Async save
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
+	// Save with timeout
+	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 
-		dsKey := datastore.NameKey(kindNotify, prURL, nil)
-		entity := &notifyEntity{
-			PRURL:      prURL,
-			NotifiedAt: notifiedAt,
-		}
+	dsKey := datastore.NameKey(kindNotify, prURL, nil)
+	entity := &notifyEntity{
+		PRURL:      prURL,
+		NotifiedAt: notifiedAt,
+	}
 
-		if _, err := ds.Put(ctx, dsKey, entity); err != nil {
-			slog.Error("failed to record notification in Datastore", "error", err)
-		}
-	}()
+	if _, err := ds.Put(timeoutCtx, dsKey, entity); err != nil {
+		slog.Error("failed to record notification in Datastore", "error", err)
+		return err
+	}
 
 	return nil
 }
 
 // QueuePendingDM adds a pending DM to both memory and Datastore.
-func (s *DatastoreStore) QueuePendingDM(dm PendingDM) error {
+func (s *DatastoreStore) QueuePendingDM(ctx context.Context, dm *PendingDM) error {
 	// Always update memory cache
-	if err := s.memory.QueuePendingDM(dm); err != nil {
+	if err := s.memory.QueuePendingDM(ctx, dm); err != nil {
 		return err
 	}
 
@@ -692,7 +668,7 @@ func (s *DatastoreStore) QueuePendingDM(dm PendingDM) error {
 		return nil
 	}
 
-	ctx := context.Background()
+	// Use passed ctx parameter
 	key := datastore.NameKey(kindPendingDM, dm.ID, nil)
 	entity := pendingDMEntity{
 		WorkspaceID:   dm.WorkspaceID,
@@ -716,11 +692,11 @@ func (s *DatastoreStore) QueuePendingDM(dm PendingDM) error {
 	return err
 }
 
-// GetPendingDMs returns all pending DMs that should be sent.
+// PendingDMs returns all pending DMs that should be sent.
 // Reads from memory cache first, falls back to Datastore if empty.
-func (s *DatastoreStore) GetPendingDMs(before time.Time) ([]PendingDM, error) {
+func (s *DatastoreStore) PendingDMs(ctx context.Context, before time.Time) ([]PendingDM, error) {
 	// Try memory first
-	dms, err := s.memory.GetPendingDMs(before)
+	dms, err := s.memory.PendingDMs(ctx, before)
 	if err == nil && len(dms) > 0 {
 		return dms, nil
 	}
@@ -731,7 +707,7 @@ func (s *DatastoreStore) GetPendingDMs(before time.Time) ([]PendingDM, error) {
 	}
 
 	// Query Datastore for pending DMs
-	ctx := context.Background()
+	// Use passed ctx parameter
 	query := datastore.NewQuery(kindPendingDM).
 		Filter("send_after <=", before).
 		Limit(100)
@@ -745,7 +721,8 @@ func (s *DatastoreStore) GetPendingDMs(before time.Time) ([]PendingDM, error) {
 
 	// Convert entities to PendingDM structs and update memory cache
 	result := make([]PendingDM, 0, len(entities))
-	for i, entity := range entities {
+	for i := range entities {
+		entity := &entities[i]
 		dm := PendingDM{
 			ID:            keys[i].Name,
 			WorkspaceID:   entity.WorkspaceID,
@@ -765,17 +742,18 @@ func (s *DatastoreStore) GetPendingDMs(before time.Time) ([]PendingDM, error) {
 			SendAfter:     entity.SendAfter,
 		}
 		result = append(result, dm)
-		// Update memory cache
-		_ = s.memory.QueuePendingDM(dm)
+		// Update memory cache (ignore error since cache is best-effort and we have authoritative result from datastore)
+		//nolint:errcheck // Cache update is best-effort; authoritative result from datastore
+		_ = s.memory.QueuePendingDM(ctx, &dm)
 	}
 
 	return result, nil
 }
 
 // RemovePendingDM removes a pending DM from both memory and Datastore.
-func (s *DatastoreStore) RemovePendingDM(id string) error {
+func (s *DatastoreStore) RemovePendingDM(ctx context.Context, id string) error {
 	// Always remove from memory
-	if err := s.memory.RemovePendingDM(id); err != nil {
+	if err := s.memory.RemovePendingDM(ctx, id); err != nil {
 		return err
 	}
 
@@ -784,15 +762,15 @@ func (s *DatastoreStore) RemovePendingDM(id string) error {
 		return nil
 	}
 
-	ctx := context.Background()
+	// Use passed ctx parameter
 	key := datastore.NameKey(kindPendingDM, id, nil)
 	return s.ds.Delete(ctx, key)
 }
 
 // Cleanup removes old data from both stores.
-func (s *DatastoreStore) Cleanup() error {
+func (s *DatastoreStore) Cleanup(ctx context.Context) error {
 	// Always cleanup memory
-	if err := s.memory.Cleanup(); err != nil {
+	if err := s.memory.Cleanup(ctx); err != nil {
 		slog.Warn("memory cleanup failed", "error", err)
 	}
 

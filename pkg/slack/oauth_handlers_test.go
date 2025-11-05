@@ -48,7 +48,7 @@ func TestHandleCallback_MissingCode(t *testing.T) {
 		store:        &mockWorkspaceStore{},
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/oauth/callback", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/callback", http.NoBody)
 	w := httptest.NewRecorder()
 
 	handler.HandleCallback(w, req)
@@ -65,6 +65,7 @@ func TestHandleCallback_MissingCode(t *testing.T) {
 
 // TestHandleCallback_ShortCode tests OAuth code logging with short value.
 func TestHandleCallback_ShortCode(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
 	handler := &OAuthHandler{
@@ -78,7 +79,7 @@ func TestHandleCallback_ShortCode(t *testing.T) {
 	// Use context with short timeout to avoid waiting for retries
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=abc", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=abc", http.NoBody).WithContext(ctx)
 	w := httptest.NewRecorder()
 
 	handler.HandleCallback(w, req)
@@ -102,7 +103,7 @@ func TestHandleCallback_OAuthError(t *testing.T) {
 	}
 
 	// Error parameter takes priority over code
-	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test&error=access_denied", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test&error=access_denied", http.NoBody)
 	w := httptest.NewRecorder()
 
 	handler.HandleCallback(w, req)
@@ -128,7 +129,7 @@ func TestHandleCallback_StateMismatch(t *testing.T) {
 		store:        &mockWorkspaceStore{},
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test-code&state=wrong-state", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test-code&state=wrong-state", http.NoBody)
 	req.AddCookie(&http.Cookie{
 		Name:  "oauth_state",
 		Value: "correct-state",
@@ -159,7 +160,7 @@ func TestHandleCallback_StateMismatchShortValue(t *testing.T) {
 	}
 
 	// Use very short state values (< 10 chars) to test min() edge case in logging
-	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test-code&state=abc", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test-code&state=abc", http.NoBody)
 	req.AddCookie(&http.Cookie{
 		Name:  "oauth_state",
 		Value: "xyz",
@@ -189,7 +190,7 @@ func TestHandleCallback_MissingStateCookie(t *testing.T) {
 		store:        &mockWorkspaceStore{},
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test-code&state=some-state", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test-code&state=some-state", http.NoBody)
 	// Don't add cookie
 	w := httptest.NewRecorder()
 
@@ -207,6 +208,7 @@ func TestHandleCallback_MissingStateCookie(t *testing.T) {
 
 // TestHandleCallback_StateMatchSuccess tests successful state verification.
 func TestHandleCallback_StateMatchSuccess(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
 	handler := &OAuthHandler{
@@ -219,7 +221,7 @@ func TestHandleCallback_StateMatchSuccess(t *testing.T) {
 	// Use context with short timeout to avoid waiting for retries
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test-code&state=matching-state", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test-code&state=matching-state", http.NoBody).WithContext(ctx)
 	req.AddCookie(&http.Cookie{
 		Name:  "oauth_state",
 		Value: "matching-state",
@@ -241,6 +243,7 @@ func TestHandleCallback_StateMatchSuccess(t *testing.T) {
 
 // TestHandleCallback_CookieDeletion tests that state cookie is cleared after verification.
 func TestHandleCallback_CookieDeletion(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
 	handler := &OAuthHandler{
@@ -253,7 +256,7 @@ func TestHandleCallback_CookieDeletion(t *testing.T) {
 	// Use context with short timeout to avoid waiting for retries
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test-code&state=matching-state", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test-code&state=matching-state", http.NoBody).WithContext(ctx)
 	req.AddCookie(&http.Cookie{
 		Name:  "oauth_state",
 		Value: "matching-state",
@@ -296,6 +299,7 @@ func TestHandleCallback_CookieDeletion(t *testing.T) {
 
 // TestHandleCallback_NoStateParam tests direct installation without state.
 func TestHandleCallback_NoStateParam(t *testing.T) {
+	ctx := context.Background()
 	t.Parallel()
 
 	handler := &OAuthHandler{
@@ -308,7 +312,7 @@ func TestHandleCallback_NoStateParam(t *testing.T) {
 	// Use context with short timeout to avoid waiting for retries
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test-code", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test-code", http.NoBody).WithContext(ctx)
 	// No state parameter, no cookie
 	w := httptest.NewRecorder()
 
@@ -358,7 +362,7 @@ func TestHandleCallback_StoreWorkspaceError(t *testing.T) {
 		store:        mockStore,
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=valid-code", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=valid-code", http.NoBody)
 	w := httptest.NewRecorder()
 
 	handler.HandleCallback(w, req)
@@ -396,7 +400,7 @@ func TestHandleCallback_OAuthNotOk(t *testing.T) {
 		store:        &mockWorkspaceStore{},
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=invalid-code", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=invalid-code", http.NoBody)
 	w := httptest.NewRecorder()
 
 	handler.HandleCallback(w, req)
@@ -450,7 +454,7 @@ func TestHandleCallback_SuccessfulFlow(t *testing.T) {
 		store:        mockStore,
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=valid-code", nil)
+	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=valid-code", http.NoBody)
 	w := httptest.NewRecorder()
 
 	handler.HandleCallback(w, req)

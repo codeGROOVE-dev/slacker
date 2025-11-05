@@ -318,7 +318,7 @@ func TestThreadCache_Concurrency(t *testing.T) {
 
 	// Concurrent operations on different keys
 	done := make(chan bool)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		go func(n int) {
 			key := "key" + string(rune(n))
 			info := ThreadInfo{ThreadTS: "123.456", ChannelID: "C123"}
@@ -334,13 +334,13 @@ func TestThreadCache_Concurrency(t *testing.T) {
 	}
 
 	// Wait for all goroutines
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		<-done
 	}
 
 	// Concurrent operations on same key
 	key := "shared"
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		go func() {
 			info := ThreadInfo{ThreadTS: "123.456", ChannelID: "C123"}
 			cache.Set(key, info)
@@ -349,7 +349,7 @@ func TestThreadCache_Concurrency(t *testing.T) {
 		}()
 	}
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		<-done
 	}
 
@@ -357,13 +357,13 @@ func TestThreadCache_Concurrency(t *testing.T) {
 	successCount := 0
 	resultChan := make(chan bool, 10)
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		go func() {
 			resultChan <- cache.MarkCreating("concurrent-test")
 		}()
 	}
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		if <-resultChan {
 			successCount++
 		}
@@ -374,14 +374,14 @@ func TestThreadCache_Concurrency(t *testing.T) {
 	}
 
 	// Cleanup concurrency test
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		go func() {
 			cache.Cleanup(1 * time.Hour)
 			done <- true
 		}()
 	}
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		<-done
 	}
 

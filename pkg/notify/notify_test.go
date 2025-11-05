@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -15,6 +16,7 @@ func TestNotifyUserRequiresDeeperMocking(t *testing.T) {
 
 // TestNotifyManagerRun tests the notification scheduler Run method.
 func TestNotifyManagerRun(t *testing.T) {
+	ctx := context.Background()
 	mockSlackMgr := &mockSlackManager{}
 	mockConfigMgr := &mockConfigManager{}
 
@@ -26,7 +28,7 @@ func TestNotifyManagerRun(t *testing.T) {
 
 	// Run should return when context is cancelled
 	err := manager.Run(ctx)
-	if err != context.DeadlineExceeded && err != context.Canceled {
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context error, got %v", err)
 	}
 }

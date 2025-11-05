@@ -232,6 +232,7 @@ func TestUpdateDMMessagesForPR_ClosedPRNoDMRecipients(t *testing.T) {
 	c.updateDMMessagesForPR(ctx, prInfo)
 	// Test passes if it returns without panicking
 }
+
 // TestUpdateDMMessagesForPR_MergedWithRecipients tests DM updates for merged PR with recipients.
 func TestUpdateDMMessagesForPR_MergedWithRecipients(t *testing.T) {
 	ctx := context.Background()

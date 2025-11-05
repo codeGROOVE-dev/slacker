@@ -29,15 +29,15 @@ type OAuthExchanger interface {
 // slackOAuthExchanger is the default implementation using slack-go/slack.
 type slackOAuthExchanger struct{}
 
-func (s *slackOAuthExchanger) ExchangeCode(ctx context.Context, clientID, clientSecret, code string) (*slack.OAuthV2Response, error) {
+func (*slackOAuthExchanger) ExchangeCode(ctx context.Context, clientID, clientSecret, code string) (*slack.OAuthV2Response, error) {
 	return slack.GetOAuthV2ResponseContext(ctx, &http.Client{}, clientID, clientSecret, code, "")
 }
 
 // OAuthHandler handles the OAuth callback from Slack.
 type OAuthHandler struct {
-	store        WorkspaceStorer  // For OAuth callback storage
-	exchanger    OAuthExchanger   // For OAuth code exchange
-	manager      *Manager         // For debug listing (optional)
+	store        WorkspaceStorer // For OAuth callback storage
+	exchanger    OAuthExchanger  // For OAuth code exchange
+	manager      *Manager        // For debug listing (optional)
 	clientID     string
 	clientSecret string
 }
