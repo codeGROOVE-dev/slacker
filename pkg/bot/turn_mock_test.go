@@ -14,7 +14,7 @@ func mockTurnServer(t *testing.T) *httptest.Server {
 		// Return a simple JSON response that matches turnclient's CheckResponse structure
 		// This is a minimal valid response for testing purposes
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
+		if _, err := w.Write([]byte(`{
 			"timestamp": "2025-11-05T00:00:00Z",
 			"commit": "abc123",
 			"pull_request": {
@@ -39,6 +39,8 @@ func mockTurnServer(t *testing.T) *httptest.Server {
 				"unresolved_comments": 0,
 				"blocking_reasons": []
 			}
-		}`))
+		}`)); err != nil {
+			t.Errorf("Failed to write mock response: %v", err)
+		}
 	}))
 }

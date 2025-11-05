@@ -14,6 +14,7 @@ import (
 
 	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
 	"github.com/codeGROOVE-dev/slacker/pkg/notify"
+	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 )
@@ -73,12 +74,17 @@ type Coordinator struct {
 }
 
 // StateStore interface for persistent state - allows dependency injection for testing.
+//
+//nolint:interfacebloat // 13 methods needed for complete state management
 type StateStore interface {
 	Thread(ctx context.Context, owner, repo string, number int, channelID string) (cache.ThreadInfo, bool)
 	SaveThread(ctx context.Context, owner, repo string, number int, channelID string, info cache.ThreadInfo) error
 	LastDM(ctx context.Context, userID, prURL string) (time.Time, bool)
 	RecordDM(ctx context.Context, userID, prURL string, sentAt time.Time) error
+	DMMessage(ctx context.Context, userID, prURL string) (state.DMInfo, bool)
+	SaveDMMessage(ctx context.Context, userID, prURL string, info state.DMInfo) error
 	ListDMUsers(ctx context.Context, prURL string) []string
+	QueuePendingDM(ctx context.Context, dm *state.PendingDM) error
 	WasProcessed(ctx context.Context, eventKey string) bool
 	MarkProcessed(ctx context.Context, eventKey string, ttl time.Duration) error
 	LastNotification(ctx context.Context, prURL string) time.Time
@@ -682,7 +688,7 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 			dmCtx, dmCancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
 			go func() {
 				defer dmCancel()
-				c.sendDMNotificationsToSlackUsers(dmCtx, workspaceID, owner, repo, prNumber, taggedUsers, event, prState, checkResult)
+				c.sendDMNotificationsToTaggedUsers(dmCtx, workspaceID, owner, repo, prNumber, taggedUsers, event, checkResult)
 			}()
 		} else {
 			// No channels were notified - attempt to send immediate DMs to all blocked GitHub users
@@ -713,7 +719,7 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 			dmCtx, dmCancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
 			go func() {
 				defer dmCancel()
-				c.sendDMNotificationsToGitHubUsers(dmCtx, workspaceID, owner, repo, prNumber, uniqueGitHubUsers, event, prState, checkResult)
+				c.sendDMNotificationsToBlockedUsers(dmCtx, workspaceID, owner, repo, prNumber, uniqueGitHubUsers, event, checkResult)
 			}()
 		}
 	} else {
@@ -721,183 +727,6 @@ func (c *Coordinator) handlePullRequestEventWithData(ctx context.Context, owner,
 			logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
 			"pr_state", prState)
 	}
-}
-
-// sendDMNotificationsToSlackUsers sends DM notifications to Slack users who were tagged in channels.
-// This runs in a separate goroutine to avoid blocking event processing.
-// Uses Slack user IDs directly (no GitHub->Slack mapping needed).
-//
-//nolint:revive // parameter count required for complete context
-func (c *Coordinator) sendDMNotificationsToSlackUsers(
-	ctx context.Context, workspaceID, owner, repo string,
-	prNumber int, slackUsers map[string]bool,
-	event struct {
-		Action      string `json:"action"`
-		PullRequest struct {
-			HTMLURL   string    `json:"html_url"`
-			Title     string    `json:"title"`
-			CreatedAt time.Time `json:"created_at"`
-			User      struct {
-				Login string `json:"login"`
-			} `json:"user"`
-			Number int `json:"number"`
-		} `json:"pull_request"`
-		Number int `json:"number"`
-	},
-	prState string,
-	checkResult *turn.CheckResponse,
-) {
-	slog.Info("starting DM notification batch for tagged Slack users",
-		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-		"workspace", workspaceID,
-		"user_count", len(slackUsers),
-		"pr_state", prState)
-
-	sentCount := 0
-	failedCount := 0
-
-	for slackUserID := range slackUsers {
-		// Get tag info to determine which channel the user was tagged in
-		var tagInfo notify.TagInfo
-		if c.notifier != nil && c.notifier.Tracker != nil {
-			tagInfo = c.notifier.Tracker.LastUserPRChannelTag(workspaceID, slackUserID, owner, repo, prNumber)
-		}
-
-		// For channel name lookup (needed for config), we need to resolve the channel ID back to name
-		// This is optional - if we can't resolve it, NotifyUser will use defaults
-		var channelName string
-		if tagInfo.ChannelID != "" {
-			// We don't have a reverse lookup, so just pass empty string
-			// NotifyUser will use default delay if channelName is empty
-			channelName = ""
-		}
-
-		// Send notification using smart delay logic
-		if c.notifier != nil {
-			prInfo := notify.PRInfo{
-				Owner:   owner,
-				Repo:    repo,
-				Number:  prNumber,
-				Title:   event.PullRequest.Title,
-				Author:  event.PullRequest.User.Login,
-				State:   prState,
-				HTMLURL: event.PullRequest.HTMLURL,
-			}
-			// Add workflow state and next actions if available
-			if checkResult != nil {
-				prInfo.WorkflowState = checkResult.Analysis.WorkflowState
-				prInfo.NextAction = checkResult.Analysis.NextAction
-			}
-
-			err := c.notifier.NotifyUser(ctx, workspaceID, slackUserID, tagInfo.ChannelID, channelName, prInfo)
-			if err != nil {
-				slog.Warn("failed to notify user",
-					logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-					"slack_user", slackUserID,
-					"error", err)
-				failedCount++
-			} else {
-				sentCount++
-			}
-		}
-	}
-
-	slog.Info("completed DM notification batch for tagged Slack users",
-		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-		"workspace", workspaceID,
-		"sent_count", sentCount,
-		"failed_count", failedCount,
-		"total_users", len(slackUsers))
-}
-
-// sendDMNotificationsToGitHubUsers sends immediate DM notifications to blocked GitHub users.
-// This runs in a separate goroutine to avoid blocking event processing.
-// Used when no channels were notified (performs GitHub->Slack mapping).
-//
-//nolint:revive // parameter count required for complete context
-func (c *Coordinator) sendDMNotificationsToGitHubUsers(
-	ctx context.Context, workspaceID, owner, repo string,
-	prNumber int, uniqueUsers map[string]bool,
-	event struct {
-		Action      string `json:"action"`
-		PullRequest struct {
-			HTMLURL   string    `json:"html_url"`
-			Title     string    `json:"title"`
-			CreatedAt time.Time `json:"created_at"`
-			User      struct {
-				Login string `json:"login"`
-			} `json:"user"`
-			Number int `json:"number"`
-		} `json:"pull_request"`
-		Number int `json:"number"`
-	},
-	prState string,
-	checkResult *turn.CheckResponse,
-) {
-	slog.Info("starting immediate DM notification batch (no channels were notified)",
-		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-		"workspace", workspaceID,
-		"github_user_count", len(uniqueUsers),
-		"pr_state", prState,
-		"note", "will attempt GitHub->Slack mapping for each user")
-
-	domain := c.configManager.Domain(owner)
-	sentCount := 0
-	failedCount := 0
-	mappingFailures := 0
-
-	for githubUser := range uniqueUsers {
-		// Map GitHub username to Slack user ID
-		slackUserID, err := c.userMapper.SlackHandle(ctx, githubUser, owner, domain)
-		if err != nil || slackUserID == "" {
-			slog.Info("could not map GitHub user to Slack - skipping immediate DM",
-				logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-				"github_user", githubUser,
-				"error", err,
-				"impact", "user will not receive DM notification")
-			mappingFailures++
-			continue
-		}
-
-		// Send immediate DM (no channel tag delay logic since no channels were notified)
-		if c.notifier != nil {
-			prInfo := notify.PRInfo{
-				Owner:   owner,
-				Repo:    repo,
-				Number:  prNumber,
-				Title:   event.PullRequest.Title,
-				Author:  event.PullRequest.User.Login,
-				State:   prState,
-				HTMLURL: event.PullRequest.HTMLURL,
-			}
-			// Add workflow state and next actions if available
-			if checkResult != nil {
-				prInfo.WorkflowState = checkResult.Analysis.WorkflowState
-				prInfo.NextAction = checkResult.Analysis.NextAction
-			}
-
-			// Send immediate DM (pass empty channelID and channelName since no channels were notified)
-			err = c.notifier.NotifyUser(ctx, workspaceID, slackUserID, "", "", prInfo)
-			if err != nil {
-				slog.Warn("failed to send immediate DM",
-					logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-					"github_user", githubUser,
-					"slack_user", slackUserID,
-					"error", err)
-				failedCount++
-			} else {
-				sentCount++
-			}
-		}
-	}
-
-	slog.Info("completed immediate DM notification batch (no channels were notified)",
-		logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
-		"workspace", workspaceID,
-		"sent_count", sentCount,
-		"failed_count", failedCount,
-		"mapping_failures", mappingFailures,
-		"total_github_users", len(uniqueUsers))
 }
 
 // extractStateFromTurnclient extracts PR state from turnclient response without additional API calls.
@@ -976,149 +805,6 @@ func (*Coordinator) extractBlockedUsersFromTurnclient(checkResult *turn.CheckRes
 		blockedUsers = append(blockedUsers, user)
 	}
 	return blockedUsers
-}
-
-// prUpdateInfo groups PR information for DM updates.
-type prUpdateInfo struct {
-	checkRes *turn.CheckResponse
-	owner    string
-	repo     string
-	title    string
-	author   string
-	state    string
-	url      string
-	number   int
-}
-
-// updateDMMessagesForPR updates DM messages for all relevant users on a PR.
-// For merged/closed PRs, updates all users who previously received DMs.
-// For other states, updates users in NextAction (currently blocked).
-func (c *Coordinator) updateDMMessagesForPR(ctx context.Context, pr prUpdateInfo) {
-	owner, repo, prNumber := pr.owner, pr.repo, pr.number
-	prState, prURL := pr.state, pr.url
-	checkResult := pr.checkRes
-	// Determine which users to update based on PR state
-	var slackUserIDs []string
-
-	// For terminal states (merged/closed), update all users who received DMs
-	if prState == "merged" || prState == "closed" {
-		slackUserIDs = c.stateStore.ListDMUsers(ctx, prURL)
-		if len(slackUserIDs) == 0 {
-			slog.Debug("no DM recipients found for merged/closed PR",
-				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
-				"pr_state", prState)
-			return
-		}
-		slog.Info("updating DMs for merged/closed PR",
-			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
-			"pr_state", prState,
-			"dm_recipients", len(slackUserIDs))
-	} else {
-		// For other states, update only users who are currently blocked
-		if checkResult == nil || len(checkResult.Analysis.NextAction) == 0 {
-			slog.Debug("no blocked users, skipping DM updates",
-				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber))
-			return
-		}
-
-		// Map GitHub users to Slack users
-		domain := c.configManager.Domain(owner)
-		for githubUser := range checkResult.Analysis.NextAction {
-			if githubUser == "_system" {
-				continue
-			}
-
-			slackUserID, err := c.userMapper.SlackHandle(ctx, githubUser, owner, domain)
-			if err != nil || slackUserID == "" {
-				slog.Debug("no Slack mapping for GitHub user, skipping",
-					"github_user", githubUser,
-					"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
-					"error", err)
-				continue
-			}
-			slackUserIDs = append(slackUserIDs, slackUserID)
-		}
-
-		if len(slackUserIDs) == 0 {
-			slog.Debug("no Slack users found for blocked GitHub users",
-				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber))
-			return
-		}
-	}
-
-	// Format the DM message (same format as initial send)
-	// Determine prefix based on workflow state and next actions
-	var prefix string
-	if checkResult != nil {
-		slog.Info("determining DM emoji from analysis",
-			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
-			"workflow_state", checkResult.Analysis.WorkflowState,
-			"next_action_count", len(checkResult.Analysis.NextAction),
-			"pr_state_fallback", prState)
-		prefix = notify.PrefixForAnalysis(checkResult.Analysis.WorkflowState, checkResult.Analysis.NextAction)
-	} else {
-		slog.Info("no analysis available - using state-based emoji fallback",
-			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
-			"pr_state", prState)
-		prefix = notify.PrefixForAnalysis("", nil)
-	}
-	var action string
-	switch prState {
-	case "newly_published":
-		action = "newly published"
-	case "merged":
-		action = "merged"
-	case "closed":
-		action = "closed"
-	case "tests_broken":
-		action = "fix tests"
-	case "awaiting_review":
-		action = "review"
-	case "changes_requested":
-		action = "address feedback"
-	case "approved":
-		action = "merge"
-	default:
-		action = "attention needed"
-	}
-
-	message := fmt.Sprintf(
-		"%s <%s|%s#%d> · %s · %s → %s",
-		prefix,
-		prURL,
-		repo,
-		prNumber,
-		pr.title,
-		pr.author,
-		action,
-	)
-
-	// Update DM for each user
-	updatedCount := 0
-	skippedCount := 0
-
-	for _, slackUserID := range slackUserIDs {
-		if err := c.slack.UpdateDMMessage(ctx, slackUserID, prURL, message); err != nil {
-			slog.Warn("failed to update DM message",
-				"user", slackUserID,
-				"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
-				"error", err,
-				"impact", "user sees stale PR state in DM",
-				"reason", "DM may not exist or too old")
-			skippedCount++
-		} else {
-			updatedCount++
-		}
-	}
-
-	if updatedCount > 0 {
-		slog.Info("updated DM messages for PR state change",
-			"pr", fmt.Sprintf("%s/%s#%d", owner, repo, prNumber),
-			"pr_state", prState,
-			"updated", updatedCount,
-			"skipped", skippedCount,
-			"total_recipients", len(slackUserIDs))
-	}
 }
 
 // formatNextActions formats NextAction map into a compact string like "fix tests: user1, user2; review: user3".
@@ -1392,6 +1078,21 @@ func (c *Coordinator) processPRForChannel(
 			Event:          event,
 			CheckResult:    checkResult,
 		})
+
+		// For merged/closed PRs, ensure DM updates happen even if channel message didn't change
+		// This handles the case where sprinkler already updated the channel but DMs weren't sent
+		if prState == "merged" || prState == "closed" {
+			c.updateDMMessagesForPR(ctx, prUpdateInfo{
+				Owner:       owner,
+				Repo:        repo,
+				PRNumber:    prNumber,
+				PRTitle:     event.PullRequest.Title,
+				PRAuthor:    event.PullRequest.User.Login,
+				PRState:     prState,
+				PRURL:       event.PullRequest.HTMLURL,
+				CheckResult: checkResult,
+			})
+		}
 	}
 
 	slog.Info("successfully processed PR in channel",
@@ -1557,14 +1258,14 @@ func (c *Coordinator) updateMessageIfNeeded(ctx context.Context, params messageU
 
 	// Also update DM messages for blocked users
 	c.updateDMMessagesForPR(ctx, prUpdateInfo{
-		owner:    params.Owner,
-		repo:     params.Repo,
-		number:   params.PRNumber,
-		title:    event.PullRequest.Title,
-		author:   event.PullRequest.User.Login,
-		state:    params.PRState,
-		url:      event.PullRequest.HTMLURL,
-		checkRes: params.CheckResult,
+		Owner:       params.Owner,
+		Repo:        params.Repo,
+		PRNumber:    params.PRNumber,
+		PRTitle:     event.PullRequest.Title,
+		PRAuthor:    event.PullRequest.User.Login,
+		PRState:     params.PRState,
+		PRURL:       event.PullRequest.HTMLURL,
+		CheckResult: params.CheckResult,
 	})
 }
 

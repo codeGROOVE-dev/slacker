@@ -5,18 +5,25 @@ package bot
 
 import (
 	"context"
+	"time"
 
 	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/slacker/pkg/github"
+	slackapi "github.com/codeGROOVE-dev/slacker/pkg/slack"
 	"github.com/slack-go/slack"
 )
 
 // SlackClient defines Slack operations needed by bot.
 // Small interface - only methods we actually call.
+//
+//nolint:interfacebloat // 13 methods needed for Slack integration
 type SlackClient interface {
 	PostThread(ctx context.Context, channelID, text string, attachments []slack.Attachment) (string, error)
 	UpdateMessage(ctx context.Context, channelID, timestamp, text string) error
-	UpdateDMMessage(ctx context.Context, userID, timestamp, text string) error
+	UpdateDMMessage(ctx context.Context, userID, prURL, text string) error
+	SendDirectMessage(ctx context.Context, userID, text string) (dmChannelID, messageTS string, err error)
+	IsUserInChannel(ctx context.Context, channelID, userID string) bool
+	FindDMMessagesInHistory(ctx context.Context, userID, prURL string, since time.Time) ([]slackapi.DMLocation, error)
 	ChannelHistory(ctx context.Context, channelID string, oldest, latest string, limit int) (*slack.GetConversationHistoryResponse, error)
 	ResolveChannelID(ctx context.Context, channelName string) string
 	IsBotInChannel(ctx context.Context, channelID string) bool
@@ -43,6 +50,7 @@ type ConfigManager interface {
 	Domain(org string) string
 	WorkspaceName(org string) string
 	ChannelsForRepo(org, repo string) []string
+	ReminderDMDelay(org, channelName string) int
 	SetGitHubClient(org string, client any)
 	SetWorkspaceName(workspaceName string)
 }

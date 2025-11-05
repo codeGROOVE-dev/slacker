@@ -56,6 +56,7 @@ type dmMessageEntity struct {
 	ChannelID   string    `datastore:"channel_id"`
 	MessageTS   string    `datastore:"message_ts"`
 	MessageText string    `datastore:"message_text,noindex"`
+	LastState   string    `datastore:"last_state"`
 }
 
 // Digest tracking entity.

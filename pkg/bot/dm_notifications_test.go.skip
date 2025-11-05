@@ -54,7 +54,7 @@ func TestSendDMNotificationsToSlackUsers_EmptyUserList(t *testing.T) {
 	}
 
 	// Should handle empty user list without error
-	c.sendDMNotificationsToSlackUsers(ctx, "test-workspace.slack.com", "testorg", "testrepo", 42, slackUsers, event, "awaiting_review", checkResult)
+	c.sendDMNotificationsToTaggedUsers(ctx, "test-workspace.slack.com", "testorg", "testrepo", 42, slackUsers, event, checkResult)
 	// Test passes if it returns without panicking
 }
 
@@ -103,7 +103,7 @@ func TestSendDMNotificationsToGitHubUsers_EmptyUserList(t *testing.T) {
 	}
 
 	// Should handle empty user list without error
-	c.sendDMNotificationsToGitHubUsers(ctx, "test-workspace.slack.com", "testorg", "testrepo", 42, githubUsers, event, "awaiting_review", checkResult)
+	c.sendDMNotificationsToBlockedUsers(ctx, "test-workspace.slack.com", "testorg", "testrepo", 42, githubUsers, event, checkResult)
 	// Test passes if it returns without panicking
 }
 
@@ -126,17 +126,8 @@ func TestUpdateDMMessagesForPR_MergedPRNoDMRecipients(t *testing.T) {
 		workspaceName:  "test-workspace.slack.com",
 	}
 
-	prInfo := prUpdateInfo{
-		owner:    "testorg",
-		repo:     "testrepo",
-		number:   42,
-		state:    "merged",
-		url:      "https://github.com/testorg/testrepo/pull/42",
-		checkRes: nil,
-	}
-
 	// Should return early - no DM recipients found
-	c.updateDMMessagesForPR(ctx, prInfo)
+	c.updateDMMessagesForPR(ctx, "testorg", "testrepo", 42, "Test PR", "author", "merged", "https://github.com/testorg/testrepo/pull/42", nil)
 	// Test passes if it returns without panicking
 }
 
@@ -154,21 +145,14 @@ func TestUpdateDMMessagesForPR_NonTerminalStateNoBlockedUsers(t *testing.T) {
 		workspaceName:  "test-workspace.slack.com",
 	}
 
-	prInfo := prUpdateInfo{
-		owner:  "testorg",
-		repo:   "testrepo",
-		number: 42,
-		state:  "awaiting_review",
-		url:    "https://github.com/testorg/testrepo/pull/42",
-		checkRes: &turn.CheckResponse{
-			Analysis: turn.Analysis{
-				NextAction: map[string]turn.Action{}, // No blocked users
-			},
+	checkRes := &turn.CheckResponse{
+		Analysis: turn.Analysis{
+			NextAction: map[string]turn.ActionItem{}, // No blocked users
 		},
 	}
 
 	// Should return early - no blocked users
-	c.updateDMMessagesForPR(ctx, prInfo)
+	c.updateDMMessagesForPR(ctx, "testorg", "testrepo", 42, "Test PR", "author", "awaiting_review", "https://github.com/testorg/testrepo/pull/42", checkRes)
 	// Test passes if it returns without panicking
 }
 
@@ -186,17 +170,8 @@ func TestUpdateDMMessagesForPR_NonTerminalStateNilCheckResult(t *testing.T) {
 		workspaceName:  "test-workspace.slack.com",
 	}
 
-	prInfo := prUpdateInfo{
-		owner:    "testorg",
-		repo:     "testrepo",
-		number:   42,
-		state:    "awaiting_review",
-		url:      "https://github.com/testorg/testrepo/pull/42",
-		checkRes: nil, // Nil check result
-	}
-
 	// Should return early - nil check result
-	c.updateDMMessagesForPR(ctx, prInfo)
+	c.updateDMMessagesForPR(ctx, "testorg", "testrepo", 42, "Test PR", "author", "awaiting_review", "https://github.com/testorg/testrepo/pull/42", nil)
 	// Test passes if it returns without panicking
 }
 
@@ -219,17 +194,8 @@ func TestUpdateDMMessagesForPR_ClosedPRNoDMRecipients(t *testing.T) {
 		workspaceName:  "test-workspace.slack.com",
 	}
 
-	prInfo := prUpdateInfo{
-		owner:    "testorg",
-		repo:     "testrepo",
-		number:   42,
-		state:    "closed",
-		url:      "https://github.com/testorg/testrepo/pull/42",
-		checkRes: nil,
-	}
-
 	// Should return early - no DM recipients found for closed PR
-	c.updateDMMessagesForPR(ctx, prInfo)
+	c.updateDMMessagesForPR(ctx, "testorg", "testrepo", 42, "Test PR", "author", "closed", "https://github.com/testorg/testrepo/pull/42", nil)
 	// Test passes if it returns without panicking
 }
 
@@ -251,22 +217,11 @@ func TestUpdateDMMessagesForPR_MergedWithRecipients(t *testing.T) {
 		configManager: NewMockConfig().Build(),
 	}
 
-	prInfo := prUpdateInfo{
-		owner:    "testorg",
-		repo:     "testrepo",
-		number:   42,
-		title:    "Test PR",
-		author:   "testauthor",
-		state:    "merged",
-		url:      prURL,
-		checkRes: nil,
-	}
+	c.updateDMMessagesForPR(ctx, "testorg", "testrepo", 42, "Test PR", "testauthor", "merged", prURL, nil)
 
-	c.updateDMMessagesForPR(ctx, prInfo)
-
-	// Verify DMs were updated
-	if len(mockSlack.updatedDMMessage) != 2 {
-		t.Errorf("expected 2 DM updates, got %d", len(mockSlack.updatedDMMessage))
+	// Verify DMs were updated (via UpdateMessage, not UpdateDMMessage)
+	if len(mockSlack.updatedMessages) != 2 {
+		t.Errorf("expected 2 DM updates, got %d", len(mockSlack.updatedMessages))
 	}
 }
 
@@ -458,7 +413,7 @@ func TestSendDMNotificationsToGitHubUsers_HappyPath(t *testing.T) {
 	checkResult := &turn.CheckResponse{}
 
 	// Should complete without panic
-	c.sendDMNotificationsToGitHubUsers(ctx, "test-workspace", "testorg", "testrepo", 42, uniqueUsers, event, "awaiting_review", checkResult)
+	c.sendDMNotificationsToBlockedUsers(ctx, "test-workspace", "testorg", "testrepo", 42, uniqueUsers, event, "awaiting_review", checkResult)
 }
 
 // TestSendDMNotificationsToGitHubUsers_MappingFailure tests when user mapping fails.
@@ -511,7 +466,7 @@ func TestSendDMNotificationsToGitHubUsers_MappingFailure(t *testing.T) {
 	checkResult := &turn.CheckResponse{}
 
 	// Should handle mapping failures gracefully
-	c.sendDMNotificationsToGitHubUsers(ctx, "test-workspace", "testorg", "testrepo", 42, uniqueUsers, event, "awaiting_review", checkResult)
+	c.sendDMNotificationsToBlockedUsers(ctx, "test-workspace", "testorg", "testrepo", 42, uniqueUsers, event, "awaiting_review", checkResult)
 }
 
 // TestSendDMNotificationsToSlackUsers_HappyPath tests delayed DM notification logic.
@@ -556,7 +511,7 @@ func TestSendDMNotificationsToSlackUsers_HappyPath(t *testing.T) {
 	checkResult := &turn.CheckResponse{}
 
 	// Should process users and set up delayed DMs
-	c.sendDMNotificationsToSlackUsers(ctx, "test-workspace", "testorg", "testrepo", 42, uniqueSlackUsers, event, "awaiting_review", checkResult)
+	c.sendDMNotificationsToTaggedUsers(ctx, "test-workspace", "testorg", "testrepo", 42, uniqueSlackUsers, event, "awaiting_review", checkResult)
 }
 
 // TestSendDMNotificationsToSlackUsers_ImmediateDM tests immediate DM when not tagged in channel.
@@ -600,5 +555,5 @@ func TestSendDMNotificationsToSlackUsers_ImmediateDM(t *testing.T) {
 	checkResult := &turn.CheckResponse{}
 
 	// Should send immediate DM when user wasn't tagged in channels
-	c.sendDMNotificationsToSlackUsers(ctx, "test-workspace", "testorg", "testrepo", 42, uniqueSlackUsers, event, "awaiting_review", checkResult)
+	c.sendDMNotificationsToTaggedUsers(ctx, "test-workspace", "testorg", "testrepo", 42, uniqueSlackUsers, event, "awaiting_review", checkResult)
 }

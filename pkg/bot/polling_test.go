@@ -552,7 +552,6 @@ func TestIsChannelResolutionFailed(t *testing.T) {
 	}
 }
 
-
 // TestPollAndReconcileWithSearcher_SuccessfulOpenPRProcessing tests complete open PR processing flow.
 func TestPollAndReconcileWithSearcher_SuccessfulOpenPRProcessing(t *testing.T) {
 	ctx := context.Background()

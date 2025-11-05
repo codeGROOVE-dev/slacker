@@ -25,7 +25,7 @@ func TestMain(m *testing.M) {
 
 	// Cleanup (before os.Exit to avoid exitAfterDefer lint error)
 	mockServer.Close()
-	_ = os.Unsetenv("TURN_TEST_BACKEND") // Best effort cleanup
+	_ = os.Unsetenv("TURN_TEST_BACKEND") //nolint:errcheck // Best effort cleanup
 
 	os.Exit(code)
 }
