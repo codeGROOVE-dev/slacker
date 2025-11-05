@@ -35,6 +35,7 @@ type Manager struct {
 	clients         map[string]*Client // team_id -> client
 	metadata        map[string]*WorkspaceMetadata
 	homeViewHandler func(ctx context.Context, teamID, userID string) error // Global home view handler
+	reportHandler   func(ctx context.Context, teamID, userID string) error // Global report handler for /r2r report
 }
 
 // NewManager creates a new Slack client manager.
@@ -112,6 +113,11 @@ func (m *Manager) Client(ctx context.Context, teamID string) (*Client, error) {
 		client.SetHomeViewHandler(m.homeViewHandler)
 	}
 
+	// Set report handler if configured
+	if m.reportHandler != nil {
+		client.SetReportHandler(m.reportHandler)
+	}
+
 	// Set state store if configured
 	if m.stateStore != nil {
 		client.SetStateStore(m.stateStore)
@@ -142,6 +148,20 @@ func (m *Manager) SetHomeViewHandler(handler func(ctx context.Context, teamID, u
 	// Set on all existing clients
 	for _, client := range m.clients {
 		client.SetHomeViewHandler(handler)
+	}
+}
+
+// SetReportHandler sets the report handler on all current and future clients.
+func (m *Manager) SetReportHandler(handler func(ctx context.Context, teamID, userID string) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Store for future clients
+	m.reportHandler = handler
+
+	// Set on all existing clients
+	for _, client := range m.clients {
+		client.SetReportHandler(handler)
 	}
 }
 

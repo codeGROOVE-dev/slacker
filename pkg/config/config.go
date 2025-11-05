@@ -48,10 +48,10 @@ type RepoConfig struct {
 	} `yaml:"channels"`
 	Users  map[string]string `yaml:"users"`
 	Global struct {
-		TeamID          string `yaml:"team_id"`
-		EmailDomain     string `yaml:"email_domain"`
-		ReminderDMDelay int    `yaml:"reminder_dm_delay"`
-		DailyReminders  bool   `yaml:"daily_reminders"`
+		TeamID             string `yaml:"team_id"`
+		EmailDomain        string `yaml:"email_domain"`
+		ReminderDMDelay    int    `yaml:"reminder_dm_delay"`
+		DisableDailyReport bool   `yaml:"disable_daily_report"` // Default false (reports enabled)
 	} `yaml:"global"` // Minutes to wait before sending DM if user tagged in channel (0 = disabled)
 }
 
@@ -170,15 +170,15 @@ func createDefaultConfig() *RepoConfig {
 			Mute            bool     `yaml:"mute"`
 		}),
 		Global: struct {
-			TeamID          string `yaml:"team_id"`
-			EmailDomain     string `yaml:"email_domain"`
-			ReminderDMDelay int    `yaml:"reminder_dm_delay"`
-			DailyReminders  bool   `yaml:"daily_reminders"`
+			TeamID             string `yaml:"team_id"`
+			EmailDomain        string `yaml:"email_domain"`
+			ReminderDMDelay    int    `yaml:"reminder_dm_delay"`
+			DisableDailyReport bool   `yaml:"disable_daily_report"`
 		}{
-			TeamID:          "",
-			EmailDomain:     "",
-			ReminderDMDelay: defaultReminderDMDelayMinutes,
-			DailyReminders:  true,
+			TeamID:             "",
+			EmailDomain:        "",
+			ReminderDMDelay:    defaultReminderDMDelayMinutes,
+			DisableDailyReport: false, // Default: daily reports enabled
 		},
 	}
 }
@@ -375,7 +375,7 @@ func (m *Manager) LoadConfig(ctx context.Context, org string) error {
 		"final_config", map[string]any{
 			"team_id":             config.Global.TeamID,
 			"email_domain":        config.Global.EmailDomain,
-			"daily_reminders":     config.Global.DailyReminders,
+			"daily_report":        !config.Global.DisableDailyReport, // Inverted: show enabled status
 			"reminder_dm_delay":   config.Global.ReminderDMDelay,
 			"total_channels":      len(config.Channels),
 			"muted_channels":      muted,
@@ -564,9 +564,9 @@ func (m *Manager) DailyRemindersEnabled(org string) bool {
 
 	config, exists := m.configs[org]
 	if !exists {
-		return true // Default
+		return true // Default: enabled
 	}
-	return config.Global.DailyReminders
+	return !config.Global.DisableDailyReport // Inverted: false = enabled, true = disabled
 }
 
 // ReminderDMDelay returns the follow-up reminder delay in minutes for a specific channel.

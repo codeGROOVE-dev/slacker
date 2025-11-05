@@ -62,6 +62,7 @@ type apiCache struct {
 //nolint:govet // Field order optimized for logical grouping over memory alignment
 type Client struct {
 	homeViewHandlerMu sync.RWMutex
+	reportHandlerMu   sync.RWMutex
 	stateStoreMu      sync.RWMutex
 	signingSecret     string
 	teamID            string     // Workspace team ID
@@ -70,6 +71,7 @@ type Client struct {
 	cache             *apiCache
 	manager           *Manager                                               // Reference to manager for cache invalidation
 	homeViewHandler   func(ctx context.Context, teamID, userID string) error // Callback for app_home_opened events
+	reportHandler     func(ctx context.Context, teamID, userID string) error // Callback for /r2r report slash command
 	retryDelay        time.Duration                                          // Base delay for retries (default: 2s, can be overridden for tests)
 }
 
@@ -151,6 +153,13 @@ func (c *Client) SetHomeViewHandler(handler func(ctx context.Context, teamID, us
 	c.homeViewHandlerMu.Lock()
 	defer c.homeViewHandlerMu.Unlock()
 	c.homeViewHandler = handler
+}
+
+// SetReportHandler registers a callback for /r2r report slash command.
+func (c *Client) SetReportHandler(handler func(ctx context.Context, teamID, userID string) error) {
+	c.reportHandlerMu.Lock()
+	defer c.reportHandlerMu.Unlock()
+	c.reportHandler = handler
 }
 
 // SetTeamID sets the team ID for this client.
@@ -506,6 +515,75 @@ func (c *Client) SendDirectMessage(ctx context.Context, userID, text string) (dm
 	}
 
 	slog.Info("successfully sent DM", "user", userID, "channel_id", channelID, "message_ts", msgTS)
+	return channelID, msgTS, nil
+}
+
+// SendDirectMessageWithBlocks sends a direct message to a user with Block Kit blocks.
+func (c *Client) SendDirectMessageWithBlocks(ctx context.Context, userID string, blocks []slack.Block) (dmChannelID, messageTS string, err error) {
+	slog.Info("sending Block Kit DM to user", "user", userID, "block_count", len(blocks))
+
+	var channelID string
+
+	// First, open conversation with retry
+	err = retry.Do(
+		func() error {
+			channel, _, _, err := c.api.OpenConversationContext(ctx, &slack.OpenConversationParameters{
+				Users: []string{userID},
+			})
+			if err != nil {
+				slog.Warn("failed to open conversation, retrying", "user", userID, "error", err)
+				return err
+			}
+			channelID = channel.ID
+			return nil
+		},
+		retry.Attempts(5),
+		retry.Delay(c.getRetryDelay()),
+		retry.MaxDelay(2*time.Minute),
+		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
+		retry.LastErrorOnly(true),
+		retry.Context(ctx),
+	)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to open conversation after retries: %w", err)
+	}
+
+	var msgTS string
+	// Then send message with blocks with retry
+	// Disable unfurling for GitHub links in DMs.
+	options := []slack.MsgOption{
+		slack.MsgOptionBlocks(blocks...),
+		slack.MsgOptionText("Daily PR Report", false), // Fallback text for notifications
+		slack.MsgOptionDisableLinkUnfurl(),
+	}
+	err = retry.Do(
+		func() error {
+			_, ts, err := c.api.PostMessageContext(ctx, channelID, options...)
+			if err != nil {
+				if isRateLimitError(err) {
+					slog.Warn("rate limited sending Block Kit DM, backing off", "user", userID)
+					return err
+				}
+				slog.Warn("failed to send Block Kit DM, retrying", "user", userID, "error", err)
+				return err
+			}
+			msgTS = ts
+			return nil
+		},
+		retry.Attempts(5),
+		retry.Delay(c.getRetryDelay()),
+		retry.MaxDelay(2*time.Minute),
+		retry.DelayType(retry.BackOffDelay),
+		retry.MaxJitter(time.Second),
+		retry.LastErrorOnly(true),
+		retry.Context(ctx),
+	)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to send Block Kit DM after retries: %w", err)
+	}
+
+	slog.Info("successfully sent Block Kit DM", "user", userID, "channel_id", channelID, "message_ts", msgTS)
 	return channelID, msgTS, nil
 }
 
@@ -1015,7 +1093,7 @@ func (c *Client) SlashCommandHandler(writer http.ResponseWriter, r *http.Request
 	var response string
 	switch cmd.Command {
 	case "/r2r":
-		response = c.handleR2RCommand(&cmd)
+		response = c.handleR2RCommand(r.Context(), &cmd)
 	default:
 		response = "Unknown command"
 	}
@@ -1031,7 +1109,7 @@ func (c *Client) SlashCommandHandler(writer http.ResponseWriter, r *http.Request
 }
 
 // handleR2RCommand handles the /r2r slash command.
-func (*Client) handleR2RCommand(cmd *slack.SlashCommand) string {
+func (c *Client) handleR2RCommand(ctx context.Context, cmd *slack.SlashCommand) string {
 	// Sanitize and validate input.
 	text := strings.TrimSpace(cmd.Text)
 	if len(text) > maxCommandInputLength { // Reasonable limit for command input.
@@ -1040,7 +1118,7 @@ func (*Client) handleR2RCommand(cmd *slack.SlashCommand) string {
 
 	args := strings.Fields(text)
 	if len(args) == 0 {
-		return "Usage: /r2r [dashboard|settings|help]"
+		return "Usage: /r2r [dashboard|settings|report|help]"
 	}
 
 	// Validate command argument.
@@ -1054,11 +1132,54 @@ func (*Client) handleR2RCommand(cmd *slack.SlashCommand) string {
 			"Or use the Home tab in this app for the native Slack experience.", url.QueryEscape(cmd.UserID))
 	case "settings":
 		return "Open the Home tab in this app to configure your notification preferences."
+	case "report":
+		// Call the registered report handler if available
+		c.reportHandlerMu.RLock()
+		handler := c.reportHandler
+		c.reportHandlerMu.RUnlock()
+
+		if handler == nil {
+			slog.Warn("report requested but no report handler registered", "user", cmd.UserID)
+			return "Daily report feature is not currently available. Please try again later."
+		}
+
+		// Run handler asynchronously to avoid Slack's 3-second timeout
+		// The handler sends a DM directly, so we just acknowledge the request
+		slog.Info("generating manual daily report via slash command",
+			"team_id", c.teamID,
+			"user_id", cmd.UserID,
+			"trigger", "slash_command")
+
+		go func(baseCtx context.Context) {
+			// Create context that won't be cancelled when request ends
+			// but inherits values from the request context
+			bgCtx := context.WithoutCancel(baseCtx)
+			bgCtx, cancel := context.WithTimeout(bgCtx, 30*time.Second)
+			defer cancel()
+
+			if err := handler(bgCtx, c.teamID, cmd.UserID); err != nil {
+				slog.Error("failed to generate daily report",
+					"team_id", c.teamID,
+					"user_id", cmd.UserID,
+					"trigger", "slash_command",
+					"error", err)
+				return
+			}
+
+			slog.Info("successfully sent manual daily report",
+				"team_id", c.teamID,
+				"user_id", cmd.UserID,
+				"trigger", "slash_command")
+		}(ctx)
+
+		// Return immediately to avoid timeout
+		return "⏳ Generating your daily report..."
 	case "help":
 		return "Ready to Review helps you stay on top of pull requests.\n" +
 			"Commands:\n" +
 			"• /r2r dashboard - View your PR dashboard\n" +
 			"• /r2r settings - Configure notification preferences\n" +
+			"• /r2r report - Generate and send your daily PR report now\n" +
 			"• /r2r help - Show this help message\n\n" +
 			"You can also visit the Home tab in this app for a full dashboard."
 	default:

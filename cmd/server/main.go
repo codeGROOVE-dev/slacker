@@ -265,6 +265,10 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	homeHandler := slack.NewHomeHandler(slackManager, githubManager, configManager, stateStore, reverseMapping)
 	slackManager.SetHomeViewHandler(homeHandler.HandleAppHomeOpened)
 
+	// Initialize report handler for /r2r report slash command
+	reportHandler := slack.NewReportHandler(slackManager, githubManager, stateStore, reverseMapping)
+	slackManager.SetReportHandler(reportHandler.HandleReportCommand)
+
 	// Initialize OAuth handler for Slack app installation.
 	// These credentials are needed for the OAuth flow.
 	slackClientID := os.Getenv("SLACK_CLIENT_ID")
@@ -692,10 +696,6 @@ func runBotCoordinators(
 		lastHealthCheck: time.Now(),
 	}
 
-	// Initialize daily digest scheduler
-	//nolint:revive // line length acceptable for initialization
-	dailyDigest := notify.NewDailyDigestScheduler(notifier, github.WrapManager(githubManager), configManager, stateStore, notify.WrapSlackManager(slackManager))
-
 	// Start initial coordinators
 	cm.startCoordinators(ctx)
 
@@ -712,18 +712,9 @@ func runBotCoordinators(
 	defer healthCheckTicker.Stop()
 
 	// Poll for PRs every 5 minutes (safety net for missed sprinkler events)
+	// Daily reports are checked during each poll cycle (6am-11:30am window)
 	pollTicker := time.NewTicker(5 * time.Minute)
 	defer pollTicker.Stop()
-
-	// Check for daily digest candidates every hour
-	dailyDigestTicker := time.NewTicker(1 * time.Hour)
-	defer dailyDigestTicker.Stop()
-
-	// Run daily digest check immediately on startup
-	// (in case server starts during someone's 8-9am window)
-	go func() {
-		dailyDigest.CheckAndSend(ctx)
-	}()
 
 	// Setup state cleanup ticker (hourly)
 	cleanupTicker := time.NewTicker(1 * time.Hour)
@@ -754,14 +745,8 @@ func runBotCoordinators(
 			cm.handleRefreshInstallations(ctx)
 
 		case <-pollTicker.C:
-			// Poll all active coordinators
+			// Poll all active coordinators (includes daily report checks)
 			cm.handlePolling(ctx)
-
-		case <-dailyDigestTicker.C:
-			// Check for daily digest candidates across all orgs
-			go func() {
-				dailyDigest.CheckAndSend(ctx)
-			}()
 
 		case <-cleanupTicker.C:
 			// Periodic cleanup of old state data

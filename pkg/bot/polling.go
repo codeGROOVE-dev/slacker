@@ -8,8 +8,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/codeGROOVE-dev/slacker/pkg/dailyreport"
 	"github.com/codeGROOVE-dev/slacker/pkg/github"
+	"github.com/codeGROOVE-dev/slacker/pkg/home"
 	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
+	gogithub "github.com/google/go-github/v50/github"
 )
 
 // makePollEventKey creates an event key for poll-based PR processing.
@@ -192,6 +195,9 @@ func (c *Coordinator) pollAndReconcileWithSearcher(ctx context.Context, searcher
 		"processed", successCount,
 		"errors", errorCount,
 		"next_poll", "5m")
+
+	// Check daily reports for users involved in these PRs
+	c.checkDailyReports(ctx, org, prs)
 }
 
 // reconcilePR checks a single PR and sends notifications if needed.
@@ -438,4 +444,156 @@ func (c *Coordinator) StartupReconciliation(ctx context.Context) {
 		"reconciled", reconciledCount,
 		"skipped", skippedCount,
 		"errors", errorCount)
+}
+
+// extractUniqueGitHubUsers extracts all unique GitHub usernames involved in PRs.
+// Currently extracts PR authors. The FetchDashboard call will determine which users
+// have incoming PRs to review (as reviewers/assignees).
+func extractUniqueGitHubUsers(prs []github.PRSnapshot) map[string]bool {
+	users := make(map[string]bool)
+
+	for i := range prs {
+		pr := &prs[i]
+
+		// Add author
+		if pr.Author != "" {
+			users[pr.Author] = true
+		}
+	}
+
+	return users
+}
+
+// checkDailyReports checks if users involved in PRs should receive daily reports.
+// Efficiently extracts unique GitHub users from polled PRs instead of iterating all workspace users.
+// Reports are sent between 6am-11:30am user local time, with 23+ hour intervals.
+func (c *Coordinator) checkDailyReports(ctx context.Context, org string, prs []github.PRSnapshot) {
+	// Check if daily reports are enabled for this org
+	cfg, exists := c.configManager.Config(org)
+	if !exists {
+		slog.Debug("skipping daily reports - no config found", "org", org)
+		return
+	}
+
+	if cfg.Global.DisableDailyReport {
+		slog.Debug("daily reports disabled for org", "org", org)
+		return
+	}
+
+	// Get domain for user mapping
+	domain := cfg.Global.EmailDomain
+
+	// Extract unique GitHub users from PRs (authors, reviewers, assignees)
+	githubUsers := extractUniqueGitHubUsers(prs)
+	if len(githubUsers) == 0 {
+		slog.Debug("no users involved in PRs, skipping daily reports", "org", org)
+		return
+	}
+
+	slog.Debug("checking daily reports for PR-involved users",
+		"org", org,
+		"unique_github_users", len(githubUsers),
+		"window", "6am-11:30am local time",
+		"min_interval", "23 hours")
+
+	// Get GitHub client for dashboard fetching
+	token := c.github.InstallationToken(ctx)
+	if token == "" {
+		slog.Warn("skipping daily reports - no GitHub token", "org", org)
+		return
+	}
+
+	ghClient, ok := c.github.Client().(*gogithub.Client)
+	if !ok {
+		slog.Error("skipping daily reports - failed to get GitHub client")
+		return
+	}
+
+	// Create daily report sender and dashboard fetcher
+	sender := dailyreport.NewSender(c.stateStore, c.slack)
+	fetcher := home.NewFetcher(ghClient, c.stateStore, token, "ready-to-review[bot]")
+
+	sentCount := 0
+	skippedCount := 0
+	errorCount := 0
+
+	for githubUsername := range githubUsers {
+		// Map GitHub user to Slack user ID
+		slackUserID, err := c.userMapper.SlackHandle(ctx, githubUsername, org, domain)
+		if err != nil || slackUserID == "" {
+			slog.Debug("skipping daily report - no Slack mapping",
+				"github_user", githubUsername,
+				"error", err)
+			skippedCount++
+			continue
+		}
+
+		// Fetch user's dashboard (incoming/outgoing PRs)
+		dashboard, err := fetcher.FetchDashboard(ctx, githubUsername, []string{org})
+		if err != nil {
+			slog.Debug("skipping daily report - dashboard fetch failed",
+				"github_user", githubUsername,
+				"slack_user", slackUserID,
+				"error", err)
+			errorCount++
+			continue
+		}
+
+		// Build user blocking info
+		userInfo := dailyreport.UserBlockingInfo{
+			GitHubUsername: githubUsername,
+			SlackUserID:    slackUserID,
+			IncomingPRs:    dashboard.IncomingPRs,
+			OutgoingPRs:    dashboard.OutgoingPRs,
+		}
+
+		// Check if should send report
+		if !sender.ShouldSendReport(ctx, userInfo) {
+			// Record timestamp even if no report sent (no PRs or outside window)
+			// This prevents checking this user again for 23 hours
+			if len(dashboard.IncomingPRs) == 0 && len(dashboard.OutgoingPRs) == 0 {
+				if err := c.stateStore.RecordReportSent(ctx, slackUserID, time.Now()); err != nil {
+					slog.Debug("failed to record empty report timestamp",
+						"github_user", githubUsername,
+						"slack_user", slackUserID,
+						"error", err)
+				}
+			}
+			skippedCount++
+			continue
+		}
+
+		// Send the report
+		if err := sender.SendReport(ctx, userInfo); err != nil {
+			slog.Warn("failed to send daily report",
+				"github_user", githubUsername,
+				"slack_user", slackUserID,
+				"error", err)
+			errorCount++
+			continue
+		}
+
+		slog.Info("sent daily report",
+			"github_user", githubUsername,
+			"slack_user", slackUserID,
+			"incoming_prs", len(dashboard.IncomingPRs),
+			"outgoing_prs", len(dashboard.OutgoingPRs))
+		sentCount++
+
+		// Rate limit to avoid overwhelming Slack/GitHub APIs
+		select {
+		case <-ctx.Done():
+			slog.Info("daily report check canceled", "org", org)
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+
+	if sentCount > 0 || errorCount > 0 {
+		slog.Info("daily report check complete",
+			"org", org,
+			"sent", sentCount,
+			"skipped", skippedCount,
+			"errors", errorCount)
+	}
 }

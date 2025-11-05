@@ -23,6 +23,7 @@ type JSONStore struct {
 	dms           map[string]time.Time
 	dmMessages    map[string]DMInfo // DM message tracking for updates
 	digests       map[string]time.Time
+	reports       map[string]time.Time // Daily report tracking (userID -> last sent time)
 	events        map[string]time.Time
 	notifications map[string]time.Time
 	pendingDMs    map[string]PendingDM // Pending DMs to be sent
@@ -47,6 +48,7 @@ func NewJSONStore() (*JSONStore, error) {
 		dms:           make(map[string]time.Time),
 		dmMessages:    make(map[string]DMInfo),
 		digests:       make(map[string]time.Time),
+		reports:       make(map[string]time.Time),
 		events:        make(map[string]time.Time),
 		notifications: make(map[string]time.Time),
 		pendingDMs:    make(map[string]PendingDM),
@@ -231,6 +233,30 @@ func (s *JSONStore) RecordDigest(ctx context.Context, userID, date string, sentA
 	return nil
 }
 
+// LastReportSent returns when the last daily report was sent to a user.
+func (s *JSONStore) LastReportSent(_ context.Context, userID string) (time.Time, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, exists := s.reports[userID]
+	return t, exists
+}
+
+// RecordReportSent records when a daily report was sent to a user.
+func (s *JSONStore) RecordReportSent(_ context.Context, userID string, sentAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reports[userID] = sentAt
+	s.modified = true
+	// Best-effort persistence to JSON file for restart recovery
+	if err := s.save(); err != nil {
+		slog.Error("failed to persist report to JSON file - may send duplicate after restart",
+			"user", userID,
+			"error", err)
+		// Graceful degradation: log error but don't fail the operation
+	}
+	return nil
+}
+
 // WasProcessed checks if an event was already processed.
 func (s *JSONStore) WasProcessed(ctx context.Context, eventKey string) bool {
 	s.mu.RLock()
@@ -369,6 +395,7 @@ type persistentState struct {
 	DMs           map[string]time.Time  `json:"dms"`
 	DMMessages    map[string]DMInfo     `json:"dm_messages"`
 	Digests       map[string]time.Time  `json:"digests"`
+	Reports       map[string]time.Time  `json:"reports"` // Daily report tracking
 	Events        map[string]time.Time  `json:"events"`
 	Notifications map[string]time.Time  `json:"notifications"`
 	PendingDMs    map[string]PendingDM  `json:"pending_dms"`
@@ -386,6 +413,7 @@ func (s *JSONStore) save() error {
 		DMs:           s.dms,
 		DMMessages:    s.dmMessages,
 		Digests:       s.digests,
+		Reports:       s.reports,
 		Events:        s.events,
 		Notifications: s.notifications,
 		PendingDMs:    s.pendingDMs,
@@ -436,6 +464,7 @@ func (s *JSONStore) load() error {
 	s.dms = state.DMs
 	s.dmMessages = state.DMMessages
 	s.digests = state.Digests
+	s.reports = state.Reports
 	s.events = state.Events
 	s.notifications = state.Notifications
 	s.pendingDMs = state.PendingDMs
@@ -451,6 +480,9 @@ func (s *JSONStore) load() error {
 	}
 	if s.digests == nil {
 		s.digests = make(map[string]time.Time)
+	}
+	if s.reports == nil {
+		s.reports = make(map[string]time.Time)
 	}
 	if s.events == nil {
 		s.events = make(map[string]time.Time)
