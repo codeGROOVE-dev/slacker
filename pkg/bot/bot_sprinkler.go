@@ -300,7 +300,7 @@ func (c *Coordinator) handleSprinklerEvent(ctx context.Context, event client.Eve
 		return
 	}
 
-	slog.Info("accepted event for async processing",
+	slog.Debug("accepted event for async processing",
 		"organization", organization,
 		"type", event.Type,
 		"url", event.URL,
