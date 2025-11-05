@@ -24,6 +24,7 @@ const (
 	kindDM        = "SlackerDM"
 	kindDMMessage = "SlackerDMMessage"
 	kindDigest    = "SlackerDigest"
+	kindReport    = "SlackerReport"
 	kindEvent     = "SlackerEvent"
 	kindNotify    = "SlackerNotification"
 	kindPendingDM = "SlackerPendingDM"
@@ -64,6 +65,12 @@ type digestEntity struct {
 	SentAt time.Time `datastore:"sent_at"`
 	UserID string    `datastore:"user_id"`
 	Date   string    `datastore:"date"` // YYYY-MM-DD format
+}
+
+// Report tracking entity.
+type reportEntity struct {
+	SentAt time.Time `datastore:"sent_at"`
+	UserID string    `datastore:"user_id"`
 }
 
 // Event deduplication entity.
@@ -508,6 +515,75 @@ func (s *DatastoreStore) RecordDigest(ctx context.Context, userID, date string, 
 		slog.Error("failed to persist digest to Datastore - may send duplicate after restart",
 			"user", userID,
 			"date", date,
+			"error", err)
+		// Graceful degradation: log error but don't fail the operation
+		// System continues running even if external persistence unavailable
+	}
+
+	return nil
+}
+
+// LastReportSent retrieves last daily report time.
+func (s *DatastoreStore) LastReportSent(ctx context.Context, userID string) (time.Time, bool) {
+	// Check memory first
+	t, exists := s.memory.LastReportSent(ctx, userID)
+	if exists {
+		return t, true
+	}
+
+	// Datastore disabled
+	if s.disabled || s.ds == nil {
+		return time.Time{}, false
+	}
+
+	// Try Datastore
+	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+
+	dsKey := datastore.NameKey(kindReport, userID, nil)
+	var entity reportEntity
+
+	err := s.ds.Get(timeoutCtx, dsKey, &entity)
+	if err != nil {
+		return time.Time{}, false
+	}
+
+	// Update cache
+	if err := s.memory.RecordReportSent(ctx, userID, entity.SentAt); err != nil {
+		slog.Debug("failed to update memory cache for report", "error", err)
+	}
+
+	return entity.SentAt, true
+}
+
+// RecordReportSent saves daily report timestamp to memory and attempts persistence to Datastore.
+// Memory is always updated (primary storage for runtime). Datastore is best-effort for restart recovery.
+// Degrades gracefully: logs errors but continues operating if Datastore unavailable.
+func (s *DatastoreStore) RecordReportSent(ctx context.Context, userID string, sentAt time.Time) error {
+	// Always save to memory first (primary storage, must succeed)
+	if err := s.memory.RecordReportSent(ctx, userID, sentAt); err != nil {
+		slog.Warn("failed to record report in memory", "error", err)
+	}
+
+	// Skip Datastore if disabled
+	if s.disabled || s.ds == nil {
+		return nil
+	}
+
+	// Best-effort persistence to Datastore for restart recovery
+	// Synchronous write for maximum reliability, but don't fail operation if it doesn't work
+	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	dsKey := datastore.NameKey(kindReport, userID, nil)
+	entity := &reportEntity{
+		UserID: userID,
+		SentAt: sentAt,
+	}
+
+	if _, err := s.ds.Put(timeoutCtx, dsKey, entity); err != nil {
+		slog.Error("failed to persist report to Datastore - may send duplicate after restart",
+			"user", userID,
 			"error", err)
 		// Graceful degradation: log error but don't fail the operation
 		// System continues running even if external persistence unavailable

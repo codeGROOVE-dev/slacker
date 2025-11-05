@@ -64,9 +64,13 @@ type Store interface {
 	SaveDMMessage(ctx context.Context, userID, prURL string, info DMInfo) error
 	ListDMUsers(ctx context.Context, prURL string) []string
 
-	// Daily digest tracking - one per user per day
+	// Daily digest tracking - one per user per day (legacy)
 	LastDigest(ctx context.Context, userID, date string) (time.Time, bool)
 	RecordDigest(ctx context.Context, userID, date string, sentAt time.Time) error
+
+	// Daily report tracking - timestamp-based (23+ hour intervals)
+	LastReportSent(ctx context.Context, userID string) (time.Time, bool)
+	RecordReportSent(ctx context.Context, userID string, sentAt time.Time) error
 
 	// Event deduplication - prevent processing same event twice
 	WasProcessed(ctx context.Context, eventKey string) bool

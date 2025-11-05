@@ -271,6 +271,14 @@ func (m *mockStateStore) RemovePendingDM(ctx context.Context, id string) error {
 	return nil
 }
 
+func (m *mockStateStore) LastReportSent(ctx context.Context, userID string) (time.Time, bool) {
+	return time.Time{}, false
+}
+
+func (m *mockStateStore) RecordReportSent(ctx context.Context, userID string, sentAt time.Time) error {
+	return nil
+}
+
 func (m *mockStateStore) Close() error {
 	return nil
 }

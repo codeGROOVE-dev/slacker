@@ -17,6 +17,7 @@ type MemoryStore struct {
 	dms           map[string]time.Time
 	dmMessages    map[string]DMInfo
 	digests       map[string]time.Time
+	reports       map[string]time.Time // Daily report tracking (userID -> last sent time)
 	events        map[string]time.Time
 	notifications map[string]time.Time
 	pendingDMs    map[string]PendingDM // Pending DMs to be sent
@@ -29,6 +30,7 @@ func NewMemoryStore() *MemoryStore {
 		dms:           make(map[string]time.Time),
 		dmMessages:    make(map[string]DMInfo),
 		digests:       make(map[string]time.Time),
+		reports:       make(map[string]time.Time),
 		events:        make(map[string]time.Time),
 		notifications: make(map[string]time.Time),
 		pendingDMs:    make(map[string]PendingDM),
@@ -242,6 +244,22 @@ func (s *MemoryStore) RemovePendingDM(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.pendingDMs, id)
+	return nil
+}
+
+// LastReportSent returns when the last daily report was sent to a user.
+func (s *MemoryStore) LastReportSent(_ context.Context, userID string) (time.Time, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, exists := s.reports[userID]
+	return t, exists
+}
+
+// RecordReportSent records when a daily report was sent to a user.
+func (s *MemoryStore) RecordReportSent(_ context.Context, userID string, sentAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reports[userID] = sentAt
 	return nil
 }
 

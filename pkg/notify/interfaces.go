@@ -2,9 +2,7 @@ package notify
 
 import (
 	"context"
-	"time"
 
-	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/slacker/pkg/slack"
 	slackapi "github.com/slack-go/slack"
 )
@@ -38,22 +36,6 @@ type SlackClient interface {
 type ConfigManager interface {
 	DailyRemindersEnabled(org string) bool
 	ReminderDMDelay(org, channel string) int
-}
-
-// ConfigProvider provides configuration for daily digests.
-// Used by DailyDigestScheduler.
-type ConfigProvider interface {
-	DailyRemindersEnabled(org string) bool
-	Domain(org string) string
-	Config(org string) (*config.RepoConfig, bool)
-}
-
-// StateProvider provides state storage for daily digests.
-// Used by DailyDigestScheduler.
-type StateProvider interface {
-	LastDigest(ctx context.Context, userID, date string) (time.Time, bool)
-	RecordDigest(ctx context.Context, userID, date string, sentAt time.Time) error
-	LastDM(ctx context.Context, userID, prURL string) (time.Time, bool)
 }
 
 // slackManagerAdapter adapts concrete slack.Manager to implement SlackManager interface.

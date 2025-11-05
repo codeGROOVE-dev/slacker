@@ -208,6 +208,39 @@ func (m *mockStateStore) RemovePendingDM(ctx context.Context, id string) error {
 	return nil
 }
 
+func (m *mockStateStore) LastDigest(_ context.Context, _ /* userID */, _ /* date */ string) (time.Time, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Simple mock - always return false
+	return time.Time{}, false
+}
+
+func (m *mockStateStore) RecordDigest(_ context.Context, _ /* userID */, _ /* date */ string, _ /* sentAt */ time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Simple mock - no-op
+	return nil
+}
+
+func (m *mockStateStore) LastReportSent(_ context.Context, _ /* userID */ string) (time.Time, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Simple mock - always return false (no reports sent)
+	return time.Time{}, false
+}
+
+func (m *mockStateStore) RecordReportSent(_ context.Context, _ /* userID */ string, _ /* sentAt */ time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Simple mock - no-op
+	return nil
+}
+
+func (*mockStateStore) Cleanup(_ context.Context) error {
+	// Simple mock - no-op
+	return nil
+}
+
 func (*mockStateStore) Close() error {
 	return nil
 }
@@ -375,6 +408,28 @@ func (m *mockSlackClient) SendDirectMessage(ctx context.Context, userID, text st
 		return m.sendDirectMessageFunc(ctx, userID, text)
 	}
 	return "D" + userID, "1234567890.123456", nil
+}
+
+// SendDirectMessageWithBlocks sends a Block Kit DM to a user.
+func (*mockSlackClient) SendDirectMessageWithBlocks(
+	_ context.Context,
+	userID string,
+	_ []slack.Block,
+) (dmChannelID, messageTS string, err error) {
+	// Simple mock - just return success
+	return "D" + userID, "1234567890.123456", nil
+}
+
+// IsUserActive checks if a user is currently active.
+func (*mockSlackClient) IsUserActive(_ context.Context, _ /* userID */ string) bool {
+	// Simple mock - always return true (active)
+	return true
+}
+
+// UserTimezone returns the user's IANA timezone.
+func (*mockSlackClient) UserTimezone(_ context.Context, _ /* userID */ string) (string, error) {
+	// Simple mock - return America/New_York
+	return "America/New_York", nil
 }
 
 // IsUserInChannel checks if a user is in a channel.

@@ -52,8 +52,8 @@ func (s *ReverseService) SetOverrides(overrides map[string]string) {
 // LookupGitHub attempts to find a GitHub username for a Slack user ID.
 // It uses email matching via gh-mailto to find the best GitHub username match.
 func (s *ReverseService) LookupGitHub(ctx context.Context, slackClient SlackAPI, slackUserID, organization, domain string) (*ReverseMapping, error) {
-	// Check cache first
-	if m := s.cachedMapping(slackUserID); m != nil {
+	// Check cache first (only use positive results with confidence > 0)
+	if m := s.cachedMapping(slackUserID); m != nil && m.Confidence > 0 {
 		slog.Debug("using cached Slack-to-GitHub mapping",
 			"slack_user_id", slackUserID,
 			"github_username", m.GitHubUsername,
@@ -113,16 +113,9 @@ func (s *ReverseService) LookupGitHub(ctx context.Context, slackClient SlackAPI,
 		slog.Warn("reverse email lookup failed",
 			"slack_user_id", slackUserID,
 			"slack_email", email,
+			"organization", organization,
 			"error", err)
-		// Cache negative result
-		mapping := &ReverseMapping{
-			CachedAt:      time.Now(),
-			SlackUserID:   slackUserID,
-			SlackUsername: slackUser.Name,
-			SlackEmail:    email,
-			Confidence:    0,
-		}
-		s.cacheMapping(mapping)
+		// Don't cache negative results - user might exist in other orgs
 		return nil, fmt.Errorf("no GitHub user found for email: %s", email)
 	}
 

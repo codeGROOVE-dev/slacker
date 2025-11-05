@@ -93,14 +93,25 @@ func (f *Fetcher) fetchUserPRs(ctx context.Context, githubUsername string, works
 
 		// Fetch authored PRs (outgoing)
 		authorQuery := fmt.Sprintf("is:pr is:open author:%s org:%s", githubUsername, org)
+		slog.Info("searching for authored PRs",
+			"github_user", githubUsername,
+			"org", org,
+			"query", authorQuery)
 		authoredPRs, err := f.searchPRs(ctx, authorQuery)
 		if err != nil {
 			slog.Warn("failed to search authored PRs", "org", org, "error", err)
 			continue
 		}
+		slog.Info("found authored PRs",
+			"github_user", githubUsername,
+			"org", org,
+			"count", len(authoredPRs))
 
 		for i := range authoredPRs {
 			if authoredPRs[i].UpdatedAt.Before(staleThreshold) {
+				slog.Debug("skipping stale outgoing PR",
+					"pr", authoredPRs[i].Title,
+					"updated_at", authoredPRs[i].UpdatedAt)
 				continue // Skip stale PRs
 			}
 			outgoing = append(outgoing, authoredPRs[i])
@@ -108,14 +119,25 @@ func (f *Fetcher) fetchUserPRs(ctx context.Context, githubUsername string, works
 
 		// Fetch review-requested PRs (incoming)
 		reviewQuery := fmt.Sprintf("is:pr is:open review-requested:%s org:%s", githubUsername, org)
+		slog.Info("searching for review-requested PRs",
+			"github_user", githubUsername,
+			"org", org,
+			"query", reviewQuery)
 		reviewPRs, err := f.searchPRs(ctx, reviewQuery)
 		if err != nil {
 			slog.Warn("failed to search review-requested PRs", "org", org, "error", err)
 			continue
 		}
+		slog.Info("found review-requested PRs",
+			"github_user", githubUsername,
+			"org", org,
+			"count", len(reviewPRs))
 
 		for i := range reviewPRs {
 			if reviewPRs[i].UpdatedAt.Before(staleThreshold) {
+				slog.Debug("skipping stale incoming PR",
+					"pr", reviewPRs[i].Title,
+					"updated_at", reviewPRs[i].UpdatedAt)
 				continue // Skip stale PRs
 			}
 			incoming = append(incoming, reviewPRs[i])
@@ -188,20 +210,20 @@ func (f *Fetcher) searchPRs(ctx context.Context, query string) ([]PR, error) {
 			IsDraft:    false, // Draft status is on PullRequest, not Issue
 		}
 
-		// Check state store for last event time
+		// Check state store for last event time from sprinkler
 		// Split "owner/repo" into owner and repo
 		repoParts := strings.SplitN(repo, "/", 2)
 		if len(repoParts) != 2 {
 			continue // Skip malformed repo
 		}
 		owner, repoName := repoParts[0], repoParts[1]
-		if threadInfo, exists := f.stateStore.Thread(ctx, owner, repoName, pr.Number, ""); exists {
-			pr.LastEventTime = threadInfo.LastEventTime
-		}
 
-		// If no event time, use UpdatedAt
-		if pr.LastEventTime.IsZero() {
-			pr.LastEventTime = pr.UpdatedAt
+		// Use the most recent timestamp: either from GitHub search or sprinkler event
+		pr.LastEventTime = pr.UpdatedAt
+		if threadInfo, exists := f.stateStore.Thread(ctx, owner, repoName, pr.Number, ""); exists {
+			if threadInfo.LastEventTime.After(pr.UpdatedAt) {
+				pr.LastEventTime = threadInfo.LastEventTime
+			}
 		}
 
 		prs = append(prs, pr)
@@ -211,8 +233,11 @@ func (f *Fetcher) searchPRs(ctx context.Context, query string) ([]PR, error) {
 }
 
 // enrichPRs enriches PRs with turnclient analysis.
+// Calls turnclient in parallel for better performance.
 func (f *Fetcher) enrichPRs(ctx context.Context, prs []PR, githubUsername string, incoming bool) []PR {
-	enriched := make([]PR, 0, len(prs))
+	if len(prs) == 0 {
+		return prs
+	}
 
 	turnClient, err := turn.NewDefaultClient()
 	if err != nil {
@@ -221,58 +246,74 @@ func (f *Fetcher) enrichPRs(ctx context.Context, prs []PR, githubUsername string
 	}
 	turnClient.SetAuthToken(f.githubToken)
 
+	// Enrich PRs in parallel using goroutines
+	type enrichResult struct {
+		pr  PR
+		idx int
+	}
+
+	results := make(chan enrichResult, len(prs))
+
 	for i := range prs {
-		pr := prs[i]
-
-		// Call turnclient with last event time for cache optimization, with retry
-		var checkResult *turn.CheckResponse
-		err := retry.Do(
-			func() error {
-				var err error
-				checkResult, err = turnClient.Check(ctx, pr.URL, f.botUsername, pr.LastEventTime)
-				return err
-			},
-			retry.Attempts(5),
-			retry.Delay(500*time.Millisecond),
-			retry.MaxDelay(2*time.Minute),
-			retry.DelayType(retry.BackOffDelay),
-			retry.MaxJitter(time.Second),
-			retry.Context(ctx),
-		)
-		if err != nil {
-			slog.Debug("turnclient check failed after retries, using basic PR data",
-				"pr", pr.URL,
-				"error", err)
-			enriched = append(enriched, pr)
-			continue
-		}
-
-		// Extract action for this user
-		if action, exists := checkResult.Analysis.NextAction[githubUsername]; exists {
-			pr.ActionReason = action.Reason
-			pr.ActionKind = string(action.Kind)
-
-			if incoming {
-				pr.NeedsReview = action.Critical
-			} else {
-				pr.IsBlocked = action.Critical
+		go func(idx int, pr PR) {
+			// Use LastEventTime for cache optimization - it's the most recent timestamp
+			// we know about (max of GitHub UpdatedAt and sprinkler LastEventTime)
+			var checkResult *turn.CheckResponse
+			err := retry.Do(
+				func() error {
+					var err error
+					checkResult, err = turnClient.Check(ctx, pr.URL, f.botUsername, pr.LastEventTime)
+					return err
+				},
+				retry.Attempts(5),
+				retry.Delay(500*time.Millisecond),
+				retry.MaxDelay(2*time.Minute),
+				retry.DelayType(retry.BackOffDelay),
+				retry.MaxJitter(time.Second),
+				retry.Context(ctx),
+			)
+			if err != nil {
+				slog.Debug("turnclient check failed after retries, using basic PR data",
+					"pr", pr.URL,
+					"error", err)
+				results <- enrichResult{idx: idx, pr: pr}
+				return
 			}
-		}
 
-		// Extract test state from Analysis
-		checks := checkResult.Analysis.Checks
-		switch {
-		case checks.Failing > 0:
-			pr.TestState = "failing"
-		case checks.Pending > 0 || checks.Waiting > 0:
-			pr.TestState = "running"
-		case checks.Passing > 0:
-			pr.TestState = "passing"
-		default:
-			// No test state information available
-		}
+			// Extract action for this user
+			if action, exists := checkResult.Analysis.NextAction[githubUsername]; exists {
+				pr.ActionReason = action.Reason
+				pr.ActionKind = string(action.Kind)
 
-		enriched = append(enriched, pr)
+				if incoming {
+					pr.NeedsReview = action.Critical
+				} else {
+					pr.IsBlocked = action.Critical
+				}
+			}
+
+			// Extract test state from Analysis
+			checks := checkResult.Analysis.Checks
+			switch {
+			case checks.Failing > 0:
+				pr.TestState = "failing"
+			case checks.Pending > 0 || checks.Waiting > 0:
+				pr.TestState = "running"
+			case checks.Passing > 0:
+				pr.TestState = "passing"
+			default:
+				// No test state information available
+			}
+
+			results <- enrichResult{idx: idx, pr: pr}
+		}(i, prs[i])
+	}
+
+	// Collect results in original order
+	enriched := make([]PR, len(prs))
+	for range prs {
+		result := <-results
+		enriched[result.idx] = result.pr
 	}
 
 	return enriched

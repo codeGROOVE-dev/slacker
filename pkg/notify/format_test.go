@@ -600,36 +600,6 @@ func TestNew(t *testing.T) {
 	}
 }
 
-// TestNewDailyDigestScheduler tests the DailyDigestScheduler constructor.
-func TestNewDailyDigestScheduler(t *testing.T) {
-	mockConfig := &mockConfigManager{}
-	mockState := &mockStateProvider{}
-	mockSlack := &mockSlackManager{}
-	manager := New(nil, mockConfig, &mockStore{})
-
-	scheduler := NewDailyDigestScheduler(manager, nil, mockConfig, mockState, mockSlack)
-
-	if scheduler == nil {
-		t.Fatal("expected non-nil scheduler")
-	}
-
-	if scheduler.notifier != manager {
-		t.Error("expected notifier to be set")
-	}
-
-	if scheduler.configManager == nil {
-		t.Error("expected configManager to be set")
-	}
-
-	if scheduler.stateStore == nil {
-		t.Error("expected stateStore to be set")
-	}
-
-	if scheduler.slackManager == nil {
-		t.Error("expected slackManager to be set")
-	}
-}
-
 // mockSlackManager implements SlackManager for testing.
 type mockSlackManager struct{}
 

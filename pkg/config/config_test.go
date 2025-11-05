@@ -145,8 +145,8 @@ func TestCreateDefaultConfig(t *testing.T) {
 			defaultReminderDMDelayMinutes, cfg.Global.ReminderDMDelay)
 	}
 
-	if !cfg.Global.DailyReminders {
-		t.Error("expected DailyReminders to be enabled by default")
+	if cfg.Global.DisableDailyReport {
+		t.Error("expected daily report to be enabled by default (DisableDailyReport=false)")
 	}
 
 	if cfg.Channels == nil {
@@ -180,10 +180,10 @@ func TestConfigCache_GetSet(t *testing.T) {
 	// Set config
 	testConfig := &RepoConfig{
 		Global: struct {
-			TeamID          string `yaml:"team_id"`
-			EmailDomain     string `yaml:"email_domain"`
-			ReminderDMDelay int    `yaml:"reminder_dm_delay"`
-			DailyReminders  bool   `yaml:"daily_reminders"`
+			TeamID             string `yaml:"team_id"`
+			EmailDomain        string `yaml:"email_domain"`
+			ReminderDMDelay    int    `yaml:"reminder_dm_delay"`
+			DisableDailyReport bool   `yaml:"disable_daily_report"`
 		}{
 			TeamID:      "T123",
 			EmailDomain: "example.com",
@@ -399,15 +399,15 @@ func TestManager_ConfigWithManualSetup(t *testing.T) {
 			},
 		},
 		Global: struct {
-			TeamID          string `yaml:"team_id"`
-			EmailDomain     string `yaml:"email_domain"`
-			ReminderDMDelay int    `yaml:"reminder_dm_delay"`
-			DailyReminders  bool   `yaml:"daily_reminders"`
+			TeamID             string `yaml:"team_id"`
+			EmailDomain        string `yaml:"email_domain"`
+			ReminderDMDelay    int    `yaml:"reminder_dm_delay"`
+			DisableDailyReport bool   `yaml:"disable_daily_report"`
 		}{
-			TeamID:          "T123456",
-			EmailDomain:     "example.com",
-			ReminderDMDelay: 30,
-			DailyReminders:  false,
+			TeamID:             "T123456",
+			EmailDomain:        "example.com",
+			ReminderDMDelay:    30,
+			DisableDailyReport: true, // Disable daily reports
 		},
 	}
 
@@ -468,10 +468,10 @@ func TestManager_ReminderDMDelayWithChannelOverride(t *testing.T) {
 			},
 		},
 		Global: struct {
-			TeamID          string `yaml:"team_id"`
-			EmailDomain     string `yaml:"email_domain"`
-			ReminderDMDelay int    `yaml:"reminder_dm_delay"`
-			DailyReminders  bool   `yaml:"daily_reminders"`
+			TeamID             string `yaml:"team_id"`
+			EmailDomain        string `yaml:"email_domain"`
+			ReminderDMDelay    int    `yaml:"reminder_dm_delay"`
+			DisableDailyReport bool   `yaml:"disable_daily_report"`
 		}{
 			ReminderDMDelay: 60, // Global default
 		},
@@ -763,10 +763,10 @@ func TestManager_ReminderDMDelayZeroGlobal(t *testing.T) {
 			Mute            bool     `yaml:"mute"`
 		}{},
 		Global: struct {
-			TeamID          string `yaml:"team_id"`
-			EmailDomain     string `yaml:"email_domain"`
-			ReminderDMDelay int    `yaml:"reminder_dm_delay"`
-			DailyReminders  bool   `yaml:"daily_reminders"`
+			TeamID             string `yaml:"team_id"`
+			EmailDomain        string `yaml:"email_domain"`
+			ReminderDMDelay    int    `yaml:"reminder_dm_delay"`
+			DisableDailyReport bool   `yaml:"disable_daily_report"`
 		}{
 			ReminderDMDelay: 0, // Explicitly disabled
 		},
@@ -798,10 +798,10 @@ func TestManager_ReminderDMDelayChannelZero(t *testing.T) {
 			},
 		},
 		Global: struct {
-			TeamID          string `yaml:"team_id"`
-			EmailDomain     string `yaml:"email_domain"`
-			ReminderDMDelay int    `yaml:"reminder_dm_delay"`
-			DailyReminders  bool   `yaml:"daily_reminders"`
+			TeamID             string `yaml:"team_id"`
+			EmailDomain        string `yaml:"email_domain"`
+			ReminderDMDelay    int    `yaml:"reminder_dm_delay"`
+			DisableDailyReport bool   `yaml:"disable_daily_report"`
 		}{
 			ReminderDMDelay: 60,
 		},
@@ -942,7 +942,7 @@ global:
   team_id: T123456
   email_domain: example.com
   reminder_dm_delay: 30
-  daily_reminders: true
+  disable_daily_report: false  # Reports enabled by default
 channels:
   dev:
     repos:
@@ -1026,8 +1026,8 @@ func TestManager_LoadConfig404NotFound(t *testing.T) {
 	if cfg.Global.ReminderDMDelay != defaultReminderDMDelayMinutes {
 		t.Errorf("expected default delay, got %d", cfg.Global.ReminderDMDelay)
 	}
-	if !cfg.Global.DailyReminders {
-		t.Error("expected daily reminders enabled by default")
+	if cfg.Global.DisableDailyReport {
+		t.Error("expected daily report enabled by default (DisableDailyReport=false)")
 	}
 }
 
