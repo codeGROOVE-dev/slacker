@@ -30,6 +30,13 @@ const (
 	kindPendingDM = "SlackerPendingDM"
 )
 
+// Datastore operation timeouts.
+const (
+	datastoreReadTimeout  = 2 * time.Second // Reads: lookup, get
+	datastoreWriteTimeout = 3 * time.Second // Writes: put, delete
+	datastoreQueryTimeout = 5 * time.Second // Queries: list, scan
+)
+
 // ErrAlreadyProcessed indicates an event was already processed by another instance.
 // This is used for cross-instance deduplication during rolling deployments.
 var ErrAlreadyProcessed = errors.New("event already processed by another instance")
@@ -177,7 +184,7 @@ func (s *DatastoreStore) Thread(ctx context.Context, owner, repo string, number 
 	}
 
 	// Try Datastore with timeout
-	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	timeoutCtx, cancel := context.WithTimeout(ctx, datastoreReadTimeout)
 	defer cancel()
 
 	dsKey := datastore.NameKey(kindThread, key, nil)
@@ -228,7 +235,7 @@ func (s *DatastoreStore) SaveThread(ctx context.Context, owner, repo string, num
 	ds := s.ds
 
 	// Save to Datastore with timeout
-	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	timeoutCtx, cancel := context.WithTimeout(ctx, datastoreWriteTimeout)
 	defer cancel()
 
 	dsKey := datastore.NameKey(kindThread, key, nil)
@@ -264,7 +271,7 @@ func (s *DatastoreStore) LastDM(ctx context.Context, userID, prURL string) (time
 	}
 
 	// Try Datastore
-	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	timeoutCtx, cancel := context.WithTimeout(ctx, datastoreReadTimeout)
 	defer cancel()
 
 	key := dmKey(userID, prURL)
@@ -300,7 +307,7 @@ func (s *DatastoreStore) RecordDM(ctx context.Context, userID, prURL string, sen
 	ds := s.ds
 
 	// Save to Datastore with timeout
-	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	timeoutCtx, cancel := context.WithTimeout(ctx, datastoreWriteTimeout)
 	defer cancel()
 
 	key := dmKey(userID, prURL)
@@ -335,7 +342,7 @@ func (s *DatastoreStore) DMMessage(ctx context.Context, userID, prURL string) (D
 	}
 
 	// Try Datastore
-	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	timeoutCtx, cancel := context.WithTimeout(ctx, datastoreReadTimeout)
 	defer cancel()
 
 	key := dmKey(userID, prURL)
@@ -374,7 +381,7 @@ func (s *DatastoreStore) SaveDMMessage(ctx context.Context, userID, prURL string
 	ds := s.ds
 
 	// Save to Datastore with timeout
-	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	timeoutCtx, cancel := context.WithTimeout(ctx, datastoreWriteTimeout)
 	defer cancel()
 
 	key := dmKey(userID, prURL)
@@ -414,7 +421,7 @@ func (s *DatastoreStore) ListDMUsers(ctx context.Context, prURL string) []string
 	// 4. Results populate memory cache for future fast lookups
 	//
 	// Alternative considered: Ancestor queries require schema change (breaking existing data)
-	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	timeoutCtx, cancel := context.WithTimeout(ctx, datastoreQueryTimeout)
 	defer cancel()
 
 	query := datastore.NewQuery(kindDMMessage).KeysOnly().Limit(1000)
@@ -464,7 +471,7 @@ func (s *DatastoreStore) LastDigest(ctx context.Context, userID, date string) (t
 	}
 
 	// Try Datastore
-	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	timeoutCtx, cancel := context.WithTimeout(ctx, datastoreReadTimeout)
 	defer cancel()
 
 	key := digestKey(userID, date)
@@ -500,7 +507,7 @@ func (s *DatastoreStore) RecordDigest(ctx context.Context, userID, date string, 
 
 	// Best-effort persistence to Datastore for restart recovery
 	// Synchronous write for maximum reliability, but don't fail operation if it doesn't work
-	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	timeoutCtx, cancel := context.WithTimeout(ctx, datastoreQueryTimeout)
 	defer cancel()
 
 	key := digestKey(userID, date)
@@ -537,7 +544,7 @@ func (s *DatastoreStore) LastReportSent(ctx context.Context, userID string) (tim
 	}
 
 	// Try Datastore
-	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	timeoutCtx, cancel := context.WithTimeout(ctx, datastoreReadTimeout)
 	defer cancel()
 
 	dsKey := datastore.NameKey(kindReport, userID, nil)
@@ -572,7 +579,7 @@ func (s *DatastoreStore) RecordReportSent(ctx context.Context, userID string, se
 
 	// Best-effort persistence to Datastore for restart recovery
 	// Synchronous write for maximum reliability, but don't fail operation if it doesn't work
-	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	timeoutCtx, cancel := context.WithTimeout(ctx, datastoreQueryTimeout)
 	defer cancel()
 
 	dsKey := datastore.NameKey(kindReport, userID, nil)
@@ -605,7 +612,7 @@ func (s *DatastoreStore) WasProcessed(ctx context.Context, eventKey string) bool
 	}
 
 	// Check Datastore (cross-instance coordination)
-	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	timeoutCtx, cancel := context.WithTimeout(ctx, datastoreReadTimeout)
 	defer cancel()
 
 	dsKey := datastore.NameKey(kindEvent, eventKey, nil)
@@ -691,7 +698,7 @@ func (s *DatastoreStore) LastNotification(ctx context.Context, prURL string) tim
 		return time.Time{}
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	timeoutCtx, cancel := context.WithTimeout(ctx, datastoreReadTimeout)
 	defer cancel()
 
 	dsKey := datastore.NameKey(kindNotify, prURL, nil)
@@ -716,7 +723,7 @@ func (s *DatastoreStore) RecordNotification(ctx context.Context, prURL string, n
 	ds := s.ds
 
 	// Save with timeout
-	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	timeoutCtx, cancel := context.WithTimeout(ctx, datastoreWriteTimeout)
 	defer cancel()
 
 	dsKey := datastore.NameKey(kindNotify, prURL, nil)

@@ -5,8 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/codeGROOVE-dev/slacker/pkg/home"
@@ -224,146 +222,40 @@ func randomGreeting() string {
 	}
 
 	// Pick greeting based on time for variety
-	greetingIdx := (now.Hour()*60 + now.Minute()) % len(greetings)
-	return greetings[greetingIdx]
+	i := (now.Hour()*60 + now.Minute()) % len(greetings)
+	return greetings[i]
 }
 
-// formatPRLine formats a single PR as a line of text (goose-inspired format).
-// Returns a string like: "■ repo#123 • title — action" or "  repo#456 • title".
-func formatPRLine(pr *home.PR) string {
-	// Extract repo name from "org/repo" format
-	parts := strings.SplitN(pr.Repository, "/", 2)
-	repo := pr.Repository
-	if len(parts) == 2 {
-		repo = parts[1]
-	}
-
-	// Determine bullet character based on blocking status
-	var bullet string
-	switch {
-	case pr.IsBlocked || pr.NeedsReview:
-		// Critical: blocked on user
-		bullet = "■"
-	case pr.ActionKind != "":
-		// Non-critical: has action but not blocking
-		bullet = "•"
-	default:
-		// No action for user - use 2-space indent to align with bullets
-		bullet = " "
-	}
-
-	// Build PR reference with link
-	ref := fmt.Sprintf("<%s|%s#%d>", pr.URL, repo, pr.Number)
-
-	// Build line: bullet repo#123 • title
-	line := fmt.Sprintf("%s %s • %s", bullet, ref, pr.Title)
-
-	// Add action kind if present (only show user's next action)
-	if pr.ActionKind != "" {
-		action := strings.ReplaceAll(pr.ActionKind, "_", " ")
-		line = fmt.Sprintf("%s — %s", line, action)
-	}
-
-	return line
-}
-
-// BuildReportBlocks creates Block Kit blocks for a daily report.
-// Format inspired by goose - simple, minimal, action-focused.
+// BuildReportBlocks creates Block Kit blocks for a daily report with greeting.
+// Uses home.BuildPRSections for consistent formatting with the dashboard.
 func BuildReportBlocks(incoming, outgoing []home.PR) []slack.Block {
-	// Sort PRs by most recently updated first (make copies to avoid modifying input)
-	incomingSorted := make([]home.PR, len(incoming))
-	copy(incomingSorted, incoming)
-	sort.Slice(incomingSorted, func(i, j int) bool {
-		return incomingSorted[i].UpdatedAt.After(incomingSorted[j].UpdatedAt)
-	})
+	slog.Info("building report blocks",
+		"incoming_count", len(incoming),
+		"outgoing_count", len(outgoing))
 
-	outgoingSorted := make([]home.PR, len(outgoing))
-	copy(outgoingSorted, outgoing)
-	sort.Slice(outgoingSorted, func(i, j int) bool {
-		return outgoingSorted[i].UpdatedAt.After(outgoingSorted[j].UpdatedAt)
-	})
+	// Log outgoing PRs to debug blocking detection
+	for i := range outgoing {
+		slog.Info("outgoing PR for report",
+			"pr", outgoing[i].URL,
+			"title", outgoing[i].Title,
+			"is_blocked", outgoing[i].IsBlocked,
+			"action_kind", outgoing[i].ActionKind,
+			"action_reason", outgoing[i].ActionReason)
+	}
 
 	var blocks []slack.Block
 
 	// Greeting
-	greeting := randomGreeting()
 	blocks = append(blocks,
 		slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("%s Here is your daily report:", greeting), false, false),
+			slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("%s Here is your daily report:", randomGreeting()), false, false),
 			nil,
 			nil,
 		),
 	)
 
-	// Incoming PRs section (only if there are incoming PRs)
-	if len(incomingSorted) > 0 {
-		// Count blocked PRs
-		n := 0
-		for i := range incomingSorted {
-			if incomingSorted[i].IsBlocked || incomingSorted[i].NeedsReview {
-				n++
-			}
-		}
-
-		// Section header
-		header := "*Incoming*"
-		if n > 0 {
-			if n == 1 {
-				header = "*Incoming — 1 blocked on you*"
-			} else {
-				header = fmt.Sprintf("*Incoming — %d blocked on you*", n)
-			}
-		}
-
-		// Build PR list
-		var prLines []string
-		for i := range incomingSorted {
-			prLines = append(prLines, formatPRLine(&incomingSorted[i]))
-		}
-
-		blocks = append(blocks,
-			slack.NewSectionBlock(
-				slack.NewTextBlockObject("mrkdwn", header+"\n\n"+strings.Join(prLines, "\n"), false, false),
-				nil,
-				nil,
-			),
-		)
-	}
-
-	// Outgoing PRs section (only if there are outgoing PRs)
-	if len(outgoingSorted) > 0 {
-		// Count blocked PRs
-		n := 0
-		for i := range outgoingSorted {
-			if outgoingSorted[i].IsBlocked {
-				n++
-			}
-		}
-
-		// Section header
-		header := "*Outgoing*"
-		if n > 0 {
-			if n == 1 {
-				header = "*Outgoing — 1 blocked on you*"
-			} else {
-				header = fmt.Sprintf("*Outgoing — %d blocked on you*", n)
-			}
-		}
-
-		// Build PR list
-		var prLines []string
-		for i := range outgoingSorted {
-			prLines = append(prLines, formatPRLine(&outgoingSorted[i]))
-		}
-
-		blocks = append(blocks,
-			slack.NewSectionBlock(
-				slack.NewTextBlockObject("mrkdwn", header+"\n\n"+strings.Join(prLines, "\n"), false, false),
-				nil,
-				nil,
-			),
-		)
-	}
+	// Add PR sections (uses home.BuildPRSections for unified formatting)
+	blocks = append(blocks, home.BuildPRSections(incoming, outgoing)...)
 
 	return blocks
 }

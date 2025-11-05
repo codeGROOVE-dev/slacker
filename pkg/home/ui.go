@@ -3,6 +3,7 @@ package home
 import (
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,24 +23,24 @@ func BuildBlocks(dashboard *Dashboard, primaryOrg string) []slack.Block {
 		),
 	)
 
-	counts := dashboard.Counts()
+	c := dashboard.Counts()
 
 	// Status overview - quick summary
-	statusEmoji := "✨"
-	statusText := "All clear"
-	if counts.IncomingBlocked > 0 || counts.OutgoingBlocked > 0 {
-		statusEmoji = "⚡"
-		statusText = "Action needed"
+	emoji := "✨"
+	status := "All clear"
+	if c.IncomingBlocked > 0 || c.OutgoingBlocked > 0 {
+		emoji = "⚡"
+		status = "Action needed"
 	}
 
 	blocks = append(blocks,
 		slack.NewSectionBlock(
 			slack.NewTextBlockObject("mrkdwn",
 				fmt.Sprintf("%s *%s* • %d incoming • %d outgoing",
-					statusEmoji,
-					statusText,
-					counts.IncomingTotal,
-					counts.OutgoingTotal),
+					emoji,
+					status,
+					c.IncomingTotal,
+					c.OutgoingTotal),
 				false,
 				false,
 			),
@@ -49,22 +50,22 @@ func BuildBlocks(dashboard *Dashboard, primaryOrg string) []slack.Block {
 	)
 
 	// Organization monitoring + last updated
-	orgLinks := make([]string, 0, len(dashboard.WorkspaceOrgs))
+	links := make([]string, 0, len(dashboard.WorkspaceOrgs))
 	for _, org := range dashboard.WorkspaceOrgs {
 		// URL-escape org name to prevent injection
-		escaped := url.PathEscape(org)
-		orgLinks = append(orgLinks, fmt.Sprintf("<%s|%s>",
-			fmt.Sprintf("https://github.com/%s/.codeGROOVE/blob/main/slack.yaml", escaped),
+		esc := url.PathEscape(org)
+		links = append(links, fmt.Sprintf("<%s|%s>",
+			fmt.Sprintf("https://github.com/%s/.codeGROOVE/blob/main/slack.yaml", esc),
 			org))
 	}
-	updated := time.Now().Format("Jan 2, 3:04pm MST")
-	ctx := fmt.Sprintf("Monitoring: %s  •  Updated: %s",
-		strings.Join(orgLinks, ", "),
-		updated)
+	now := time.Now().Format("Jan 2, 3:04pm MST")
+	context := fmt.Sprintf("Monitoring: %s  •  Updated: %s",
+		strings.Join(links, ", "),
+		now)
 
 	blocks = append(blocks,
 		slack.NewContextBlock("",
-			slack.NewTextBlockObject("mrkdwn", ctx, false, false),
+			slack.NewTextBlockObject("mrkdwn", context, false, false),
 		),
 		// Refresh button
 		slack.NewActionBlock(
@@ -75,72 +76,21 @@ func BuildBlocks(dashboard *Dashboard, primaryOrg string) []slack.Block {
 				slack.NewTextBlockObject("plain_text", "🔄 Refresh Dashboard", true, false),
 			).WithStyle("primary"),
 		),
-		// Incoming PRs section
 		slack.NewDividerBlock(),
 	)
 
-	incoming := fmt.Sprintf(":arrow_down: *Incoming PRs* (%d total)", counts.IncomingTotal)
-	if counts.IncomingBlocked > 0 {
-		incoming = fmt.Sprintf(":rotating_light: *Incoming PRs* • *%d blocked on you* • %d total", counts.IncomingBlocked, counts.IncomingTotal)
-	}
-
-	blocks = append(blocks,
-		slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn", incoming, false, false),
-			nil,
-			nil,
-		),
-	)
-
-	if len(dashboard.IncomingPRs) == 0 {
-		blocks = append(blocks,
-			slack.NewContextBlock("",
-				slack.NewTextBlockObject("mrkdwn", "No incoming PRs • You're all caught up!", false, false),
-			),
-		)
-	} else {
-		for i := range dashboard.IncomingPRs {
-			blocks = append(blocks, formatEnhancedPRBlock(&dashboard.IncomingPRs[i]))
-		}
-	}
-
-	// Outgoing PRs section
-	blocks = append(blocks, slack.NewDividerBlock())
-
-	outgoing := fmt.Sprintf(":arrow_up: *Outgoing PRs* (%d total)", counts.OutgoingTotal)
-	if counts.OutgoingBlocked > 0 {
-		outgoing = fmt.Sprintf(":hourglass_flowing_sand: *Outgoing PRs* • *%d waiting* • %d total", counts.OutgoingBlocked, counts.OutgoingTotal)
-	}
-
-	blocks = append(blocks,
-		slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn", outgoing, false, false),
-			nil,
-			nil,
-		),
-	)
-
-	if len(dashboard.OutgoingPRs) == 0 {
-		blocks = append(blocks,
-			slack.NewContextBlock("",
-				slack.NewTextBlockObject("mrkdwn", "No outgoing PRs • Time to ship something new!", false, false),
-			),
-		)
-	} else {
-		for i := range dashboard.OutgoingPRs {
-			blocks = append(blocks, formatEnhancedPRBlock(&dashboard.OutgoingPRs[i]))
-		}
-	}
+	// Use the same clean report format for PR sections
+	blocks = append(blocks, BuildPRSections(dashboard.IncomingPRs, dashboard.OutgoingPRs)...)
 
 	// Footer - full dashboard link
 	// URL-escape org name to prevent injection
-	escapedOrg := url.PathEscape(primaryOrg)
+	esc := url.PathEscape(primaryOrg)
 	blocks = append(blocks,
 		slack.NewDividerBlock(),
 		slack.NewContextBlock("",
 			slack.NewTextBlockObject("mrkdwn",
 				fmt.Sprintf("📊 <%s|View full dashboard at %s.ready-to-review.dev>",
-					fmt.Sprintf("https://%s.ready-to-review.dev", escapedOrg),
+					fmt.Sprintf("https://%s.ready-to-review.dev", esc),
 					primaryOrg,
 				),
 				false,
@@ -152,80 +102,137 @@ func BuildBlocks(dashboard *Dashboard, primaryOrg string) []slack.Block {
 	return blocks
 }
 
-// formatEnhancedPRBlock formats a single PR with enhanced visual design.
-// Inspired by dash.ready-to-review.dev with more informative, actionable display.
-func formatEnhancedPRBlock(pr *PR) slack.Block {
-	// Status indicators - clear visual hierarchy
-	var emoji, status string
-	switch {
-	case pr.IsBlocked && pr.NeedsReview:
-		// Blocked on YOU - highest priority
-		emoji = "🚨"
-		status = "*BLOCKED ON YOU*"
-	case pr.IsBlocked:
-		// Blocked on author
-		emoji = "⏸️"
-		status = "Blocked on author"
-	case pr.NeedsReview:
-		// Ready for your review
-		emoji = "👀"
-		status = "Ready for review"
-	default:
-		// Waiting/in progress
-		emoji = "⏳"
-		status = "In progress"
+// BuildPRSections creates Block Kit blocks for PR sections (incoming/outgoing).
+// Format inspired by goose - simple, minimal, action-focused.
+// This is the core formatting used by both daily reports and the dashboard.
+func BuildPRSections(incoming, outgoing []PR) []slack.Block {
+	var blocks []slack.Block
+
+	// Incoming PRs section
+	if len(incoming) > 0 {
+		// Sort by most recent first
+		prs := make([]PR, len(incoming))
+		copy(prs, incoming)
+		sort.Slice(prs, func(i, j int) bool {
+			return prs[i].UpdatedAt.After(prs[j].UpdatedAt)
+		})
+
+		// Count blocked PRs and format lines
+		n := 0
+		var lines []string
+		for i := range prs {
+			if prs[i].IsBlocked || prs[i].NeedsReview {
+				n++
+			}
+
+			// Format PR line - extract repo name
+			repo := prs[i].Repository
+			if idx := strings.LastIndex(repo, "/"); idx >= 0 {
+				repo = repo[idx+1:]
+			}
+
+			// Determine indicator
+			var indicator string
+			switch {
+			case prs[i].NeedsReview:
+				indicator = ":green_square:"
+			case prs[i].IsBlocked:
+				indicator = ":large_red_square:"
+			case prs[i].ActionKind != "":
+				indicator = ":speech_balloon:"
+			default:
+				indicator = "•"
+			}
+
+			// Build line
+			line := fmt.Sprintf("%s <%s|%s#%d> • %s", indicator, prs[i].URL, repo, prs[i].Number, prs[i].Title)
+			if prs[i].ActionKind != "" {
+				line = fmt.Sprintf("%s — %s", line, strings.ReplaceAll(prs[i].ActionKind, "_", " "))
+			}
+			lines = append(lines, line)
+		}
+
+		// Build header
+		h := "*Incoming*"
+		if n > 0 {
+			if n == 1 {
+				h = "*Incoming — 1 blocked on you*"
+			} else {
+				h = fmt.Sprintf("*Incoming — %d blocked on you*", n)
+			}
+		}
+
+		blocks = append(blocks,
+			slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn", h+"\n\n"+strings.Join(lines, "\n"), false, false),
+				nil, nil,
+			),
+		)
 	}
 
-	// Extract repo name
-	parts := strings.SplitN(pr.Repository, "/", 2)
-	repo := pr.Repository
-	if len(parts) == 2 {
-		repo = parts[1]
+	// Outgoing PRs section
+	if len(outgoing) > 0 {
+		// Sort by most recent first
+		prs := make([]PR, len(outgoing))
+		copy(prs, outgoing)
+		sort.Slice(prs, func(i, j int) bool {
+			return prs[i].UpdatedAt.After(prs[j].UpdatedAt)
+		})
+
+		// Count blocked PRs and format lines
+		n := 0
+		var lines []string
+		for i := range prs {
+			if prs[i].IsBlocked {
+				n++
+			}
+
+			// Format PR line - extract repo name
+			repo := prs[i].Repository
+			if idx := strings.LastIndex(repo, "/"); idx >= 0 {
+				repo = repo[idx+1:]
+			}
+
+			// Determine indicator
+			var indicator string
+			switch {
+			case prs[i].NeedsReview:
+				indicator = ":green_square:"
+			case prs[i].IsBlocked:
+				indicator = ":large_red_square:"
+			case prs[i].ActionKind != "":
+				indicator = ":speech_balloon:"
+			default:
+				indicator = "•"
+			}
+
+			// Build line
+			line := fmt.Sprintf("%s <%s|%s#%d> • %s", indicator, prs[i].URL, repo, prs[i].Number, prs[i].Title)
+			if prs[i].ActionKind != "" {
+				line = fmt.Sprintf("%s — %s", line, strings.ReplaceAll(prs[i].ActionKind, "_", " "))
+			}
+			lines = append(lines, line)
+		}
+
+		// Build header
+		h := "*Outgoing*"
+		if n > 0 {
+			if n == 1 {
+				h = "*Outgoing — 1 blocked on you*"
+			} else {
+				h = fmt.Sprintf("*Outgoing — %d blocked on you*", n)
+			}
+		}
+
+		blocks = append(blocks,
+			slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn", h+"\n\n"+strings.Join(lines, "\n"), false, false),
+				nil, nil,
+			),
+		)
 	}
-	ref := fmt.Sprintf("%s#%d", repo, pr.Number)
 
-	// Build main line with status
-	line := fmt.Sprintf("%s <%s|*%s*>  •  %s", emoji, pr.URL, ref, status)
-
-	// Add action kind if present
-	if pr.ActionKind != "" {
-		action := strings.ReplaceAll(pr.ActionKind, "_", " ")
-		line = fmt.Sprintf("%s  •  %s", line, action)
-	}
-
-	// Add age indicator
-	// Inline formatAge since it's only called once (simplicity)
-	age := time.Since(pr.UpdatedAt)
-	var ageStr string
-	switch {
-	case age < time.Hour:
-		ageStr = fmt.Sprintf("%dm", int(age.Minutes()))
-	case age < 24*time.Hour:
-		ageStr = fmt.Sprintf("%dh", int(age.Hours()))
-	case age < 30*24*time.Hour:
-		ageStr = fmt.Sprintf("%dd", int(age.Hours()/24))
-	case age < 365*24*time.Hour:
-		ageStr = fmt.Sprintf("%dmo", int(age.Hours()/(24*30)))
-	default:
-		ageStr = pr.UpdatedAt.Format("2006")
-	}
-	line = fmt.Sprintf("%s  •  _updated %s ago_", line, ageStr)
-
-	// Title on second line (truncated if needed)
-	// Use rune slicing to safely handle multi-byte UTF-8 characters
-	title := pr.Title
-	runes := []rune(title)
-	if len(runes) > 120 {
-		title = string(runes[:117]) + "..."
-	}
-
-	text := fmt.Sprintf("%s\n%s", line, title)
-
-	return slack.NewSectionBlock(
-		slack.NewTextBlockObject("mrkdwn", text, false, false),
-		nil,
-		nil,
-	)
+	return blocks
 }
 
 // BuildBlocksWithDebug creates Slack Block Kit UI with debug information about user mapping.
