@@ -805,7 +805,7 @@ func TestSendPRNotification_QueuedThenUpdated(t *testing.T) {
 	}
 
 	// Second call immediately after: PR state changes to awaiting_review
-	// This simulates a legitimate state change that should be processed
+	// This should UPDATE the queued DM, not send immediately!
 	checkResult2 := newCheckResponse("awaiting_review")
 	req2 := req1 // Copy
 	req2.CheckResult = checkResult2
@@ -816,21 +816,21 @@ func TestSendPRNotification_QueuedThenUpdated(t *testing.T) {
 		t.Fatalf("Second call failed: %v", err)
 	}
 
-	// The state CHANGED, so this should send a new DM (queued DM isn't sent yet)
-	// This is correct behavior - legitimate state changes should always be processed
-	if len(slack.sentDirectMessages) != 1 {
-		t.Errorf("Expected 1 DM sent for legitimate state change, got %d DMs", len(slack.sentDirectMessages))
+	// CRITICAL: No immediate DM should be sent - the queued DM should be updated instead
+	if len(slack.sentDirectMessages) != 0 {
+		t.Errorf("Expected no immediate DM (should update queued DM instead), got %d DMs", len(slack.sentDirectMessages))
 	}
 
-	// Verify the sent DM has the new state
-	if len(slack.sentDirectMessages) > 0 {
-		// Check that state was updated to awaiting_review
-		savedInfo, exists := store.DMMessage(context.Background(), "U123", "https://github.com/owner/repo/pull/1")
-		if !exists {
-			t.Error("Expected DM state to be saved")
-		} else if savedInfo.LastState != "awaiting_review" {
-			t.Errorf("Expected LastState 'awaiting_review', got '%s'", savedInfo.LastState)
-		}
+	// Verify the queued DM still exists and was updated with new state
+	pendingDMs, err := store.PendingDMs(context.Background(), time.Now().Add(1*time.Hour))
+	if err != nil {
+		t.Fatal("Failed to get pending DMs:", err)
+	}
+	if len(pendingDMs) != 1 {
+		t.Fatalf("Expected 1 queued DM after state change, got %d", len(pendingDMs))
+	}
+	if pendingDMs[0].PRState != "awaiting_review" {
+		t.Errorf("Expected queued DM to have state 'awaiting_review', got '%s'", pendingDMs[0].PRState)
 	}
 }
 
@@ -944,5 +944,307 @@ func TestSendPRNotification_RapidStateChanges(t *testing.T) {
 	savedInfo, _ := store.DMMessage(context.Background(), "U123", "https://github.com/owner/repo/pull/1")
 	if savedInfo.LastState != "awaiting_review" {
 		t.Errorf("Expected final state 'awaiting_review', got '%s'", savedInfo.LastState)
+	}
+}
+
+// TestSendPRNotification_QueuedDMCancelledWhenUserNoLongerBlocked tests that a queued DM
+// is cancelled if the PR state changes such that the user no longer has actions to take.
+func TestSendPRNotification_QueuedDMCancelledWhenUserNoLongerBlocked(t *testing.T) {
+	store := &mockStateStore{}
+	slack := &mockSlackClient{
+		isUserInChannelFunc: func(ctx context.Context, channelID, userID string) bool {
+			return true // User is in channel, so DM should be queued
+		},
+	}
+	config := &mockConfigManager{
+		dmDelay: 30, // 30 minute delay
+	}
+
+	c := &Coordinator{
+		stateStore:    store,
+		slack:         slack,
+		configManager: config,
+		userMapper:    &mockUserMapper{},
+	}
+
+	// First call: Queue a DM for the user (user needs to review)
+	checkResult1 := newCheckResponse("awaiting_review")
+	req1 := dmNotificationRequest{
+		CheckResult: checkResult1,
+		UserID:      "U123",
+		ChannelID:   "C123",
+		ChannelName: "general",
+		Owner:       "owner",
+		Repo:        "repo",
+		PRNumber:    1,
+		PRTitle:     "Test PR",
+		PRAuthor:    "author",
+		PRURL:       "https://github.com/owner/repo/pull/1",
+	}
+
+	err := c.sendPRNotification(context.Background(), req1)
+	if err != nil {
+		t.Fatalf("First call failed: %v", err)
+	}
+
+	// Verify DM was queued
+	pendingDMs, err := store.PendingDMs(context.Background(), time.Now().Add(1*time.Hour))
+	if err != nil {
+		t.Fatal("Failed to get pending DMs:", err)
+	}
+	if len(pendingDMs) != 1 {
+		t.Fatalf("Expected 1 queued DM, got %d", len(pendingDMs))
+	}
+
+	// Second call: PR state changes such that user no longer has actions (no NextAction)
+	// This simulates: user reviewed, PR now needs author to fix tests
+	checkResult2 := newCheckResponse("tests_broken")
+	checkResult2.Analysis.NextAction = nil // No actions needed (or empty map)
+	req2 := req1
+	req2.CheckResult = checkResult2
+
+	err = c.sendPRNotification(context.Background(), req2)
+	if err != nil {
+		t.Fatalf("Second call failed: %v", err)
+	}
+
+	// CRITICAL: The queued DM should be CANCELLED (not sent early, not updated)
+	pendingDMs, err = store.PendingDMs(context.Background(), time.Now().Add(1*time.Hour))
+	if err != nil {
+		t.Fatal("Failed to get pending DMs:", err)
+	}
+	if len(pendingDMs) != 0 {
+		t.Errorf("Expected queued DM to be cancelled (0 pending), got %d pending DMs", len(pendingDMs))
+	}
+
+	// No immediate DM should be sent
+	if len(slack.sentDirectMessages) != 0 {
+		t.Errorf("Expected no immediate DM when cancelling queued DM, got %d DMs", len(slack.sentDirectMessages))
+	}
+}
+
+// TestSendPRNotification_QueuedDMUpdatedWhenUserLeavesChannel tests that a queued DM
+// is properly updated when the user leaves the channel (even though immediate send would now apply).
+func TestSendPRNotification_QueuedDMUpdatedWhenUserLeavesChannel(t *testing.T) {
+	userInChannel := true // Track whether user is in channel
+	store := &mockStateStore{}
+	slack := &mockSlackClient{
+		isUserInChannelFunc: func(ctx context.Context, channelID, userID string) bool {
+			return userInChannel
+		},
+	}
+	config := &mockConfigManager{
+		dmDelay: 30, // 30 minute delay
+	}
+
+	c := &Coordinator{
+		stateStore:    store,
+		slack:         slack,
+		configManager: config,
+		userMapper:    &mockUserMapper{},
+	}
+
+	// First call: Queue a DM (delay enabled, user in channel)
+	checkResult1 := newCheckResponse("awaiting_review")
+	req1 := dmNotificationRequest{
+		CheckResult: checkResult1,
+		UserID:      "U123",
+		ChannelID:   "C123",
+		ChannelName: "general",
+		Owner:       "owner",
+		Repo:        "repo",
+		PRNumber:    1,
+		PRTitle:     "Test PR",
+		PRAuthor:    "author",
+		PRURL:       "https://github.com/owner/repo/pull/1",
+	}
+
+	err := c.sendPRNotification(context.Background(), req1)
+	if err != nil {
+		t.Fatalf("First call failed: %v", err)
+	}
+
+	// Verify DM was queued
+	pendingDMs, err := store.PendingDMs(context.Background(), time.Now().Add(1*time.Hour))
+	if err != nil {
+		t.Fatal("Failed to get pending DMs:", err)
+	}
+	if len(pendingDMs) != 1 {
+		t.Fatalf("Expected 1 queued DM, got %d", len(pendingDMs))
+	}
+
+	// User leaves channel (or gets kicked)
+	userInChannel = false
+
+	// Second call: State changes, user NOT in channel anymore
+	// Even though immediate send would now apply, the queued DM should be updated (not sent early)
+	checkResult2 := newCheckResponse("tests_broken")
+	req2 := req1
+	req2.CheckResult = checkResult2
+
+	err = c.sendPRNotification(context.Background(), req2)
+	if err != nil {
+		t.Fatalf("Second call failed: %v", err)
+	}
+
+	// CRITICAL: The queued DM should be UPDATED (not sent early, even though user left channel)
+	// This ensures we respect the original delay decision
+	pendingDMs, err = store.PendingDMs(context.Background(), time.Now().Add(1*time.Hour))
+	if err != nil {
+		t.Fatal("Failed to get pending DMs:", err)
+	}
+	if len(pendingDMs) != 1 {
+		t.Errorf("Expected 1 queued DM (updated, not sent early), got %d pending DMs", len(pendingDMs))
+	}
+	if pendingDMs[0].PRState != "tests_broken" {
+		t.Errorf("Expected queued DM state 'tests_broken', got '%s'", pendingDMs[0].PRState)
+	}
+
+	// No immediate DM should be sent
+	if len(slack.sentDirectMessages) != 0 {
+		t.Errorf("Expected no immediate DM (should update queued DM), got %d DMs", len(slack.sentDirectMessages))
+	}
+}
+
+// TestSendPRNotification_PreviouslySentDMUpdatedEvenWhenUserNoLongerBlocked tests that
+// a previously sent DM is updated when the PR state changes, even if the user no longer
+// has actions to take.
+func TestSendPRNotification_PreviouslySentDMUpdatedEvenWhenUserNoLongerBlocked(t *testing.T) {
+	store := &mockStateStore{}
+	slack := &mockSlackClient{}
+	config := &mockConfigManager{
+		dmDelay: 0, // No delay - send immediately
+	}
+
+	c := &Coordinator{
+		stateStore:    store,
+		slack:         slack,
+		configManager: config,
+		userMapper:    &mockUserMapper{},
+	}
+
+	// First call: Send a DM (user needs to review)
+	checkResult1 := newCheckResponse("awaiting_review")
+	req1 := dmNotificationRequest{
+		CheckResult: checkResult1,
+		UserID:      "U123",
+		ChannelID:   "",
+		ChannelName: "",
+		Owner:       "owner",
+		Repo:        "repo",
+		PRNumber:    1,
+		PRTitle:     "Test PR",
+		PRAuthor:    "author",
+		PRURL:       "https://github.com/owner/repo/pull/1",
+	}
+
+	err := c.sendPRNotification(context.Background(), req1)
+	if err != nil {
+		t.Fatalf("First call failed: %v", err)
+	}
+
+	// Verify DM was sent
+	if len(slack.sentDirectMessages) != 1 {
+		t.Fatalf("Expected 1 sent DM, got %d", len(slack.sentDirectMessages))
+	}
+
+	// Second call: State changes, user no longer has actions (no NextAction)
+	// This simulates: user reviewed, PR now needs author to fix tests
+	checkResult2 := newCheckResponse("tests_broken")
+	checkResult2.Analysis.NextAction = nil // No actions needed
+	req2 := req1
+	req2.CheckResult = checkResult2
+
+	err = c.sendPRNotification(context.Background(), req2)
+	if err != nil {
+		t.Fatalf("Second call failed: %v", err)
+	}
+
+	// CRITICAL: The previously sent DM should be UPDATED (not cancelled, not skipped)
+	// Even though user no longer has actions, we update to reflect new state
+	if len(slack.updatedMessages) != 1 {
+		t.Errorf("Expected 1 DM update, got %d updates", len(slack.updatedMessages))
+	}
+
+	// Verify state was saved with new state
+	savedInfo, exists := store.DMMessage(context.Background(), "U123", "https://github.com/owner/repo/pull/1")
+	if !exists {
+		t.Error("Expected DM state to be saved")
+	} else if savedInfo.LastState != "tests_broken" {
+		t.Errorf("Expected LastState 'tests_broken', got '%s'", savedInfo.LastState)
+	}
+}
+
+// TestSendPRNotification_QueuedDMBehaviorAcrossRestarts tests that queued DMs persist
+// across restarts and are properly handled when the bot restarts.
+func TestSendPRNotification_QueuedDMBehaviorAcrossRestarts(t *testing.T) {
+	// Simulate a queued DM that exists in the datastore (from before restart)
+	existingQueuedDM := &state.PendingDM{
+		ID:        "dm-123",
+		UserID:    "U123",
+		PRURL:     "https://github.com/owner/repo/pull/1",
+		PROwner:   "owner",
+		PRRepo:    "repo",
+		PRNumber:  1,
+		PRTitle:   "Test PR",
+		PRAuthor:  "author",
+		PRState:   "awaiting_review",
+		SendAfter: time.Now().Add(10 * time.Minute),
+		QueuedAt:  time.Now().Add(-20 * time.Minute),
+	}
+
+	store := &mockStateStore{
+		pendingDMs: []*state.PendingDM{existingQueuedDM},
+	}
+	slack := &mockSlackClient{}
+	config := &mockConfigManager{
+		dmDelay: 30,
+	}
+
+	c := &Coordinator{
+		stateStore:    store,
+		slack:         slack,
+		configManager: config,
+		userMapper:    &mockUserMapper{},
+	}
+
+	// After restart, we get a new webhook event for the same PR
+	// State has changed from awaiting_review to tests_broken
+	checkResult := newCheckResponse("tests_broken")
+	req := dmNotificationRequest{
+		CheckResult: checkResult,
+		UserID:      "U123",
+		ChannelID:   "C123",
+		ChannelName: "general",
+		Owner:       "owner",
+		Repo:        "repo",
+		PRNumber:    1,
+		PRTitle:     "Test PR",
+		PRAuthor:    "author",
+		PRURL:       "https://github.com/owner/repo/pull/1",
+	}
+
+	err := c.sendPRNotification(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Call after restart failed: %v", err)
+	}
+
+	// CRITICAL: Should find the existing queued DM and update it (not send immediately)
+	pendingDMs, err := store.PendingDMs(context.Background(), time.Now().Add(1*time.Hour))
+	if err != nil {
+		t.Fatal("Failed to get pending DMs:", err)
+	}
+	if len(pendingDMs) != 1 {
+		t.Fatalf("Expected 1 queued DM after restart, got %d", len(pendingDMs))
+	}
+
+	// Verify the queued DM has updated state
+	if pendingDMs[0].PRState != "tests_broken" {
+		t.Errorf("Expected queued DM to have state 'tests_broken', got '%s'", pendingDMs[0].PRState)
+	}
+
+	// No immediate DM should be sent
+	if len(slack.sentDirectMessages) != 0 {
+		t.Errorf("Expected no immediate DM (should update queued DM), got %d DMs", len(slack.sentDirectMessages))
 	}
 }
