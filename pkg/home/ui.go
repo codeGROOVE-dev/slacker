@@ -13,59 +13,13 @@ import (
 
 // BuildBlocks creates Slack Block Kit UI for the home dashboard.
 // Design matches dashboard at https://ready-to-review.dev - modern minimal with indigo accents.
-func BuildBlocks(dashboard *Dashboard, primaryOrg string) []slack.Block {
+func BuildBlocks(dashboard *Dashboard) []slack.Block {
 	var blocks []slack.Block
 
-	// Header - gradient-inspired title
+	// Header
 	blocks = append(blocks,
 		slack.NewHeaderBlock(
 			slack.NewTextBlockObject("plain_text", "🚀 Ready to Review", true, false),
-		),
-	)
-
-	c := dashboard.Counts()
-
-	// Status overview - quick summary
-	emoji := "✨"
-	status := "All clear"
-	if c.IncomingBlocked > 0 || c.OutgoingBlocked > 0 {
-		emoji = "⚡"
-		status = "Action needed"
-	}
-
-	blocks = append(blocks,
-		slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn",
-				fmt.Sprintf("%s *%s* • %d incoming • %d outgoing",
-					emoji,
-					status,
-					c.IncomingTotal,
-					c.OutgoingTotal),
-				false,
-				false,
-			),
-			nil,
-			nil,
-		),
-	)
-
-	// Organization monitoring + last updated
-	links := make([]string, 0, len(dashboard.WorkspaceOrgs))
-	for _, org := range dashboard.WorkspaceOrgs {
-		// URL-escape org name to prevent injection
-		esc := url.PathEscape(org)
-		links = append(links, fmt.Sprintf("<%s|%s>",
-			fmt.Sprintf("https://github.com/%s/.codeGROOVE/blob/main/slack.yaml", esc),
-			org))
-	}
-	now := time.Now().Format("Jan 2, 3:04pm MST")
-	context := fmt.Sprintf("Monitoring: %s  •  Updated: %s",
-		strings.Join(links, ", "),
-		now)
-
-	blocks = append(blocks,
-		slack.NewContextBlock("",
-			slack.NewTextBlockObject("mrkdwn", context, false, false),
 		),
 		// Refresh button
 		slack.NewActionBlock(
@@ -79,20 +33,43 @@ func BuildBlocks(dashboard *Dashboard, primaryOrg string) []slack.Block {
 		slack.NewDividerBlock(),
 	)
 
-	// Use the same clean report format for PR sections
+	// PR sections
 	blocks = append(blocks, BuildPRSections(dashboard.IncomingPRs, dashboard.OutgoingPRs)...)
 
-	// Footer - full dashboard link
-	// URL-escape org name to prevent injection
-	esc := url.PathEscape(primaryOrg)
+	// Organizations section
+	blocks = append(blocks, slack.NewDividerBlock())
+
+	var orgLines []string
+	for _, org := range dashboard.WorkspaceOrgs {
+		// URL-escape org name to prevent injection
+		esc := url.PathEscape(org)
+		orgLine := fmt.Sprintf("• <%s|%s> [<%s|config>, <%s|dashboard>]",
+			fmt.Sprintf("https://github.com/%s", esc),
+			org,
+			fmt.Sprintf("https://github.com/%s/.github/blob/main/.codeGROOVE/slack.yaml", esc),
+			fmt.Sprintf("https://%s.ready-to-review.dev", esc),
+		)
+		orgLines = append(orgLines, orgLine)
+	}
+
 	blocks = append(blocks,
-		slack.NewDividerBlock(),
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn",
+				"*Organizations*\n"+strings.Join(orgLines, "\n"),
+				false,
+				false,
+			),
+			nil,
+			nil,
+		),
+	)
+
+	// Updated timestamp
+	now := time.Now().Format("Jan 2, 3:04pm MST")
+	blocks = append(blocks,
 		slack.NewContextBlock("",
 			slack.NewTextBlockObject("mrkdwn",
-				fmt.Sprintf("📊 <%s|View full dashboard at %s.ready-to-review.dev>",
-					fmt.Sprintf("https://%s.ready-to-review.dev", esc),
-					primaryOrg,
-				),
+				fmt.Sprintf("Updated: %s", now),
 				false,
 				false,
 			),
@@ -246,9 +223,9 @@ func BuildPRSections(incoming, outgoing []PR) []slack.Block {
 }
 
 // BuildBlocksWithDebug creates Slack Block Kit UI with debug information about user mapping.
-func BuildBlocksWithDebug(dashboard *Dashboard, primaryOrg string, mapping *usermapping.ReverseMapping) []slack.Block {
+func BuildBlocksWithDebug(dashboard *Dashboard, mapping *usermapping.ReverseMapping) []slack.Block {
 	// Build standard blocks first
-	blocks := BuildBlocks(dashboard, primaryOrg)
+	blocks := BuildBlocks(dashboard)
 
 	// Add debug section if mapping info is available
 	if mapping != nil {

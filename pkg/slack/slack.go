@@ -1040,6 +1040,9 @@ func (c *Client) handleBlockAction(ctx context.Context, interaction *slack.Inter
 }
 
 // handleRefreshDashboard handles the refresh dashboard button action.
+// It runs the dashboard fetch asynchronously to avoid Slack's 3-second interaction timeout.
+//
+//nolint:unparam // ctx intentionally unused - we use context.Background() in goroutine
 func (c *Client) handleRefreshDashboard(ctx context.Context, interaction *slack.InteractionCallback) {
 	c.homeViewHandlerMu.RLock()
 	handler := c.homeViewHandler
@@ -1051,26 +1054,33 @@ func (c *Client) handleRefreshDashboard(ctx context.Context, interaction *slack.
 		return
 	}
 
-	handlerCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	slog.Info("refreshing dashboard via button click",
+	slog.Info("refreshing dashboard via button click (async)",
 		"team_id", interaction.Team.ID,
 		"user_id", interaction.User.ID,
 		"trigger", "refresh_button")
 
-	if err := handler(handlerCtx, interaction.Team.ID, interaction.User.ID); err != nil {
-		slog.Error("failed to refresh dashboard",
-			"team_id", interaction.Team.ID,
-			"user_id", interaction.User.ID,
-			"trigger", "refresh_button",
-			"error", err)
-	} else {
-		slog.Info("successfully refreshed dashboard",
-			"team_id", interaction.Team.ID,
-			"user_id", interaction.User.ID,
-			"trigger", "refresh_button")
-	}
+	// Run dashboard fetch asynchronously to avoid blocking the HTTP response.
+	// Slack requires interactions to be acknowledged within 3 seconds.
+	// We use context.Background() because the HTTP request context will be cancelled
+	// after we return, but we want the dashboard fetch to continue.
+	//nolint:contextcheck // Intentionally using Background() - HTTP context cancelled after return
+	go func() {
+		handlerCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		if err := handler(handlerCtx, interaction.Team.ID, interaction.User.ID); err != nil {
+			slog.Error("failed to refresh dashboard",
+				"team_id", interaction.Team.ID,
+				"user_id", interaction.User.ID,
+				"trigger", "refresh_button",
+				"error", err)
+		} else {
+			slog.Info("successfully refreshed dashboard",
+				"team_id", interaction.Team.ID,
+				"user_id", interaction.User.ID,
+				"trigger", "refresh_button")
+		}
+	}()
 }
 
 // SlashCommandHandler handles Slack slash commands.
