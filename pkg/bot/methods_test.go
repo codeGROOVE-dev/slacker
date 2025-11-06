@@ -69,7 +69,7 @@ func TestCoordinator_SaveThread(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Verify saved to state store
-	storeKey := fmt.Sprintf("thread:%s/%s#%d:%s", owner, repo, number, channelID)
+	storeKey := fmt.Sprintf("%s/%s#%d:%s", owner, repo, number, channelID)
 	if _, ok := mockState.threads[storeKey]; !ok {
 		t.Error("expected thread to be saved in state store")
 	}
@@ -256,7 +256,16 @@ func TestCoordinator_CreatePRThread(t *testing.T) {
 		},
 	}
 
-	threadTS, messageText, err := c.createPRThread(ctx, "C123", "testorg", "testrepo", 42, "awaiting_review", pr, checkResult)
+	threadTS, messageText, err := c.createPRThread(ctx, threadCreationParams{
+		ChannelID:   "C123",
+		ChannelName: "testrepo",
+		Owner:       "testorg",
+		Repo:        "testrepo",
+		PRNumber:    42,
+		PRState:     "awaiting_review",
+		PullRequest: pr,
+		CheckResult: checkResult,
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -317,7 +326,16 @@ func TestCoordinator_CreatePRThread_PostError(t *testing.T) {
 		},
 	}
 
-	_, _, err := c.createPRThread(ctx, "C123", "testorg", "testrepo", 42, "awaiting_review", pr, checkResult)
+	_, _, err := c.createPRThread(ctx, threadCreationParams{
+		ChannelID:   "C123",
+		ChannelName: "testrepo",
+		Owner:       "testorg",
+		Repo:        "testrepo",
+		PRNumber:    42,
+		PRState:     "awaiting_review",
+		PullRequest: pr,
+		CheckResult: checkResult,
+	})
 
 	if err == nil {
 		t.Error("expected error when posting thread fails")

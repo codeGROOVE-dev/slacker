@@ -49,7 +49,7 @@ func (m *mockStateStore) SaveThread(ctx context.Context, owner, repo string, num
 	if m.saveThreadErr != nil {
 		return m.saveThreadErr
 	}
-	key := fmt.Sprintf("thread:%s/%s#%d:%s", owner, repo, number, channelID)
+	key := fmt.Sprintf("%s/%s#%d:%s", owner, repo, number, channelID)
 	if m.threads == nil {
 		m.threads = make(map[string]cache.ThreadInfo)
 	}
