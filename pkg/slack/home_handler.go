@@ -139,8 +139,8 @@ func (h *HomeHandler) tryHandleAppHomeOpened(ctx context.Context, teamID, slackU
 	// Add workspace orgs to dashboard for UI display
 	dashboard.WorkspaceOrgs = workspaceOrgs
 
-	// Build Block Kit UI - use first org as primary, include debug info
-	blocks := home.BuildBlocksWithDebug(dashboard, workspaceOrgs[0], mapping)
+	// Build Block Kit UI with debug info
+	blocks := home.BuildBlocksWithDebug(dashboard, mapping)
 
 	// Publish to Slack
 	if err := slackClient.PublishHomeView(ctx, slackUserID, blocks); err != nil {
@@ -187,7 +187,7 @@ func (*HomeHandler) publishPlaceholderHome(ctx context.Context, slackClient *Cli
 		IncomingPRs:   nil,
 		OutgoingPRs:   nil,
 		WorkspaceOrgs: []string{"your-org"},
-	}, "your-org", mapping)
+	}, mapping)
 
 	return slackClient.PublishHomeView(ctx, slackUserID, blocks)
 }

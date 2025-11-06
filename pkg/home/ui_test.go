@@ -13,10 +13,9 @@ import (
 //nolint:gocognit,maintidx // Comprehensive test with many test cases - complexity acceptable
 func TestBuildBlocks(t *testing.T) {
 	tests := []struct {
-		name       string
-		dashboard  *Dashboard
-		primaryOrg string
-		validate   func(t *testing.T, blocks []slack.Block)
+		name      string
+		dashboard *Dashboard
+		validate  func(t *testing.T, blocks []slack.Block)
 	}{
 		{
 			name: "empty dashboard",
@@ -25,7 +24,6 @@ func TestBuildBlocks(t *testing.T) {
 				IncomingPRs:   []PR{},
 				OutgoingPRs:   []PR{},
 			},
-			primaryOrg: "test-org",
 			validate: func(t *testing.T, blocks []slack.Block) {
 				t.Helper()
 				if len(blocks) == 0 {
@@ -45,22 +43,7 @@ func TestBuildBlocks(t *testing.T) {
 					t.Error("expected header block with 'Ready to Review'")
 				}
 
-				// Should have "All clear" status
-				foundStatus := false
-				for _, block := range blocks {
-					if sb, ok := block.(*slack.SectionBlock); ok {
-						if sb.Text != nil && strings.Contains(sb.Text.Text, "All clear") {
-							foundStatus = true
-						}
-					}
-				}
-				if !foundStatus {
-					t.Error("expected 'All clear' status for empty dashboard")
-				}
-
-				// With new format, empty dashboards don't show "No incoming PRs" message
-				// They just show header/status/refresh with no PR sections
-				// Verify we don't have any PR section blocks
+				// Verify we don't have any PR section blocks (empty dashboard)
 				hasPRSections := false
 				for _, block := range blocks {
 					if sb, ok := block.(*slack.SectionBlock); ok {
@@ -73,21 +56,47 @@ func TestBuildBlocks(t *testing.T) {
 					t.Error("expected no PR sections for empty dashboard")
 				}
 
-				// Should have dashboard link
+				// Should have Organizations section
+				foundOrgs := false
+				for _, block := range blocks {
+					if sb, ok := block.(*slack.SectionBlock); ok {
+						if sb.Text != nil && strings.Contains(sb.Text.Text, "Organizations") {
+							foundOrgs = true
+						}
+					}
+				}
+				if !foundOrgs {
+					t.Error("expected Organizations section")
+				}
+
+				// Should have dashboard link in Organizations section
 				foundLink := false
+				for _, block := range blocks {
+					if sb, ok := block.(*slack.SectionBlock); ok {
+						if sb.Text != nil && strings.Contains(sb.Text.Text, "ready-to-review.dev") {
+							foundLink = true
+						}
+					}
+				}
+				if !foundLink {
+					t.Error("expected dashboard link in Organizations section")
+				}
+
+				// Should have Updated timestamp
+				foundTimestamp := false
 				for _, block := range blocks {
 					if cb, ok := block.(*slack.ContextBlock); ok {
 						for _, elem := range cb.ContextElements.Elements {
 							if txt, ok := elem.(*slack.TextBlockObject); ok {
-								if strings.Contains(txt.Text, "ready-to-review.dev") {
-									foundLink = true
+								if strings.Contains(txt.Text, "Updated:") {
+									foundTimestamp = true
 								}
 							}
 						}
 					}
 				}
-				if !foundLink {
-					t.Error("expected dashboard link in footer")
+				if !foundTimestamp {
+					t.Error("expected Updated timestamp")
 				}
 			},
 		},
@@ -110,23 +119,9 @@ func TestBuildBlocks(t *testing.T) {
 				},
 				OutgoingPRs: []PR{},
 			},
-			primaryOrg: "test-org",
 			validate: func(t *testing.T, blocks []slack.Block) {
 				t.Helper()
-				// Should have "Action needed" status
-				foundActionNeeded := false
-				for _, block := range blocks {
-					if sb, ok := block.(*slack.SectionBlock); ok {
-						if sb.Text != nil && strings.Contains(sb.Text.Text, "Action needed") {
-							foundActionNeeded = true
-						}
-					}
-				}
-				if !foundActionNeeded {
-					t.Error("expected 'Action needed' status with blocked PRs")
-				}
-
-				// Should show "1 blocked on you" in section header (new format)
+				// Should show "1 blocked on you" in section header
 				foundBlocked := false
 				for _, block := range blocks {
 					if sb, ok := block.(*slack.SectionBlock); ok {
@@ -139,7 +134,7 @@ func TestBuildBlocks(t *testing.T) {
 					t.Error("expected 'blocked on you' message in header")
 				}
 
-				// Should have PR with large red square (incoming blocked indicator)
+				// Should have PR with red circle (incoming blocked indicator)
 				foundBlockedPR := false
 				for _, block := range blocks {
 					if sb, ok := block.(*slack.SectionBlock); ok {
@@ -171,7 +166,6 @@ func TestBuildBlocks(t *testing.T) {
 					},
 				},
 			},
-			primaryOrg: "test-org",
 			validate: func(t *testing.T, blocks []slack.Block) {
 				t.Helper()
 				// Should show outgoing PR section with "blocked on you" (new format)
@@ -212,30 +206,27 @@ func TestBuildBlocks(t *testing.T) {
 				IncomingPRs:   []PR{},
 				OutgoingPRs:   []PR{},
 			},
-			primaryOrg: "org1",
 			validate: func(t *testing.T, blocks []slack.Block) {
 				t.Helper()
-				// Should list all orgs in monitoring section
+				// Should list all orgs in Organizations section
 				foundOrgs := 0
 				for _, block := range blocks {
-					if cb, ok := block.(*slack.ContextBlock); ok {
-						for _, elem := range cb.ContextElements.Elements {
-							if txt, ok := elem.(*slack.TextBlockObject); ok {
-								if strings.Contains(txt.Text, "org1") {
-									foundOrgs++
-								}
-								if strings.Contains(txt.Text, "org2") {
-									foundOrgs++
-								}
-								if strings.Contains(txt.Text, "org3") {
-									foundOrgs++
-								}
+					if sb, ok := block.(*slack.SectionBlock); ok {
+						if sb.Text != nil && strings.Contains(sb.Text.Text, "Organizations") {
+							if strings.Contains(sb.Text.Text, "org1") {
+								foundOrgs++
+							}
+							if strings.Contains(sb.Text.Text, "org2") {
+								foundOrgs++
+							}
+							if strings.Contains(sb.Text.Text, "org3") {
+								foundOrgs++
 							}
 						}
 					}
 				}
 				if foundOrgs < 3 {
-					t.Errorf("expected all 3 orgs in monitoring section, found %d", foundOrgs)
+					t.Errorf("expected all 3 orgs in Organizations section, found %d", foundOrgs)
 				}
 			},
 		},
@@ -243,7 +234,7 @@ func TestBuildBlocks(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			blocks := BuildBlocks(tt.dashboard, tt.primaryOrg)
+			blocks := BuildBlocks(tt.dashboard)
 			tt.validate(t, blocks)
 		})
 	}
@@ -257,7 +248,7 @@ func TestBuildBlocks_RefreshButton(t *testing.T) {
 		OutgoingPRs:   []PR{},
 	}
 
-	blocks := BuildBlocks(dashboard, "test-org")
+	blocks := BuildBlocks(dashboard)
 
 	// Should have action block with refresh button
 	foundRefresh := false
@@ -294,7 +285,7 @@ func TestBuildBlocks_DividersBetweenSections(t *testing.T) {
 		},
 	}
 
-	blocks := BuildBlocks(dashboard, "test-org")
+	blocks := BuildBlocks(dashboard)
 
 	// Count dividers
 	dividerCount := 0
