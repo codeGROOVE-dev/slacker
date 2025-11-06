@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	"github.com/slack-go/slack"
 )
 
@@ -82,13 +83,13 @@ func TestBuildBlocks(t *testing.T) {
 					t.Error("expected dashboard link in Organizations section")
 				}
 
-				// Should have Updated timestamp
+				// Should have Updated timestamp (no colon after "Updated")
 				foundTimestamp := false
 				for _, block := range blocks {
 					if cb, ok := block.(*slack.ContextBlock); ok {
 						for _, elem := range cb.ContextElements.Elements {
 							if txt, ok := elem.(*slack.TextBlockObject); ok {
-								if strings.Contains(txt.Text, "Updated:") {
+								if strings.Contains(txt.Text, "Updated ") {
 									foundTimestamp = true
 								}
 							}
@@ -234,7 +235,7 @@ func TestBuildBlocks(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			blocks := BuildBlocks(tt.dashboard)
+			blocks := BuildBlocks(tt.dashboard, "America/Los_Angeles")
 			tt.validate(t, blocks)
 		})
 	}
@@ -248,7 +249,7 @@ func TestBuildBlocks_RefreshButton(t *testing.T) {
 		OutgoingPRs:   []PR{},
 	}
 
-	blocks := BuildBlocks(dashboard)
+	blocks := BuildBlocks(dashboard, "America/Los_Angeles")
 
 	// Should have action block with refresh button
 	foundRefresh := false
@@ -285,7 +286,7 @@ func TestBuildBlocks_DividersBetweenSections(t *testing.T) {
 		},
 	}
 
-	blocks := BuildBlocks(dashboard)
+	blocks := BuildBlocks(dashboard, "America/Los_Angeles")
 
 	// Count dividers
 	dividerCount := 0
@@ -406,5 +407,111 @@ func TestBuildPRSections_SortOrder(t *testing.T) {
 	}
 	if !strings.Contains(outgoingText, ":large_green_circle:") {
 		t.Error("outgoing blocked PRs should use :large_green_circle:")
+	}
+}
+
+// TestBuildBlocksWithDebug_NoOrgsConfigured verifies improved handling for startup race conditions.
+func TestBuildBlocksWithDebug_NoOrgsConfigured(t *testing.T) {
+	tests := []struct {
+		name        string
+		dashboard   *Dashboard
+		mapping     *usermapping.ReverseMapping
+		expectText  string
+		notExpect   string
+		description string
+	}{
+		{
+			name: "no orgs configured - startup race condition",
+			dashboard: &Dashboard{
+				WorkspaceOrgs: []string{}, // Empty - no orgs found yet
+				IncomingPRs:   []PR{},
+				OutgoingPRs:   []PR{},
+			},
+			mapping:     nil,
+			expectText:  "Setting up workspace",
+			notExpect:   "Could not map Slack user to GitHub",
+			description: "should show startup message, not user mapping error",
+		},
+		{
+			name: "has orgs but user mapping failed",
+			dashboard: &Dashboard{
+				WorkspaceOrgs: []string{"test-org", "another-org"},
+				IncomingPRs:   []PR{},
+				OutgoingPRs:   []PR{},
+			},
+			mapping:     nil,
+			expectText:  "Could not map Slack user to GitHub",
+			notExpect:   "Setting up workspace",
+			description: "should show user mapping error, not startup message",
+		},
+		{
+			name: "successful mapping with good confidence",
+			dashboard: &Dashboard{
+				WorkspaceOrgs: []string{"test-org"},
+				IncomingPRs:   []PR{},
+				OutgoingPRs:   []PR{},
+			},
+			mapping: &usermapping.ReverseMapping{
+				GitHubUsername: "testuser",
+				SlackEmail:     "test@example.com",
+				MatchMethod:    "email_match",
+				Confidence:     95,
+			},
+			expectText:  "Debug Info",
+			notExpect:   "Low confidence mapping",
+			description: "should show debug info without low confidence warning",
+		},
+		{
+			name: "successful mapping with low confidence",
+			dashboard: &Dashboard{
+				WorkspaceOrgs: []string{"test-org"},
+				IncomingPRs:   []PR{},
+				OutgoingPRs:   []PR{},
+			},
+			mapping: &usermapping.ReverseMapping{
+				GitHubUsername: "testuser",
+				SlackEmail:     "test@example.com",
+				MatchMethod:    "name_similarity",
+				Confidence:     65,
+			},
+			expectText:  "Low confidence mapping",
+			notExpect:   "",
+			description: "should show low confidence warning with suggestion",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			blocks := BuildBlocksWithDebug(tt.dashboard, "America/Los_Angeles", tt.mapping)
+
+			// Convert all blocks to text for searching
+			var allText string
+			for _, block := range blocks {
+				if sb, ok := block.(*slack.SectionBlock); ok {
+					if sb.Text != nil {
+						allText += sb.Text.Text + "\n"
+					}
+				}
+				if cb, ok := block.(*slack.ContextBlock); ok {
+					for _, elem := range cb.ContextElements.Elements {
+						if txt, ok := elem.(*slack.TextBlockObject); ok {
+							allText += txt.Text + "\n"
+						}
+					}
+				}
+			}
+
+			// Check expected text is present
+			if tt.expectText != "" && !strings.Contains(allText, tt.expectText) {
+				t.Errorf("%s: expected to find %q in output, but didn't.\nGot: %s",
+					tt.description, tt.expectText, allText)
+			}
+
+			// Check unwanted text is not present
+			if tt.notExpect != "" && strings.Contains(allText, tt.notExpect) {
+				t.Errorf("%s: should not contain %q, but found it.\nGot: %s",
+					tt.description, tt.notExpect, allText)
+			}
+		})
 	}
 }

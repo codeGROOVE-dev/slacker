@@ -13,7 +13,7 @@ import (
 
 // BuildBlocks creates Slack Block Kit UI for the home dashboard.
 // Design matches dashboard at https://ready-to-review.dev - modern minimal with indigo accents.
-func BuildBlocks(dashboard *Dashboard) []slack.Block {
+func BuildBlocks(dashboard *Dashboard, userTZ string) []slack.Block {
 	var blocks []slack.Block
 
 	// Header
@@ -30,51 +30,53 @@ func BuildBlocks(dashboard *Dashboard) []slack.Block {
 				slack.NewTextBlockObject("plain_text", "🔄 Refresh Dashboard", true, false),
 			).WithStyle("primary"),
 		),
+	)
+
+	// Updated timestamp - right after refresh button
+	now := formatTimestamp(time.Now(), userTZ)
+	blocks = append(blocks,
+		slack.NewContextBlock("",
+			slack.NewTextBlockObject("mrkdwn",
+				fmt.Sprintf("Updated %s", now),
+				false,
+				false,
+			),
+		),
 		slack.NewDividerBlock(),
 	)
 
 	// PR sections
 	blocks = append(blocks, BuildPRSections(dashboard.IncomingPRs, dashboard.OutgoingPRs)...)
 
-	// Organizations section
-	blocks = append(blocks, slack.NewDividerBlock())
+	// Organizations section - only show if there are orgs configured
+	if len(dashboard.WorkspaceOrgs) > 0 {
+		blocks = append(blocks, slack.NewDividerBlock())
 
-	var orgLines []string
-	for _, org := range dashboard.WorkspaceOrgs {
-		// URL-escape org name to prevent injection
-		esc := url.PathEscape(org)
-		orgLine := fmt.Sprintf("• <%s|%s> [<%s|config>, <%s|dashboard>]",
-			fmt.Sprintf("https://github.com/%s", esc),
-			org,
-			fmt.Sprintf("https://github.com/%s/.github/blob/main/.codeGROOVE/slack.yaml", esc),
-			fmt.Sprintf("https://%s.ready-to-review.dev", esc),
+		var orgLines []string
+		for _, org := range dashboard.WorkspaceOrgs {
+			// URL-escape org name to prevent injection
+			esc := url.PathEscape(org)
+			orgLine := fmt.Sprintf("• <%s|%s> [<%s|config>, <%s|dashboard>]",
+				fmt.Sprintf("https://github.com/%s", esc),
+				org,
+				fmt.Sprintf("https://github.com/%s/.github/blob/main/.codeGROOVE/slack.yaml", esc),
+				fmt.Sprintf("https://%s.ready-to-review.dev", esc),
+			)
+			orgLines = append(orgLines, orgLine)
+		}
+
+		blocks = append(blocks,
+			slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn",
+					"*Organizations*\n"+strings.Join(orgLines, "\n"),
+					false,
+					false,
+				),
+				nil,
+				nil,
+			),
 		)
-		orgLines = append(orgLines, orgLine)
 	}
-
-	blocks = append(blocks,
-		slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn",
-				"*Organizations*\n"+strings.Join(orgLines, "\n"),
-				false,
-				false,
-			),
-			nil,
-			nil,
-		),
-	)
-
-	// Updated timestamp
-	now := time.Now().Format("Jan 2, 3:04pm MST")
-	blocks = append(blocks,
-		slack.NewContextBlock("",
-			slack.NewTextBlockObject("mrkdwn",
-				fmt.Sprintf("Updated: %s", now),
-				false,
-				false,
-			),
-		),
-	)
 
 	return blocks
 }
@@ -223,12 +225,13 @@ func BuildPRSections(incoming, outgoing []PR) []slack.Block {
 }
 
 // BuildBlocksWithDebug creates Slack Block Kit UI with debug information about user mapping.
-func BuildBlocksWithDebug(dashboard *Dashboard, mapping *usermapping.ReverseMapping) []slack.Block {
+func BuildBlocksWithDebug(dashboard *Dashboard, userTZ string, mapping *usermapping.ReverseMapping) []slack.Block {
 	// Build standard blocks first
-	blocks := BuildBlocks(dashboard)
+	blocks := BuildBlocks(dashboard, userTZ)
 
-	// Add debug section if mapping info is available
-	if mapping != nil {
+	// Add debug section based on mapping status
+	switch {
+	case mapping != nil:
 		blocks = append(blocks,
 			slack.NewDividerBlock(),
 			slack.NewSectionBlock(
@@ -260,8 +263,27 @@ func BuildBlocksWithDebug(dashboard *Dashboard, mapping *usermapping.ReverseMapp
 				),
 			)
 		}
-	} else {
-		// No mapping found - show error message
+	case len(dashboard.WorkspaceOrgs) == 0:
+		// No organizations configured for this workspace (likely startup/race condition)
+		blocks = append(blocks,
+			slack.NewDividerBlock(),
+			slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn",
+					"⏳ *Setting up workspace...*\n"+
+						"No organizations configured yet. This usually resolves automatically.\n\n"+
+						"If this persists:\n"+
+						"1. Ensure your GitHub App is installed for your organization\n"+
+						"2. Check that `.codeGROOVE/slack.yaml` exists in your org's `.github` repo\n"+
+						"3. Verify the `slack:` field matches this workspace's domain",
+					false,
+					false,
+				),
+				nil,
+				nil,
+			),
+		)
+	default:
+		// User mapping failed
 		blocks = append(blocks,
 			slack.NewDividerBlock(),
 			slack.NewSectionBlock(
@@ -278,4 +300,21 @@ func BuildBlocksWithDebug(dashboard *Dashboard, mapping *usermapping.ReverseMapp
 	}
 
 	return blocks
+}
+
+// formatTimestamp formats a timestamp in the user's timezone without the colon after "Updated".
+// Example: "Nov 6, 12:48am America/Los_Angeles".
+func formatTimestamp(t time.Time, tzName string) string {
+	// Load the timezone
+	loc, err := time.LoadLocation(tzName)
+	if err != nil {
+		// Fallback to UTC if timezone is invalid
+		loc = time.UTC
+	}
+
+	// Convert to user's timezone
+	t = t.In(loc)
+
+	// Format as "Jan 2, 3:04pm MST"
+	return t.Format("Jan 2, 3:04pm MST")
 }

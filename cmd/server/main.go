@@ -693,8 +693,9 @@ func runBotCoordinators(
 		lastHealthCheck: time.Now(),
 	}
 
-	// Start initial coordinators
-	cm.startCoordinators(ctx)
+	// Discover GitHub installations and start coordinators immediately at startup
+	slog.Info("discovering GitHub installations at startup")
+	cm.handleRefreshInstallations(ctx)
 
 	// Refresh installations every 5 minutes
 	installationTicker := time.NewTicker(5 * time.Minute)

@@ -85,7 +85,7 @@ func (h *HomeHandler) tryHandleAppHomeOpened(ctx context.Context, teamID, slackU
 	workspaceOrgs := h.workspaceOrgs(teamID)
 	if len(workspaceOrgs) == 0 {
 		slog.Warn("no workspace orgs found", "team_id", teamID)
-		return h.publishPlaceholderHome(ctx, slackClient, slackUserID, nil)
+		return h.publishPlaceholderHome(ctx, slackClient, slackUserID, []string{}, nil)
 	}
 
 	// Get config for first org to extract domain and user overrides
@@ -105,7 +105,7 @@ func (h *HomeHandler) tryHandleAppHomeOpened(ctx context.Context, teamID, slackU
 		slog.Warn("failed to map Slack user to GitHub",
 			"slack_user_id", slackUserID,
 			"error", err)
-		return h.publishPlaceholderHome(ctx, slackClient, slackUserID, nil)
+		return h.publishPlaceholderHome(ctx, slackClient, slackUserID, workspaceOrgs, nil)
 	}
 
 	githubUsername := mapping.GitHubUsername
@@ -133,14 +133,23 @@ func (h *HomeHandler) tryHandleAppHomeOpened(ctx context.Context, teamID, slackU
 		slog.Error("failed to fetch dashboard",
 			"github_user", githubUsername,
 			"error", err)
-		return h.publishPlaceholderHome(ctx, slackClient, slackUserID, mapping)
+		return h.publishPlaceholderHome(ctx, slackClient, slackUserID, workspaceOrgs, mapping)
 	}
 
 	// Add workspace orgs to dashboard for UI display
 	dashboard.WorkspaceOrgs = workspaceOrgs
 
+	// Get user's timezone for timestamp display
+	userTZ, err := slackClient.UserTimezone(ctx, slackUserID)
+	if err != nil {
+		slog.Warn("failed to get user timezone, defaulting to UTC",
+			"slack_user_id", slackUserID,
+			"error", err)
+		userTZ = "UTC"
+	}
+
 	// Build Block Kit UI with debug info
-	blocks := home.BuildBlocksWithDebug(dashboard, mapping)
+	blocks := home.BuildBlocksWithDebug(dashboard, userTZ, mapping)
 
 	// Publish to Slack
 	if err := slackClient.PublishHomeView(ctx, slackUserID, blocks); err != nil {
@@ -180,14 +189,29 @@ func (h *HomeHandler) workspaceOrgs(teamID string) []string {
 }
 
 // publishPlaceholderHome publishes a simple placeholder home view.
-func (*HomeHandler) publishPlaceholderHome(ctx context.Context, slackClient *Client, slackUserID string, mapping *usermapping.ReverseMapping) error {
+func (*HomeHandler) publishPlaceholderHome(
+	ctx context.Context,
+	slackClient *Client,
+	slackUserID string,
+	workspaceOrgs []string,
+	mapping *usermapping.ReverseMapping,
+) error {
 	slog.Debug("publishing placeholder home", "user_id", slackUserID)
+
+	// Get user's timezone for timestamp display
+	userTZ, err := slackClient.UserTimezone(ctx, slackUserID)
+	if err != nil {
+		slog.Debug("failed to get user timezone for placeholder, defaulting to UTC",
+			"slack_user_id", slackUserID,
+			"error", err)
+		userTZ = "UTC"
+	}
 
 	blocks := home.BuildBlocksWithDebug(&home.Dashboard{
 		IncomingPRs:   nil,
 		OutgoingPRs:   nil,
-		WorkspaceOrgs: []string{"your-org"},
-	}, mapping)
+		WorkspaceOrgs: workspaceOrgs,
+	}, userTZ, mapping)
 
 	return slackClient.PublishHomeView(ctx, slackUserID, blocks)
 }
