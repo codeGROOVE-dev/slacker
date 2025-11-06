@@ -230,7 +230,7 @@ func TestSaveThread(t *testing.T) {
 	}
 
 	// Check persistent storage
-	persistedKey := "thread:testorg/testrepo#42:C123456"
+	persistedKey := "testorg/testrepo#42:C123456"
 	persistedInfo, ok := mockState.threads[persistedKey]
 	if !ok {
 		t.Error("expected thread to be in persistent storage")
