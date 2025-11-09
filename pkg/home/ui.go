@@ -27,7 +27,7 @@ func BuildBlocks(dashboard *Dashboard, userTZ string) []slack.Block {
 			slack.NewButtonBlockElement(
 				"refresh_dashboard",
 				"refresh",
-				slack.NewTextBlockObject("plain_text", "🔄 Refresh Dashboard", true, false),
+				slack.NewTextBlockObject("plain_text", "🔄 Refresh", true, false),
 			).WithStyle("primary"),
 		),
 	)
@@ -52,15 +52,19 @@ func BuildBlocks(dashboard *Dashboard, userTZ string) []slack.Block {
 	if len(dashboard.WorkspaceOrgs) > 0 {
 		blocks = append(blocks, slack.NewDividerBlock())
 
+		// Sort orgs alphabetically
+		sortedOrgs := make([]string, len(dashboard.WorkspaceOrgs))
+		copy(sortedOrgs, dashboard.WorkspaceOrgs)
+		sort.Strings(sortedOrgs)
+
 		var orgLines []string
-		for _, org := range dashboard.WorkspaceOrgs {
+		for _, org := range sortedOrgs {
 			// URL-escape org name to prevent injection
 			esc := url.PathEscape(org)
-			orgLine := fmt.Sprintf("• <%s|%s> [<%s|config>, <%s|dashboard>]",
-				fmt.Sprintf("https://github.com/%s", esc),
+			orgLine := fmt.Sprintf("• %s [<%s|dashboard> | <%s|config>]",
 				org,
-				fmt.Sprintf("https://github.com/%s/.github/blob/main/.codeGROOVE/slack.yaml", esc),
 				fmt.Sprintf("https://%s.ready-to-review.dev", esc),
+				fmt.Sprintf("https://github.com/%s/.codeGROOVE/blob/main/slack.yaml", esc),
 			)
 			orgLines = append(orgLines, orgLine)
 		}
@@ -79,6 +83,49 @@ func BuildBlocks(dashboard *Dashboard, userTZ string) []slack.Block {
 	}
 
 	return blocks
+}
+
+// formatPRLine formats a single PR line with indicator, repo, number, title, and optional action.
+func formatPRLine(pr PR, isIncoming bool) string {
+	// Extract repo name
+	repo := pr.Repository
+	if idx := strings.LastIndex(repo, "/"); idx >= 0 {
+		repo = repo[idx+1:]
+	}
+
+	// Determine indicator
+	var indicator string
+	if isIncoming {
+		switch {
+		case pr.NeedsReview, pr.IsBlocked:
+			indicator = ":red_circle:"
+		case pr.ActionKind != "":
+			indicator = ":speech_balloon:"
+		default:
+			indicator = ":white_small_square:"
+		}
+	} else {
+		switch {
+		case pr.NeedsReview, pr.IsBlocked:
+			indicator = ":large_green_circle:"
+		case pr.ActionKind != "":
+			indicator = ":speech_balloon:"
+		default:
+			indicator = ":white_small_square:"
+		}
+	}
+
+	// Build line
+	line := fmt.Sprintf("%s <%s|%s#%d> • %s", indicator, pr.URL, repo, pr.Number, pr.Title)
+	if pr.ActionKind != "" {
+		action := strings.ReplaceAll(pr.ActionKind, "_", " ")
+		// Bold the action if this PR is blocked on the user
+		if pr.IsBlocked || (isIncoming && pr.NeedsReview) {
+			action = "*" + action + "*"
+		}
+		line = fmt.Sprintf("%s — %s", line, action)
+	}
+	return line
 }
 
 // BuildPRSections creates Block Kit blocks for PR sections (incoming/outgoing).
@@ -108,32 +155,7 @@ func BuildPRSections(incoming, outgoing []PR) []slack.Block {
 			if prs[i].IsBlocked || prs[i].NeedsReview {
 				n++
 			}
-
-			// Format PR line - extract repo name
-			repo := prs[i].Repository
-			if idx := strings.LastIndex(repo, "/"); idx >= 0 {
-				repo = repo[idx+1:]
-			}
-
-			// Determine indicator
-			var indicator string
-			switch {
-			case prs[i].NeedsReview:
-				indicator = ":red_circle:"
-			case prs[i].IsBlocked:
-				indicator = ":red_circle:"
-			case prs[i].ActionKind != "":
-				indicator = ":speech_balloon:"
-			default:
-				indicator = ":white_small_square:"
-			}
-
-			// Build line
-			line := fmt.Sprintf("%s <%s|%s#%d> • %s", indicator, prs[i].URL, repo, prs[i].Number, prs[i].Title)
-			if prs[i].ActionKind != "" {
-				line = fmt.Sprintf("%s — %s", line, strings.ReplaceAll(prs[i].ActionKind, "_", " "))
-			}
-			lines = append(lines, line)
+			lines = append(lines, formatPRLine(prs[i], true))
 		}
 
 		// Build header
@@ -150,6 +172,15 @@ func BuildPRSections(incoming, outgoing []PR) []slack.Block {
 			slack.NewSectionBlock(
 				slack.NewTextBlockObject("mrkdwn", h+"\n\n"+strings.Join(lines, "\n"), false, false),
 				nil, nil,
+			),
+		)
+	}
+
+	// Spacer between Incoming and Outgoing sections
+	if len(incoming) > 0 && len(outgoing) > 0 {
+		blocks = append(blocks,
+			slack.NewContextBlock("",
+				slack.NewTextBlockObject("plain_text", " ", false, false),
 			),
 		)
 	}
@@ -175,32 +206,7 @@ func BuildPRSections(incoming, outgoing []PR) []slack.Block {
 			if prs[i].IsBlocked {
 				n++
 			}
-
-			// Format PR line - extract repo name
-			repo := prs[i].Repository
-			if idx := strings.LastIndex(repo, "/"); idx >= 0 {
-				repo = repo[idx+1:]
-			}
-
-			// Determine indicator
-			var indicator string
-			switch {
-			case prs[i].NeedsReview:
-				indicator = ":large_green_circle:"
-			case prs[i].IsBlocked:
-				indicator = ":large_green_circle:"
-			case prs[i].ActionKind != "":
-				indicator = ":speech_balloon:"
-			default:
-				indicator = ":white_small_square:"
-			}
-
-			// Build line
-			line := fmt.Sprintf("%s <%s|%s#%d> • %s", indicator, prs[i].URL, repo, prs[i].Number, prs[i].Title)
-			if prs[i].ActionKind != "" {
-				line = fmt.Sprintf("%s — %s", line, strings.ReplaceAll(prs[i].ActionKind, "_", " "))
-			}
-			lines = append(lines, line)
+			lines = append(lines, formatPRLine(prs[i], false))
 		}
 
 		// Build header
@@ -224,23 +230,69 @@ func BuildPRSections(incoming, outgoing []PR) []slack.Block {
 	return blocks
 }
 
-// BuildBlocksWithDebug creates Slack Block Kit UI with debug information about user mapping.
+// BuildBlocksWithDebug creates Slack Block Kit UI with GitHub username integrated into the header.
 func BuildBlocksWithDebug(dashboard *Dashboard, userTZ string, mapping *usermapping.ReverseMapping) []slack.Block {
-	// Build standard blocks first
-	blocks := BuildBlocks(dashboard, userTZ)
+	var blocks []slack.Block
 
-	// Add debug section based on mapping status
-	switch {
-	case mapping != nil:
+	// Header with GitHub username if available
+	headerText := "🚀 Ready to Review"
+	if mapping != nil {
+		headerText = fmt.Sprintf("🚀 Ready to Review — @%s", mapping.GitHubUsername)
+	}
+
+	blocks = append(blocks,
+		slack.NewHeaderBlock(
+			slack.NewTextBlockObject("plain_text", headerText, true, false),
+		),
+		// Refresh button
+		slack.NewActionBlock(
+			"refresh_actions",
+			slack.NewButtonBlockElement(
+				"refresh_dashboard",
+				"refresh",
+				slack.NewTextBlockObject("plain_text", "🔄 Refresh", true, false),
+			).WithStyle("primary"),
+		),
+		slack.NewDividerBlock(),
+	)
+
+	// PR sections
+	blocks = append(blocks, BuildPRSections(dashboard.IncomingPRs, dashboard.OutgoingPRs)...)
+
+	// Add spacing after PR sections if we have content
+	if len(dashboard.IncomingPRs) > 0 || len(dashboard.OutgoingPRs) > 0 {
 		blocks = append(blocks,
-			slack.NewDividerBlock(),
+			slack.NewContextBlock("",
+				slack.NewTextBlockObject("plain_text", " ", false, false),
+			),
+		)
+	}
+
+	// Organizations section - only show if there are orgs configured
+	if len(dashboard.WorkspaceOrgs) > 0 {
+		blocks = append(blocks, slack.NewDividerBlock())
+
+		// Sort orgs alphabetically
+		sortedOrgs := make([]string, len(dashboard.WorkspaceOrgs))
+		copy(sortedOrgs, dashboard.WorkspaceOrgs)
+		sort.Strings(sortedOrgs)
+
+		var orgLines []string
+		for _, org := range sortedOrgs {
+			// URL-escape org name to prevent injection
+			esc := url.PathEscape(org)
+			orgLine := fmt.Sprintf("• %s [<%s|dashboard> | <%s|config>]",
+				org,
+				fmt.Sprintf("https://%s.ready-to-review.dev", esc),
+				fmt.Sprintf("https://github.com/%s/.codeGROOVE/blob/main/slack.yaml", esc),
+			)
+			orgLines = append(orgLines, orgLine)
+		}
+
+		blocks = append(blocks,
 			slack.NewSectionBlock(
 				slack.NewTextBlockObject("mrkdwn",
-					fmt.Sprintf("🔍 *Debug Info*\n"+
-						"GitHub: `@%s`  •  Mapped via: `%s`  •  Confidence: `%d%%`",
-						mapping.GitHubUsername,
-						mapping.MatchMethod,
-						mapping.Confidence),
+					"*Organizations*\n"+strings.Join(orgLines, "\n"),
 					false,
 					false,
 				),
@@ -248,22 +300,10 @@ func BuildBlocksWithDebug(dashboard *Dashboard, userTZ string, mapping *usermapp
 				nil,
 			),
 		)
+	}
 
-		// Add mapping guidance if confidence is low
-		if mapping.Confidence < 80 {
-			blocks = append(blocks,
-				slack.NewContextBlock("",
-					slack.NewTextBlockObject("mrkdwn",
-						fmt.Sprintf("⚠️  Low confidence mapping. Add manual override to `slack.yaml`:\n```yaml\nusers:\n  %s: %s\n```",
-							mapping.GitHubUsername,
-							mapping.SlackEmail),
-						false,
-						false,
-					),
-				),
-			)
-		}
-	case len(dashboard.WorkspaceOrgs) == 0:
+	// Add helpful messages for error cases
+	if mapping == nil && len(dashboard.WorkspaceOrgs) == 0 {
 		// No organizations configured for this workspace (likely startup/race condition)
 		blocks = append(blocks,
 			slack.NewDividerBlock(),
@@ -282,7 +322,7 @@ func BuildBlocksWithDebug(dashboard *Dashboard, userTZ string, mapping *usermapp
 				nil,
 			),
 		)
-	default:
+	} else if mapping == nil {
 		// User mapping failed
 		blocks = append(blocks,
 			slack.NewDividerBlock(),
@@ -298,6 +338,19 @@ func BuildBlocksWithDebug(dashboard *Dashboard, userTZ string, mapping *usermapp
 			),
 		)
 	}
+
+	// Updated timestamp at the bottom
+	now := formatTimestamp(time.Now(), userTZ)
+	blocks = append(blocks,
+		slack.NewDividerBlock(),
+		slack.NewContextBlock("",
+			slack.NewTextBlockObject("mrkdwn",
+				fmt.Sprintf("Updated %s", now),
+				false,
+				false,
+			),
+		),
+	)
 
 	return blocks
 }
