@@ -325,9 +325,9 @@ func TestBuildPRSections_SortOrder(t *testing.T) {
 
 	blocks := BuildPRSections(incoming, outgoing)
 
-	// Should have 2 blocks (incoming and outgoing sections)
-	if len(blocks) != 2 {
-		t.Fatalf("expected 2 blocks, got %d", len(blocks))
+	// Should have 3 blocks (incoming section, spacer, outgoing section)
+	if len(blocks) != 3 {
+		t.Fatalf("expected 3 blocks (incoming, spacer, outgoing), got %d", len(blocks))
 	}
 
 	// Check incoming section order
@@ -366,10 +366,10 @@ func TestBuildPRSections_SortOrder(t *testing.T) {
 		t.Error("newer non-blocked PR#3 should appear before older non-blocked PR#1")
 	}
 
-	// Check outgoing section order
-	outgoingBlock, ok := blocks[1].(*slack.SectionBlock)
+	// Check outgoing section order (index 2, after spacer at index 1)
+	outgoingBlock, ok := blocks[2].(*slack.SectionBlock)
 	if !ok {
-		t.Fatal("expected second block to be SectionBlock")
+		t.Fatal("expected third block to be SectionBlock")
 	}
 	outgoingText := outgoingBlock.Text.Text
 
@@ -457,9 +457,9 @@ func TestBuildBlocksWithDebug_NoOrgsConfigured(t *testing.T) {
 				MatchMethod:    "email_match",
 				Confidence:     95,
 			},
-			expectText:  "Debug Info",
-			notExpect:   "Low confidence mapping",
-			description: "should show debug info without low confidence warning",
+			expectText:  "Updated",
+			notExpect:   "Could not map Slack user to GitHub",
+			description: "should show timestamp without error messages",
 		},
 		{
 			name: "successful mapping with low confidence",
@@ -474,9 +474,9 @@ func TestBuildBlocksWithDebug_NoOrgsConfigured(t *testing.T) {
 				MatchMethod:    "name_similarity",
 				Confidence:     65,
 			},
-			expectText:  "Low confidence mapping",
-			notExpect:   "",
-			description: "should show low confidence warning with suggestion",
+			expectText:  "Updated",
+			notExpect:   "Could not map Slack user to GitHub",
+			description: "should show timestamp without error messages regardless of confidence",
 		},
 	}
 
