@@ -293,7 +293,7 @@ func TestFormatNextActionsInternal(t *testing.T) {
 			nextActions: map[string]turn.Action{
 				"user1": {Kind: turn.ActionReview},
 			},
-			expected: "review: @user1",
+			expected: "*review* → @user1",
 		},
 		{
 			name: "multiple users same action",
@@ -301,7 +301,7 @@ func TestFormatNextActionsInternal(t *testing.T) {
 				"user1": {Kind: turn.ActionReview},
 				"user2": {Kind: turn.ActionReview},
 			},
-			expected: "review: @user1, @user2",
+			expected: "*review* → @user1, @user2",
 		},
 		{
 			name: "system user filtered out",
@@ -316,7 +316,7 @@ func TestFormatNextActionsInternal(t *testing.T) {
 				"_system": {Kind: turn.ActionReview},
 				"user1":   {Kind: turn.ActionReview},
 			},
-			expected: "review: @user1",
+			expected: "*review* → @user1",
 		},
 	}
 
@@ -650,7 +650,7 @@ func TestFormatNextActionsSuffixWithActions(t *testing.T) {
 				Domain:     "example.com",
 				UserMapper: mapper,
 			},
-			expected: " → review: @user1",
+			expected: " • *review* → @user1",
 		},
 		{
 			name: "suffix with multiple users",
@@ -667,7 +667,7 @@ func TestFormatNextActionsSuffixWithActions(t *testing.T) {
 				Domain:     "example.com",
 				UserMapper: mapper,
 			},
-			expected: " → review: ",
+			expected: " • *review* → ",
 		},
 		{
 			name: "suffix filters system user",
@@ -683,7 +683,7 @@ func TestFormatNextActionsSuffixWithActions(t *testing.T) {
 				Domain:     "example.com",
 				UserMapper: mapper,
 			},
-			expected: " → review",
+			expected: " • review",
 		},
 	}
 
@@ -693,8 +693,8 @@ func TestFormatNextActionsSuffixWithActions(t *testing.T) {
 			// For tests with multiple users, just check that result starts with the prefix
 			// since map iteration order is not guaranteed
 			if tt.name == "suffix with multiple users" {
-				if !contains(result, " → review: ") {
-					t.Errorf("expected result to contain \" → review: \", got: %q", result)
+				if !contains(result, " • *review* → ") {
+					t.Errorf("expected result to contain \" • *review* → \", got: %q", result)
 				}
 			} else if result != tt.expected {
 				t.Errorf("expected %q, got %q", tt.expected, result)

@@ -126,7 +126,7 @@ func FormatNextActionsSuffix(ctx context.Context, params MessageParams) string {
 
 	actions := formatNextActionsInternal(ctx, params.CheckResult.Analysis.NextAction, params.Owner, params.Domain, params.UserMapper)
 	if actions != "" {
-		return fmt.Sprintf(" → %s", actions)
+		return fmt.Sprintf(" • %s", actions)
 	}
 	return ""
 }
@@ -272,10 +272,10 @@ func formatNextActionsInternal(ctx context.Context, nextActions map[string]turn.
 		// Format user mentions (will be empty if only _system was assigned)
 		userMentions := userMapper.FormatUserMentions(ctx, users, owner, domain)
 
-		// If action has users, format as "action: users"
-		// If no users (was only _system), just show the action
+		// If action has users, format as "*action* → users" (bold action when assigned to person)
+		// If no users (was only _system), just show the action without bold
 		if userMentions != "" {
-			parts = append(parts, fmt.Sprintf("%s: %s", actionName, userMentions))
+			parts = append(parts, fmt.Sprintf("*%s* → %s", actionName, userMentions))
 		} else {
 			parts = append(parts, actionName)
 		}
