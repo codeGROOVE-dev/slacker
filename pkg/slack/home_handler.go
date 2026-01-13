@@ -125,7 +125,7 @@ func (h *HomeHandler) tryHandleAppHomeOpened(ctx context.Context, teamID, slackU
 		ghClient,
 		h.stateStore,
 		githubClient.InstallationToken(ctx),
-		"ready-to-review[bot]",
+		"reviewgoose[bot]",
 	)
 
 	dashboard, err := fetcher.FetchDashboard(ctx, githubUsername, workspaceOrgs)

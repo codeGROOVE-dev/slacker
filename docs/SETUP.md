@@ -1,6 +1,6 @@
-# Getting Started with Ready-to-Review
+# Getting Started with reviewGOOSE:Slack
 
-Ready-to-Review is a Slack bot that keeps your team informed about GitHub pull requests. It creates threads for PRs, tracks their status with emojis, and sends smart notifications so reviewers know when it's their turn.
+reviewGOOSE:Slack is the Slack integration for [reviewGOOSE](https://codegroove.dev/reviewgoose/) — it keeps your team informed about GitHub pull requests. It creates threads for PRs, tracks their status with emojis, and sends smart notifications so reviewers know when it's their turn.
 
 ## Quick Start
 
@@ -37,7 +37,7 @@ Once installed, the bot needs to know which GitHub repositories to track. Contin
 
 ## Configuring Your Repositories
 
-Ready-to-Review reads its configuration from a special GitHub repository in your organization. This lets you version-control your notification settings centrally.
+reviewGOOSE:Slack reads its configuration from a special GitHub repository in your organization. This lets you version-control your notification settings centrally.
 
 ### Step 1: Create the .codeGROOVE Repository
 
@@ -110,7 +110,7 @@ channels:
 
 ```bash
 git add slack.yaml
-git commit -m "Configure Ready-to-Review Slack bot"
+git commit -m "Configure reviewGOOSE:Slack"
 git push
 ```
 
@@ -338,17 +338,17 @@ channels:
 
 ## Viewing Your Dashboard
 
-Ready-to-Review provides two ways to view your PRs:
+reviewGOOSE:Slack provides two ways to view your PRs:
 
 ### 1. Slack App Home
 
-1. Click "Ready-to-Review" in your Slack sidebar
+1. Click "reviewGOOSE" in your Slack sidebar
 2. Select the "Home" tab
 3. View incoming PRs (waiting on you) and outgoing PRs (waiting on others)
 
 ### 2. Web Dashboard
 
-Visit [dash.ready-to-review.dev](https://dash.ready-to-review.dev/) for a comprehensive web view.
+Visit [reviewgoose.dev](https://reviewgoose.dev/) for a comprehensive web view.
 
 ---
 
@@ -365,7 +365,7 @@ Visit [dash.ready-to-review.dev](https://dash.ready-to-review.dev/) for a compre
 
 **Check channel permissions:**
 - The bot needs permission to post in the channel
-- Try inviting the bot: `/invite @Ready-to-Review`
+- Try inviting the bot: `/invite @goose`
 
 ### Not receiving DMs
 
@@ -452,16 +452,16 @@ Before enabling:
 
 - **Documentation:** [github.com/codeGROOVE-dev/slacker](https://github.com/codeGROOVE-dev/slacker)
 - **Issues:** [GitHub Issues](https://github.com/codeGROOVE-dev/slacker/issues)
-- **Support:** Contact your Ready-to-Review administrator
+- **Support:** Contact your reviewGOOSE administrator
 
 ---
 
 ## What's Next?
 
-Ready-to-Review is part of the codeGROOVE ecosystem of developer tools. Check out:
+reviewGOOSE:Slack is part of the codeGROOVE ecosystem of developer tools. Check out:
 
-- **[Sprinkler](https://github.com/codeGROOVE-dev/sprinkler)** - Real-time GitHub webhook hub
-- **[Ready-to-Review Dashboard](https://dash.ready-to-review.dev/)** - Web-based PR dashboard
+- **[reviewGOOSE:Desktop](https://github.com/codeGROOVE-dev/goose)** - Desktop app with honk notifications
+- **[reviewGOOSE Dashboard](https://reviewgoose.dev/)** - Web-based PR dashboard
 - **[codeGROOVE.dev](https://codegroove.dev/)** - Developer acceleration tools
 
 Happy reviewing!

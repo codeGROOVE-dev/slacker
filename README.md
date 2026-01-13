@@ -1,13 +1,15 @@
-# Ready-to-Review Slacker
+# reviewGOOSE:Slack
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/codeGROOVE-dev/slacker)](https://goreportcard.com/report/github.com/codeGROOVE-dev/slacker)
 [![GoDoc](https://godoc.org/github.com/codeGROOVE-dev/slacker?status.svg)](https://godoc.org/github.com/codeGROOVE-dev/slacker)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/codeGROOVE-dev/slacker)](go.mod)
 
-![Ready-to-Review Slacker](media/Slackerposter.jpg)
+![reviewGOOSE:Slack](media/Slackerposter.jpg)
 
-Slack bot that tracks GitHub pull requests and notifies reviewers when it's their turn. Part of the https://codegroove.dev/ ecosystem of developer acceleration tools.
+The Slack integration for [reviewGOOSE](https://codegroove.dev/reviewgoose/) — know instantly when you're blocking a PR.
+
+**reviewGOOSE:Slack** tracks GitHub pull requests and notifies reviewers when it's their turn. Works alongside [reviewGOOSE:Desktop](https://github.com/codeGROOVE-dev/goose) for a complete PR tracking experience. Part of the [codeGROOVE](https://codegroove.dev/) ecosystem.
 
 ## Quick Start
 
@@ -137,10 +139,10 @@ channels:
 ## Usage
 
 Slack commands:
-- `/r2r dashboard` - View your PR dashboard
-- `/r2r help` - Show help
+- `/goose dashboard` - View your PR dashboard
+- `/goose help` - Show help
 
-The dashboard is also available in the app's Home tab or at https://dash.ready-to-review.dev/
+The dashboard is also available in the app's Home tab or at https://reviewgoose.dev/
 
 ## Smart Notification Logic
 

@@ -38,7 +38,7 @@ func NewReportHandler(
 	}
 }
 
-// HandleReportCommand handles the /r2r report slash command.
+// HandleReportCommand handles the /goose report slash command.
 // It generates and sends a daily report for the requesting user, bypassing time window and interval checks.
 func (h *ReportHandler) HandleReportCommand(ctx context.Context, teamID, slackUserID string) error {
 	slog.Info("handling manual daily report request",
@@ -161,7 +161,7 @@ func (h *ReportHandler) HandleReportCommand(ctx context.Context, teamID, slackUs
 		slog.Error("failed to cast GitHub client", "org", foundOrg)
 		return fmt.Errorf("failed to cast GitHub client for org %s", foundOrg)
 	}
-	fetcher := home.NewFetcher(goGitHubClient, h.stateStore, token, "ready-to-review[bot]")
+	fetcher := home.NewFetcher(goGitHubClient, h.stateStore, token, "reviewgoose[bot]")
 
 	// Fetch dashboard for user across all orgs where they're a member
 	slog.Info("fetching dashboard for manual report",
@@ -190,7 +190,7 @@ func (h *ReportHandler) HandleReportCommand(ctx context.Context, teamID, slackUs
 			"slack_user", slackUserID,
 			"github_user", githubUsername)
 		_, _, err := slackClient.SendDirectMessage(ctx, slackUserID,
-			"You're all caught up! You have no pending PR reviews or outgoing PRs at the moment.")
+			"🎉 You're all caught up! No pending PR reviews or outgoing PRs right now.")
 		if err != nil {
 			slog.Error("failed to send empty report message",
 				"slack_user", slackUserID,

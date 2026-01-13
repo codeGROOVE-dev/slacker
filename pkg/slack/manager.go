@@ -35,7 +35,7 @@ type Manager struct {
 	clients         map[string]*Client // team_id -> client
 	metadata        map[string]*WorkspaceMetadata
 	homeViewHandler func(ctx context.Context, teamID, userID string) error // Global home view handler
-	reportHandler   func(ctx context.Context, teamID, userID string) error // Global report handler for /r2r report
+	reportHandler   func(ctx context.Context, teamID, userID string) error // Global report handler for /goose report
 }
 
 // NewManager creates a new Slack client manager.

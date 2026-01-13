@@ -511,7 +511,7 @@ func (c *Coordinator) checkDailyReports(ctx context.Context, org string, prs []g
 
 	// Create daily report sender and dashboard fetcher
 	sender := dailyreport.NewSender(c.stateStore, c.slack)
-	fetcher := home.NewFetcher(ghClient, c.stateStore, token, "ready-to-review[bot]")
+	fetcher := home.NewFetcher(ghClient, c.stateStore, token, "reviewgoose[bot]")
 
 	sentCount := 0
 	skippedCount := 0

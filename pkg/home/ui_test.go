@@ -35,13 +35,13 @@ func TestBuildBlocks(t *testing.T) {
 				foundHeader := false
 				for _, block := range blocks {
 					if hb, ok := block.(*slack.HeaderBlock); ok {
-						if strings.Contains(hb.Text.Text, "Ready to Review") {
+						if strings.Contains(hb.Text.Text, "reviewGOOSE") {
 							foundHeader = true
 						}
 					}
 				}
 				if !foundHeader {
-					t.Error("expected header block with 'Ready to Review'")
+					t.Error("expected header block with 'reviewGOOSE'")
 				}
 
 				// Verify we don't have any PR section blocks (empty dashboard)
@@ -74,7 +74,7 @@ func TestBuildBlocks(t *testing.T) {
 				foundLink := false
 				for _, block := range blocks {
 					if sb, ok := block.(*slack.SectionBlock); ok {
-						if sb.Text != nil && strings.Contains(sb.Text.Text, "ready-to-review.dev") {
+						if sb.Text != nil && strings.Contains(sb.Text.Text, "reviewgoose.dev") {
 							foundLink = true
 						}
 					}

@@ -12,14 +12,14 @@ import (
 )
 
 // BuildBlocks creates Slack Block Kit UI for the home dashboard.
-// Design matches dashboard at https://ready-to-review.dev - modern minimal with indigo accents.
+// Design matches dashboard at https://reviewgoose.dev - modern minimal with indigo accents.
 func BuildBlocks(dashboard *Dashboard, userTZ string) []slack.Block {
 	var blocks []slack.Block
 
 	// Header
 	blocks = append(blocks,
 		slack.NewHeaderBlock(
-			slack.NewTextBlockObject("plain_text", "🚀 Ready to Review", true, false),
+			slack.NewTextBlockObject("plain_text", "🚀 reviewGOOSE", true, false),
 		),
 		// Refresh button
 		slack.NewActionBlock(
@@ -63,7 +63,7 @@ func BuildBlocks(dashboard *Dashboard, userTZ string) []slack.Block {
 			esc := url.PathEscape(org)
 			orgLine := fmt.Sprintf("• %s [<%s|dashboard> | <%s|config>]",
 				org,
-				fmt.Sprintf("https://%s.ready-to-review.dev", esc),
+				fmt.Sprintf("https://reviewgoose.dev/orgs/%s", esc),
 				fmt.Sprintf("https://github.com/%s/.codeGROOVE/blob/main/slack.yaml", esc),
 			)
 			orgLines = append(orgLines, orgLine)
@@ -235,9 +235,9 @@ func BuildBlocksWithDebug(dashboard *Dashboard, userTZ string, mapping *usermapp
 	var blocks []slack.Block
 
 	// Header with GitHub username if available
-	headerText := "🚀 Ready to Review"
+	headerText := "🚀 reviewGOOSE"
 	if mapping != nil {
-		headerText = fmt.Sprintf("🚀 Ready to Review — @%s", mapping.GitHubUsername)
+		headerText = fmt.Sprintf("🚀 reviewGOOSE — @%s", mapping.GitHubUsername)
 	}
 
 	blocks = append(blocks,
@@ -283,7 +283,7 @@ func BuildBlocksWithDebug(dashboard *Dashboard, userTZ string, mapping *usermapp
 			esc := url.PathEscape(org)
 			orgLine := fmt.Sprintf("• %s [<%s|dashboard> | <%s|config>]",
 				org,
-				fmt.Sprintf("https://%s.ready-to-review.dev", esc),
+				fmt.Sprintf("https://reviewgoose.dev/orgs/%s", esc),
 				fmt.Sprintf("https://github.com/%s/.codeGROOVE/blob/main/slack.yaml", esc),
 			)
 			orgLines = append(orgLines, orgLine)

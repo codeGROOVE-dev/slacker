@@ -200,7 +200,7 @@ func (*OAuthHandler) writeSuccessPage(writer http.ResponseWriter, teamName strin
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>Installation Complete - Ready to Review</title>
+	<title>Installation Complete - reviewGOOSE:Slack</title>
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	<link href="https://fonts.googleapis.com/css2?family=Passion+One:wght@700&display=swap" rel="stylesheet">
@@ -333,10 +333,10 @@ func (*OAuthHandler) writeSuccessPage(writer http.ResponseWriter, teamName strin
 		<div class="success-container" role="status" aria-live="polite">
 			<span class="checkmark" role="img" aria-label="Success checkmark">✓</span>
 			<h1>Installation Complete!</h1>
-			<p>Ready to Review is now supercharging</p>
+			<p>reviewGOOSE:Slack is now active in</p>
 			<h2>%s</h2>
 			<p><span class="rocket" role="img" aria-label="Rocket">🚀</span>
-			   Your dev team just got faster.
+			   You'll know instantly when you're blocking a PR.
 			   <span class="rocket" role="img" aria-label="Rocket">🚀</span></p>
 			<p class="cta">Next:
 			   <a href="https://github.com/codeGROOVE-dev/slacker/blob/main/docs/SETUP.md#configuring-your-repositories"
@@ -415,7 +415,7 @@ func (*OAuthHandler) writeInstallPage(writer http.ResponseWriter, authURL string
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>Install Ready to Review</title>
+	<title>Install reviewGOOSE:Slack</title>
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	<link href="https://fonts.googleapis.com/css2?family=Passion+One:wght@700&display=swap" rel="stylesheet">
@@ -509,13 +509,13 @@ func (*OAuthHandler) writeInstallPage(writer http.ResponseWriter, authURL string
 </head>
 <body>
 	<div class="install-container">
-		<h1>READY TO REVIEW</h1>
-		<p class="tagline">Supercharge your PR review workflow.</p>
+		<h1>reviewGOOSE:Slack</h1>
+		<p class="tagline">Know instantly when you're blocking a PR.</p>
 		<ul class="features">
-			<li>Real-time Slack notifications</li>
-			<li>Smart DM reminders</li>
-			<li>Multi-workspace support</li>
-			<li>Auto-discovery channels</li>
+			<li>Real-time PR status in Slack channels</li>
+			<li>Smart DMs when it's your turn to act</li>
+			<li>Daily digest of pending reviews</li>
+			<li>Works with reviewGOOSE:Desktop</li>
 		</ul>
 		<div class="button-container">
 			<a href="%s" class="add-to-slack">
