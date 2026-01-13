@@ -262,7 +262,7 @@ func run(ctx context.Context, cancel context.CancelFunc, cfg *config.ServerConfi
 	homeHandler := slack.NewHomeHandler(slackManager, githubManager, configManager, stateStore, reverseMapping)
 	slackManager.SetHomeViewHandler(homeHandler.HandleAppHomeOpened)
 
-	// Initialize report handler for /r2r report slash command
+	// Initialize report handler for /goose report slash command
 	reportHandler := slack.NewReportHandler(slackManager, githubManager, stateStore, reverseMapping)
 	slackManager.SetReportHandler(reportHandler.HandleReportCommand)
 

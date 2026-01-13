@@ -1,10 +1,10 @@
 # Deployment Guide
 
-This guide is for self-hosting Ready-to-Review. If you're using the SaaS version, see [SETUP.md](SETUP.md) instead.
+This guide is for self-hosting reviewGOOSE:Slack. If you're using the SaaS version, see [SETUP.md](SETUP.md) instead.
 
 ## Architecture Overview
 
-Ready-to-Review consists of two services:
+reviewGOOSE:Slack consists of two services:
 
 1. **slacker** - Main bot server that handles GitHub webhooks and Slack notifications
 2. **slacker-registrar** - OAuth-only service for multi-workspace installations
@@ -44,7 +44,7 @@ Ready-to-Review consists of two services:
 1. Go to https://api.slack.com/apps
 2. Click **"Create New App"**
 3. Choose **"From scratch"**
-4. Name your app (e.g., "Ready-to-Review")
+4. Name your app (e.g., "reviewGOOSE")
 5. Select your development workspace
 
 ### Step 2: Configure OAuth & Permissions

@@ -71,7 +71,7 @@ type Client struct {
 	cache             *apiCache
 	manager           *Manager                                               // Reference to manager for cache invalidation
 	homeViewHandler   func(ctx context.Context, teamID, userID string) error // Callback for app_home_opened events
-	reportHandler     func(ctx context.Context, teamID, userID string) error // Callback for /r2r report slash command
+	reportHandler     func(ctx context.Context, teamID, userID string) error // Callback for /goose report slash command
 	retryDelay        time.Duration                                          // Base delay for retries (default: 2s, can be overridden for tests)
 }
 
@@ -155,7 +155,7 @@ func (c *Client) SetHomeViewHandler(handler func(ctx context.Context, teamID, us
 	c.homeViewHandler = handler
 }
 
-// SetReportHandler registers a callback for /r2r report slash command.
+// SetReportHandler registers a callback for /goose report slash command.
 func (c *Client) SetReportHandler(handler func(ctx context.Context, teamID, userID string) error) {
 	c.reportHandlerMu.Lock()
 	defer c.reportHandlerMu.Unlock()
@@ -1102,8 +1102,8 @@ func (c *Client) SlashCommandHandler(writer http.ResponseWriter, r *http.Request
 	// Handle different commands.
 	var response string
 	switch cmd.Command {
-	case "/r2r":
-		response = c.handleR2RCommand(r.Context(), &cmd)
+	case "/goose":
+		response = c.handleGooseCommand(r.Context(), &cmd)
 	default:
 		response = "Unknown command"
 	}
@@ -1118,8 +1118,8 @@ func (c *Client) SlashCommandHandler(writer http.ResponseWriter, r *http.Request
 	}
 }
 
-// handleR2RCommand handles the /r2r slash command.
-func (c *Client) handleR2RCommand(ctx context.Context, cmd *slack.SlashCommand) string {
+// handleGooseCommand handles the /goose slash command.
+func (c *Client) handleGooseCommand(ctx context.Context, cmd *slack.SlashCommand) string {
 	// Sanitize and validate input.
 	text := strings.TrimSpace(cmd.Text)
 	if len(text) > maxCommandInputLength { // Reasonable limit for command input.
@@ -1128,7 +1128,7 @@ func (c *Client) handleR2RCommand(ctx context.Context, cmd *slack.SlashCommand) 
 
 	args := strings.Fields(text)
 	if len(args) == 0 {
-		return "Usage: /r2r [dashboard|settings|report|help]"
+		return "Usage: /goose [dashboard|settings|report|help]"
 	}
 
 	// Validate command argument.
@@ -1138,7 +1138,7 @@ func (c *Client) handleR2RCommand(ctx context.Context, cmd *slack.SlashCommand) 
 		// Note: In a full implementation, we'd send blocks here instead of plain text.
 		// For now, return a link to the web dashboard.
 		// SECURITY: URL encode user ID to prevent injection attacks
-		return fmt.Sprintf("View your dashboard at: https://dash.ready-to-review.dev/?user=%s\n"+
+		return fmt.Sprintf("View your dashboard at: https://reviewgoose.dev/?user=%s\n"+
 			"Or use the Home tab in this app for the native Slack experience.", url.QueryEscape(cmd.UserID))
 	case "settings":
 		return "Open the Home tab in this app to configure your notification preferences."
@@ -1185,15 +1185,16 @@ func (c *Client) handleR2RCommand(ctx context.Context, cmd *slack.SlashCommand) 
 		// Return immediately to avoid timeout
 		return "⏳ Generating your daily report..."
 	case "help":
-		return "Ready to Review helps you stay on top of pull requests.\n" +
-			"Commands:\n" +
-			"• /r2r dashboard - View your PR dashboard\n" +
-			"• /r2r settings - Configure notification preferences\n" +
-			"• /r2r report - Generate and send your daily PR report now\n" +
-			"• /r2r help - Show this help message\n\n" +
-			"You can also visit the Home tab in this app for a full dashboard."
+		return "*reviewGOOSE:Slack* helps you stay on top of pull requests.\n\n" +
+			"*Commands:*\n" +
+			"• `/goose dashboard` - View your PR dashboard\n" +
+			"• `/goose settings` - Configure notification preferences\n" +
+			"• `/goose report` - Generate and send your daily PR report now\n" +
+			"• `/goose help` - Show this help message\n\n" +
+			"You can also visit the *Home* tab in this app for a full dashboard.\n" +
+			"Learn more at https://codegroove.dev/reviewgoose/"
 	default:
-		return "Unknown subcommand. Try: /r2r help"
+		return "Unknown subcommand. Try: /goose help"
 	}
 }
 

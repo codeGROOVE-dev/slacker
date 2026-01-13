@@ -566,7 +566,7 @@ func TestWriteInstallPage(t *testing.T) {
 		t.Error("Expected auth URL in output")
 	}
 
-	if !strings.Contains(body, "Install Ready to Review") || !strings.Contains(body, "Add to Slack") {
+	if !strings.Contains(body, "Install reviewGOOSE") || !strings.Contains(body, "Add to Slack") {
 		t.Error("Expected install button/text in output")
 	}
 }

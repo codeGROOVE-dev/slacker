@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Ready to Review is an elegant modern Slack bot written in Go that integrates with GitHub to streamline PR review workflows. The bot provides real-time notifications, dashboard views, and multi-org/multi-Slack support.
+reviewGOOSE:Slack is the Slack integration for reviewGOOSE — an elegant modern Slack bot written in Go that integrates with GitHub to streamline PR review workflows. The bot provides real-time notifications, dashboard views, and multi-org/multi-Slack support.
 
 ## Core Features
 
@@ -27,7 +27,7 @@ Ready to Review is an elegant modern Slack bot written in Go that integrates wit
 - Native Slack app home tab with Block Kit UI showing incoming/outgoing PRs
 - Highlights PRs blocked on the user
 - Clean, settings-free interface focusing on PR status
-- Alternative web dashboard available at https://dash.ready-to-review.dev/
+- Alternative web dashboard available at https://reviewgoose.dev/
 
 ### 3. Smart Notifications
 - **Smart DM Logic**: If user tagged in channel, delay DMs by configured time (default: 65min)
@@ -92,7 +92,7 @@ make clean        # Clean build artifacts
 
 ### External Dependencies
 - `github.com/codeGROOVE-dev/sprinkler` - WebSocket hub for GitHub webhook events
-- `github.com/ready-to-review/turnclient` - PR state analysis and blocking detection
+- `github.com/codeGROOVE-dev/turnclient` - PR state analysis and blocking detection
 - `github.com/slack-go/slack` - Official Slack API client
 - `github.com/google/go-github/v50` - GitHub API client
 
