@@ -342,9 +342,23 @@ func (*OAuthHandler) writeSuccessPage(writer http.ResponseWriter, teamName strin
 			   <a href="https://github.com/codeGROOVE-dev/slacker/blob/main/docs/SETUP.md#configuring-your-repositories"
 			      target="_blank"
 			      rel="noopener noreferrer">Configure your repositories</a></p>
-			<p class="footer">Then close this window and return to Slack.</p>
+			<p class="footer">This window will close automatically in <span id="countdown">3</span> seconds.</p>
 		</div>
 	</main>
+	<script>
+		(function() {
+			var seconds = 3;
+			var countdown = document.getElementById('countdown');
+			var timer = setInterval(function() {
+				seconds--;
+				if (countdown) countdown.textContent = seconds;
+				if (seconds <= 0) {
+					clearInterval(timer);
+					window.close();
+				}
+			}, 1000);
+		})();
+	</script>
 </body>
 </html>
 `, teamName); err != nil {
