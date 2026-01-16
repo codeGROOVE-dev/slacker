@@ -42,6 +42,7 @@ type ServerConfig struct {
 type RepoConfig struct {
 	Channels map[string]struct {
 		ReminderDMDelay *int     `yaml:"reminder_dm_delay"`
+		When            *string  `yaml:"when"`  // Optional: when to post threads ("immediate", "assigned", "blocked", "passing")
 		Repos           []string `yaml:"repos"` // Optional: override global delay for this channel (0 = disabled)
 
 		Mute bool `yaml:"mute"`
@@ -51,6 +52,7 @@ type RepoConfig struct {
 		TeamID             string `yaml:"team_id"`
 		EmailDomain        string `yaml:"email_domain"`
 		ReminderDMDelay    int    `yaml:"reminder_dm_delay"`
+		When               string `yaml:"when"`                 // When to post threads: "immediate" (default), "assigned", "blocked", "passing"
 		DisableDailyReport bool   `yaml:"disable_daily_report"` // Default false (reports enabled)
 	} `yaml:"global"` // Minutes to wait before sending DM if user tagged in channel (0 = disabled)
 }
@@ -166,6 +168,7 @@ func createDefaultConfig() *RepoConfig {
 	return &RepoConfig{
 		Channels: make(map[string]struct {
 			ReminderDMDelay *int     `yaml:"reminder_dm_delay"`
+			When            *string  `yaml:"when"`
 			Repos           []string `yaml:"repos"`
 			Mute            bool     `yaml:"mute"`
 		}),
@@ -173,12 +176,14 @@ func createDefaultConfig() *RepoConfig {
 			TeamID             string `yaml:"team_id"`
 			EmailDomain        string `yaml:"email_domain"`
 			ReminderDMDelay    int    `yaml:"reminder_dm_delay"`
+			When               string `yaml:"when"`
 			DisableDailyReport bool   `yaml:"disable_daily_report"`
 		}{
 			TeamID:             "",
 			EmailDomain:        "",
 			ReminderDMDelay:    defaultReminderDMDelayMinutes,
-			DisableDailyReport: false, // Default: daily reports enabled
+			When:               "immediate", // Default: post threads immediately
+			DisableDailyReport: false,       // Default: daily reports enabled
 		},
 	}
 }
@@ -609,6 +614,32 @@ func (m *Manager) ReminderDMDelay(org, channel string) int {
 		"global_value", config.Global.ReminderDMDelay,
 		"default_delay_mins", defaultReminderDMDelayMinutes)
 	return defaultReminderDMDelayMinutes
+}
+
+// When returns the posting threshold for a channel.
+// Returns "immediate" (default), "assigned", "blocked", or "passing".
+func (m *Manager) When(org, channel string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	config, exists := m.configs[org]
+	if !exists {
+		return "immediate" // Default
+	}
+
+	// Check for channel-specific override
+	if channelConfig, ok := config.Channels[channel]; ok {
+		if channelConfig.When != nil {
+			return *channelConfig.When
+		}
+	}
+
+	// Return global setting (or default if not set)
+	if config.Global.When != "" {
+		return config.Global.When
+	}
+
+	return "immediate" // Default
 }
 
 // ReloadConfig reloads the configuration for an org (e.g., when .codeGROOVE repo is updated).

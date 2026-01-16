@@ -88,23 +88,62 @@ func (h *HomeHandler) tryHandleAppHomeOpened(ctx context.Context, teamID, slackU
 		return h.publishPlaceholderHome(ctx, slackClient, slackUserID, []string{}, nil)
 	}
 
-	// Get config for first org to extract domain and user overrides
-	cfg, exists := h.configManager.Config(workspaceOrgs[0])
-	if !exists {
-		return fmt.Errorf("no config for org: %s", workspaceOrgs[0])
+	// Collect config overrides from all workspace orgs
+	allOverrides := make(map[string]string)
+	for _, org := range workspaceOrgs {
+		cfg, exists := h.configManager.Config(org)
+		if exists && len(cfg.Users) > 0 {
+			for ghUser, email := range cfg.Users {
+				allOverrides[ghUser] = email
+			}
+		}
+	}
+	if len(allOverrides) > 0 {
+		h.reverseMapping.SetOverrides(allOverrides)
+		slog.Info("loaded user mapping overrides from all orgs",
+			"workspace_orgs", workspaceOrgs,
+			"total_overrides", len(allOverrides))
 	}
 
-	// Update reverse mapping overrides from config
-	if len(cfg.Users) > 0 {
-		h.reverseMapping.SetOverrides(cfg.Users)
-	}
+	// Try to map Slack user to GitHub username using all workspace orgs
+	var mapping *usermapping.ReverseMapping
+	var lastErr error
+	for _, org := range workspaceOrgs {
+		cfg, exists := h.configManager.Config(org)
+		if !exists {
+			slog.Warn("no config found for org, skipping",
+				"org", org,
+				"slack_user_id", slackUserID)
+			continue
+		}
 
-	// Map Slack user to GitHub username
-	mapping, err := h.reverseMapping.LookupGitHub(ctx, slackClient.API(), slackUserID, workspaceOrgs[0], cfg.Global.EmailDomain)
-	if err != nil {
-		slog.Warn("failed to map Slack user to GitHub",
+		slog.Debug("attempting user mapping with org",
+			"org", org,
+			"slack_user_id", slackUserID,
+			"email_domain", cfg.Global.EmailDomain)
+
+		m, err := h.reverseMapping.LookupGitHub(ctx, slackClient.API(), slackUserID, org, cfg.Global.EmailDomain)
+		if err == nil && m != nil {
+			slog.Info("successfully mapped user via org",
+				"org", org,
+				"slack_user_id", slackUserID,
+				"github_username", m.GitHubUsername,
+				"confidence", m.Confidence)
+			mapping = m
+			break
+		}
+		lastErr = err
+		slog.Debug("mapping attempt failed for org",
+			"org", org,
 			"slack_user_id", slackUserID,
 			"error", err)
+	}
+
+	if mapping == nil {
+		slog.Warn("failed to map Slack user to GitHub in any workspace org",
+			"slack_user_id", slackUserID,
+			"workspace_orgs", workspaceOrgs,
+			"last_error", lastErr)
 		return h.publishPlaceholderHome(ctx, slackClient, slackUserID, workspaceOrgs, nil)
 	}
 

@@ -386,6 +386,10 @@ func (m *mockConfigManager) ReminderDMDelay(org, channel string) int {
 	return m.dmDelay
 }
 
+func (m *mockConfigManager) When(org, channel string) string {
+	return "immediate" // Default for tests
+}
+
 func (m *mockConfigManager) ChannelsForRepo(org, repo string) []string {
 	if m.channelsFunc != nil {
 		return m.channelsFunc(org, repo)

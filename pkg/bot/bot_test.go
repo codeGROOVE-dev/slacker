@@ -6,7 +6,9 @@ import (
 	"os"
 	"testing"
 
+	"github.com/codeGROOVE-dev/prx/pkg/prx"
 	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
+	"github.com/codeGROOVE-dev/turnclient/pkg/turn"
 	"github.com/slack-go/slack"
 )
 
@@ -308,4 +310,235 @@ func TestThreadCache_Set(t *testing.T) {
 	if retrieved.ChannelID != threadInfo.ChannelID {
 		t.Errorf("expected channel ID %s, got %s", threadInfo.ChannelID, retrieved.ChannelID)
 	}
+}
+
+func TestShouldPostThread(t *testing.T) {
+	coord := &Coordinator{}
+
+	tests := []struct {
+		name           string
+		when           string
+		checkResult    *turn.CheckResponse
+		wantPost       bool
+		wantReasonPart string // Part of the reason string to check for
+	}{
+		{
+			name: "immediate mode always posts",
+			when: "immediate",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State: "open",
+				},
+			},
+			wantPost:       true,
+			wantReasonPart: "immediate_mode",
+		},
+		{
+			name: "merged PR always posts regardless of when",
+			when: "passing",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State:  "closed",
+					Merged: true,
+				},
+			},
+			wantPost:       true,
+			wantReasonPart: "pr_merged",
+		},
+		{
+			name: "closed PR always posts regardless of when",
+			when: "passing",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State:  "closed",
+					Merged: false,
+				},
+			},
+			wantPost:       true,
+			wantReasonPart: "pr_closed",
+		},
+		{
+			name: "assigned: posts when has assignees",
+			when: "assigned",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State:     "open",
+					Assignees: []string{"user1", "user2"},
+				},
+			},
+			wantPost:       true,
+			wantReasonPart: "has_2_assignees",
+		},
+		{
+			name: "assigned: does not post when no assignees",
+			when: "assigned",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State:     "open",
+					Assignees: []string{},
+				},
+			},
+			wantPost:       false,
+			wantReasonPart: "no_assignees",
+		},
+		{
+			name: "blocked: posts when users are blocked",
+			when: "blocked",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State: "open",
+				},
+				Analysis: turn.Analysis{
+					NextAction: map[string]turn.Action{
+						"user1": {Kind: "review"},
+						"user2": {Kind: "approve"},
+					},
+				},
+			},
+			wantPost:       true,
+			wantReasonPart: "blocked_on_2_users",
+		},
+		{
+			name: "blocked: does not post when no users blocked",
+			when: "blocked",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State: "open",
+				},
+				Analysis: turn.Analysis{
+					NextAction: map[string]turn.Action{},
+				},
+			},
+			wantPost:       false,
+			wantReasonPart: "not_blocked_yet",
+		},
+		{
+			name: "blocked: ignores _system sentinel",
+			when: "blocked",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State: "open",
+				},
+				Analysis: turn.Analysis{
+					NextAction: map[string]turn.Action{
+						"_system": {Kind: "processing"},
+					},
+				},
+			},
+			wantPost:       false,
+			wantReasonPart: "not_blocked_yet",
+		},
+		{
+			name: "passing: posts when in review state",
+			when: "passing",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State: "open",
+				},
+				Analysis: turn.Analysis{
+					WorkflowState: string(turn.StateAssignedWaitingForReview),
+				},
+			},
+			wantPost:       true,
+			wantReasonPart: "workflow_state",
+		},
+		{
+			name: "passing: does not post when tests pending",
+			when: "passing",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State: "open",
+				},
+				Analysis: turn.Analysis{
+					WorkflowState: string(turn.StatePublishedWaitingForTests),
+				},
+			},
+			wantPost:       false,
+			wantReasonPart: "waiting_for",
+		},
+		{
+			name: "passing: uses fallback when workflow state unknown and tests passing",
+			when: "passing",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State: "open",
+				},
+				Analysis: turn.Analysis{
+					WorkflowState: "unknown_state",
+					Checks: turn.Checks{
+						Passing: 5,
+						Failing: 0,
+						Pending: 0,
+						Waiting: 0,
+					},
+				},
+			},
+			wantPost:       true,
+			wantReasonPart: "tests_passed_fallback",
+		},
+		{
+			name: "passing: uses fallback when tests failing",
+			when: "passing",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State: "open",
+				},
+				Analysis: turn.Analysis{
+					WorkflowState: "unknown_state",
+					Checks: turn.Checks{
+						Passing: 3,
+						Failing: 2,
+					},
+				},
+			},
+			wantPost:       false,
+			wantReasonPart: "tests_failing",
+		},
+		{
+			name:           "nil check result returns false",
+			when:           "passing",
+			checkResult:    nil,
+			wantPost:       false,
+			wantReasonPart: "no_check_result",
+		},
+		{
+			name: "invalid when value defaults to immediate",
+			when: "invalid_value",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State: "open",
+				},
+			},
+			wantPost:       true,
+			wantReasonPart: "invalid_config",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotPost, gotReason := coord.shouldPostThread(tt.checkResult, tt.when)
+
+			if gotPost != tt.wantPost {
+				t.Errorf("shouldPostThread() gotPost = %v, wantPost %v", gotPost, tt.wantPost)
+			}
+
+			if tt.wantReasonPart != "" && !contains(gotReason, tt.wantReasonPart) {
+				t.Errorf("shouldPostThread() reason = %q, want to contain %q", gotReason, tt.wantReasonPart)
+			}
+		})
+	}
+}
+
+// Helper function to check if a string contains a substring
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || containsMiddle(s, substr)))
+}
+
+func containsMiddle(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

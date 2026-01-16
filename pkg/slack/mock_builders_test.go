@@ -226,6 +226,29 @@ func (b *MockAPIBuilder) WithGetConversationsError(err error) *MockAPIBuilder {
 	return b
 }
 
+// WithPublishViewSuccess configures the mock to successfully publish views.
+func (b *MockAPIBuilder) WithPublishViewSuccess() *MockAPIBuilder {
+	b.mock.publishViewFunc = func(ctx context.Context, request slack.PublishViewContextRequest) (*slack.ViewResponse, error) {
+		return &slack.ViewResponse{}, nil
+	}
+	return b
+}
+
+// WithPublishViewError configures the mock to fail when publishing views.
+func (b *MockAPIBuilder) WithPublishViewError(err error) *MockAPIBuilder {
+	b.mock.publishViewFunc = func(ctx context.Context, request slack.PublishViewContextRequest) (*slack.ViewResponse, error) {
+		return nil, err
+	}
+	return b
+}
+
+// WithUserTimezone configures the user timezone returned by the mock.
+func (b *MockAPIBuilder) WithUserTimezone(timezone string) *MockAPIBuilder {
+	// UserTimezone is a Client method, not an API method
+	// We'll need to handle this at the Client level in tests
+	return b
+}
+
 // Build returns the configured mockAPI.
 func (b *MockAPIBuilder) Build() *mockAPI {
 	return b.mock
