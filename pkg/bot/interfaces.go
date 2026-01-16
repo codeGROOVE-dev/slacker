@@ -54,6 +54,7 @@ type ConfigManager interface {
 	WorkspaceName(org string) string
 	ChannelsForRepo(org, repo string) []string
 	ReminderDMDelay(org, channelName string) int
+	When(org, channelName string) string
 	SetGitHubClient(org string, client any)
 	SetWorkspaceName(workspaceName string)
 }

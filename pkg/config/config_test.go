@@ -183,6 +183,7 @@ func TestConfigCache_GetSet(t *testing.T) {
 			TeamID             string `yaml:"team_id"`
 			EmailDomain        string `yaml:"email_domain"`
 			ReminderDMDelay    int    `yaml:"reminder_dm_delay"`
+			When               string `yaml:"when"`
 			DisableDailyReport bool   `yaml:"disable_daily_report"`
 		}{
 			TeamID:      "T123",
@@ -386,6 +387,7 @@ func TestManager_ConfigWithManualSetup(t *testing.T) {
 	testConfig := &RepoConfig{
 		Channels: map[string]struct {
 			ReminderDMDelay *int     `yaml:"reminder_dm_delay"`
+			When            *string  `yaml:"when"`
 			Repos           []string `yaml:"repos"`
 			Mute            bool     `yaml:"mute"`
 		}{
@@ -402,6 +404,7 @@ func TestManager_ConfigWithManualSetup(t *testing.T) {
 			TeamID             string `yaml:"team_id"`
 			EmailDomain        string `yaml:"email_domain"`
 			ReminderDMDelay    int    `yaml:"reminder_dm_delay"`
+			When               string `yaml:"when"`
 			DisableDailyReport bool   `yaml:"disable_daily_report"`
 		}{
 			TeamID:             "T123456",
@@ -459,6 +462,7 @@ func TestManager_ReminderDMDelayWithChannelOverride(t *testing.T) {
 	testConfig := &RepoConfig{
 		Channels: map[string]struct {
 			ReminderDMDelay *int     `yaml:"reminder_dm_delay"`
+			When            *string  `yaml:"when"`
 			Repos           []string `yaml:"repos"`
 			Mute            bool     `yaml:"mute"`
 		}{
@@ -471,6 +475,7 @@ func TestManager_ReminderDMDelayWithChannelOverride(t *testing.T) {
 			TeamID             string `yaml:"team_id"`
 			EmailDomain        string `yaml:"email_domain"`
 			ReminderDMDelay    int    `yaml:"reminder_dm_delay"`
+			When               string `yaml:"when"`
 			DisableDailyReport bool   `yaml:"disable_daily_report"`
 		}{
 			ReminderDMDelay: 60, // Global default
@@ -500,6 +505,7 @@ func TestManager_ChannelsForRepoWithWildcard(t *testing.T) {
 	testConfig := &RepoConfig{
 		Channels: map[string]struct {
 			ReminderDMDelay *int     `yaml:"reminder_dm_delay"`
+			When            *string  `yaml:"when"`
 			Repos           []string `yaml:"repos"`
 			Mute            bool     `yaml:"mute"`
 		}{
@@ -561,6 +567,7 @@ func TestManager_ChannelsForRepoWithMuting(t *testing.T) {
 	testConfig := &RepoConfig{
 		Channels: map[string]struct {
 			ReminderDMDelay *int     `yaml:"reminder_dm_delay"`
+			When            *string  `yaml:"when"`
 			Repos           []string `yaml:"repos"`
 			Mute            bool     `yaml:"mute"`
 		}{
@@ -727,6 +734,7 @@ func TestManager_IsChannelMutedCaseInsensitive(t *testing.T) {
 	testConfig := &RepoConfig{
 		Channels: map[string]struct {
 			ReminderDMDelay *int     `yaml:"reminder_dm_delay"`
+			When            *string  `yaml:"when"`
 			Repos           []string `yaml:"repos"`
 			Mute            bool     `yaml:"mute"`
 		}{
@@ -759,6 +767,7 @@ func TestManager_ReminderDMDelayZeroGlobal(t *testing.T) {
 	testConfig := &RepoConfig{
 		Channels: map[string]struct {
 			ReminderDMDelay *int     `yaml:"reminder_dm_delay"`
+			When            *string  `yaml:"when"`
 			Repos           []string `yaml:"repos"`
 			Mute            bool     `yaml:"mute"`
 		}{},
@@ -766,6 +775,7 @@ func TestManager_ReminderDMDelayZeroGlobal(t *testing.T) {
 			TeamID             string `yaml:"team_id"`
 			EmailDomain        string `yaml:"email_domain"`
 			ReminderDMDelay    int    `yaml:"reminder_dm_delay"`
+			When               string `yaml:"when"`
 			DisableDailyReport bool   `yaml:"disable_daily_report"`
 		}{
 			ReminderDMDelay: 0, // Explicitly disabled
@@ -790,6 +800,7 @@ func TestManager_ReminderDMDelayChannelZero(t *testing.T) {
 	testConfig := &RepoConfig{
 		Channels: map[string]struct {
 			ReminderDMDelay *int     `yaml:"reminder_dm_delay"`
+			When            *string  `yaml:"when"`
 			Repos           []string `yaml:"repos"`
 			Mute            bool     `yaml:"mute"`
 		}{
@@ -801,6 +812,7 @@ func TestManager_ReminderDMDelayChannelZero(t *testing.T) {
 			TeamID             string `yaml:"team_id"`
 			EmailDomain        string `yaml:"email_domain"`
 			ReminderDMDelay    int    `yaml:"reminder_dm_delay"`
+			When               string `yaml:"when"`
 			DisableDailyReport bool   `yaml:"disable_daily_report"`
 		}{
 			ReminderDMDelay: 60,

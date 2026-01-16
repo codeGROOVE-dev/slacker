@@ -853,6 +853,78 @@ func (*Coordinator) extractBlockedUsersFromTurnclient(checkResult *turn.CheckRes
 	return blockedUsers
 }
 
+// shouldPostThread determines if a PR thread should be posted based on configured threshold.
+// Returns (shouldPost bool, reason string).
+func (c *Coordinator) shouldPostThread(
+	checkResult *turn.CheckResponse,
+	when string,
+) (bool, string) {
+	if checkResult == nil {
+		return false, "no_check_result"
+	}
+
+	pr := checkResult.PullRequest
+	analysis := checkResult.Analysis
+
+	// Terminal states ALWAYS post (ensure visibility)
+	if pr.Merged {
+		return true, "pr_merged"
+	}
+	if pr.State == "closed" {
+		return true, "pr_closed"
+	}
+
+	switch when {
+	case "immediate":
+		return true, "immediate_mode"
+
+	case "assigned":
+		// Post when PR has assignees
+		if len(pr.Assignees) > 0 {
+			return true, fmt.Sprintf("has_%d_assignees", len(pr.Assignees))
+		}
+		return false, "no_assignees"
+
+	case "blocked":
+		// Post when someone needs to take action
+		blockedUsers := c.extractBlockedUsersFromTurnclient(checkResult)
+		if len(blockedUsers) > 0 {
+			return true, fmt.Sprintf("blocked_on_%d_users", len(blockedUsers))
+		}
+		return false, "not_blocked_yet"
+
+	case "passing":
+		// Post when tests pass - use WorkflowState as primary signal
+		switch analysis.WorkflowState {
+		case string(turn.StateAssignedWaitingForReview),
+			string(turn.StateReviewedNeedsRefinement),
+			string(turn.StateRefinedWaitingForApproval),
+			string(turn.StateApprovedWaitingForMerge):
+			return true, fmt.Sprintf("workflow_state_%s", analysis.WorkflowState)
+
+		case string(turn.StateNewlyPublished),
+			string(turn.StateInDraft),
+			string(turn.StatePublishedWaitingForTests),
+			string(turn.StateTestedWaitingForAssignment):
+			return false, fmt.Sprintf("waiting_for_%s", analysis.WorkflowState)
+
+		default:
+			// Fallback: check test status directly
+			if analysis.Checks.Failing > 0 {
+				return false, "tests_failing"
+			}
+			if analysis.Checks.Pending > 0 || analysis.Checks.Waiting > 0 {
+				return false, "tests_pending"
+			}
+			return true, "tests_passed_fallback"
+		}
+
+	default:
+		slog.Warn("invalid when value, defaulting to immediate", "when", when)
+		return true, "invalid_config_default_immediate"
+	}
+}
+
 // formatNextActions formats NextAction map into a compact string like "fix tests: user1, user2; review: user3".
 // It groups users by action kind and formats each action as "action_name: user1, user2".
 // Multiple actions are separated by semicolons.
@@ -1082,7 +1154,8 @@ func (c *Coordinator) processPRForChannel(
 		oldState = threadInfo.LastState
 	}
 
-	// Find or create thread
+	// Check if thread already exists
+	cacheKey := fmt.Sprintf("%s/%s#%d:%s", owner, repo, prNumber, channelID)
 	pullRequestStruct := struct {
 		CreatedAt time.Time `json:"created_at"`
 		User      struct {
@@ -1098,6 +1171,36 @@ func (c *Coordinator) processPRForChannel(
 		Number:    event.PullRequest.Number,
 		CreatedAt: event.PullRequest.CreatedAt,
 	}
+
+	_, _, threadExists := c.findPRThread(ctx, cacheKey, channelID, owner, repo, prNumber, prState, pullRequestStruct)
+
+	// If thread doesn't exist, check if we should create it based on "when" threshold
+	if !threadExists {
+		when := c.configManager.When(owner, channelName)
+
+		if when != "immediate" {
+			shouldPost, reason := c.shouldPostThread(checkResult, when)
+
+			if !shouldPost {
+				slog.Debug("not creating thread - threshold not met",
+					"workspace", c.workspaceName,
+					logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+					"channel", channelDisplay,
+					"when", when,
+					"reason", reason)
+				return nil // Don't create thread yet - next event will check again
+			}
+
+			slog.Info("creating thread - threshold met",
+				"workspace", c.workspaceName,
+				logFieldPR, fmt.Sprintf(prFormatString, owner, repo, prNumber),
+				"channel", channelDisplay,
+				"when", when,
+				"reason", reason)
+		}
+	}
+
+	// Find or create thread
 	threadTS, wasNewlyCreated, currentText, err := c.findOrCreatePRThread(ctx, threadCreationParams{
 		ChannelID:   channelID,
 		ChannelName: channelName,
