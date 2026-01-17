@@ -7,8 +7,6 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/codeGROOVE-dev/slacker/pkg/config"
-	"github.com/codeGROOVE-dev/slacker/pkg/github"
 	"github.com/codeGROOVE-dev/slacker/pkg/home"
 	"github.com/codeGROOVE-dev/slacker/pkg/state"
 	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
@@ -18,19 +16,19 @@ import (
 // HomeHandler handles app_home_opened events for a workspace.
 type HomeHandler struct {
 	slackManager   *Manager
-	githubManager  *github.Manager
-	configManager  *config.Manager
+	githubManager  GitHubManager
+	configManager  ConfigManager
 	stateStore     state.Store
-	reverseMapping *usermapping.ReverseService
+	reverseMapping UserMapper
 }
 
 // NewHomeHandler creates a new home view handler.
 func NewHomeHandler(
 	slackManager *Manager,
-	githubManager *github.Manager,
-	configManager *config.Manager,
+	githubManager GitHubManager,
+	configManager ConfigManager,
 	stateStore state.Store,
-	reverseMapping *usermapping.ReverseService,
+	reverseMapping UserMapper,
 ) *HomeHandler {
 	return &HomeHandler{
 		slackManager:   slackManager,

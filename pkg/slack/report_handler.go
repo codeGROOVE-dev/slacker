@@ -8,27 +8,25 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/slacker/pkg/dailyreport"
-	"github.com/codeGROOVE-dev/slacker/pkg/github"
 	"github.com/codeGROOVE-dev/slacker/pkg/home"
 	"github.com/codeGROOVE-dev/slacker/pkg/state"
-	"github.com/codeGROOVE-dev/slacker/pkg/usermapping"
 	gogithub "github.com/google/go-github/v50/github"
 )
 
 // ReportHandler handles manual daily report generation via slash command.
 type ReportHandler struct {
 	slackManager   *Manager
-	githubManager  *github.Manager
+	githubManager  GitHubManager
 	stateStore     state.Store
-	reverseMapping *usermapping.ReverseService
+	reverseMapping UserMapper
 }
 
 // NewReportHandler creates a new report handler.
 func NewReportHandler(
 	slackManager *Manager,
-	githubManager *github.Manager,
+	githubManager GitHubManager,
 	stateStore state.Store,
-	reverseMapping *usermapping.ReverseService,
+	reverseMapping UserMapper,
 ) *ReportHandler {
 	return &ReportHandler{
 		slackManager:   slackManager,
