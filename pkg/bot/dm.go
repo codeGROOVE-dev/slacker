@@ -42,7 +42,10 @@ func (c *Coordinator) sendPRNotification(ctx context.Context, req dmNotification
 	mu.Lock()
 	defer mu.Unlock()
 
-	prState := derivePRState(req.CheckResult)
+	prState := "unknown"
+	if req.CheckResult != nil {
+		prState = req.CheckResult.Analysis.WorkflowState
+	}
 
 	// Check if there's a queued (not-yet-sent) DM for this user+PR
 	pendingDMs, err := c.stateStore.PendingDMs(ctx, time.Now().Add(24*time.Hour))
@@ -205,7 +208,12 @@ func (c *Coordinator) sendPRNotification(ctx context.Context, req dmNotification
 					"pr", req.PRURL,
 					"channel_id", loc.ChannelID,
 					"message_ts", loc.MessageTS,
-					"old_state", getLastState(lastNotif, exists),
+					"old_state", func() string {
+						if !exists || lastNotif.LastState == "" {
+							return "none"
+						}
+						return lastNotif.LastState
+					}(),
 					"new_state", prState)
 				updated = true
 				// Remember first successful update for cache
@@ -219,7 +227,12 @@ func (c *Coordinator) sendPRNotification(ctx context.Context, req dmNotification
 		if updated {
 			// Save notification state (memory + datastore)
 			if err := c.stateStore.SaveDMMessage(ctx, req.UserID, req.PRURL, state.DMInfo{
-				SentAt:      getSentAt(lastNotif, exists),
+				SentAt: func() time.Time {
+					if !exists || lastNotif.SentAt.IsZero() {
+						return time.Now()
+					}
+					return lastNotif.SentAt
+				}(),
 				UpdatedAt:   time.Now(),
 				ChannelID:   finalChannelID,
 				MessageTS:   finalMessageTS,
@@ -394,7 +407,7 @@ func (c *Coordinator) queueDMForUser(ctx context.Context, req dmNotificationRequ
 
 	// Create pending DM record
 	dm := &state.PendingDM{
-		ID:            generateUUID(),
+		ID:            fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().Unix()),
 		WorkspaceID:   c.configManager.WorkspaceName(req.Owner),
 		UserID:        req.UserID,
 		PROwner:       req.Owner,
@@ -448,35 +461,6 @@ func (c *Coordinator) cancelPendingDMs(ctx context.Context, userID, prURL string
 			}
 		}
 	}
-}
-
-// generateUUID creates a simple UUID for pending DM tracking.
-func generateUUID() string {
-	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().Unix())
-}
-
-// derivePRState extracts a simple state string from turnclient analysis.
-func derivePRState(checkResult *turn.CheckResponse) string {
-	if checkResult == nil {
-		return "unknown"
-	}
-	return checkResult.Analysis.WorkflowState
-}
-
-// getLastState returns the last state from state.DMInfo if it exists, otherwise "none".
-func getLastState(info state.DMInfo, exists bool) string {
-	if !exists || info.LastState == "" {
-		return "none"
-	}
-	return info.LastState
-}
-
-// getSentAt returns the SentAt time from state.DMInfo if it exists, otherwise now.
-func getSentAt(info state.DMInfo, exists bool) time.Time {
-	if !exists || info.SentAt.IsZero() {
-		return time.Now()
-	}
-	return info.SentAt
 }
 
 // sendDMNotificationsToTaggedUsers sends DM notifications to Slack users who were tagged in channels.

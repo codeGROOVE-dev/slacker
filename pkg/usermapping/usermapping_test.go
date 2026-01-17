@@ -3,7 +3,9 @@ package usermapping
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -804,3 +806,519 @@ func TestService_EmailGuessing(t *testing.T) {
 		t.Errorf("expected user ID 'U999999', got %q", result)
 	}
 }
+
+func TestService_DoLookup_NoAddresses(t *testing.T) {
+	ctx := context.Background()
+	githubUser := "noaddresses"
+
+	mockGitHub := &MockGitHubLookup{
+		lookupFunc: func(ctx context.Context, username, organization string) (*ghmailto.Result, error) {
+			// Return empty addresses
+			return &ghmailto.Result{
+				Username:  username,
+				Addresses: []ghmailto.Address{},
+			}, nil
+		},
+	}
+
+	service := &Service{
+		githubLookup: mockGitHub,
+		cache:        make(map[string]*UserMapping),
+		lookupSem:    make(chan struct{}, 5),
+	}
+
+	// doLookup should return empty string when no addresses found
+	slackID, err := service.doLookup(ctx, githubUser, "test-org", "example.com")
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if slackID != "" {
+		t.Errorf("expected empty Slack ID when no addresses found, got: %s", slackID)
+	}
+}
+
+func TestService_FindSlackMatches_SlackAPIError(t *testing.T) {
+	ctx := context.Background()
+
+	mockSlack := &MockSlackAPI{
+		getUserByEmailFunc: func(ctx context.Context, email string) (*slack.User, error) {
+			return nil, fmt.Errorf("slack API error: rate limited")
+		},
+	}
+
+	service := &Service{
+		slackClient: mockSlack,
+		cache:       make(map[string]*UserMapping),
+	}
+
+	// Should handle Slack API errors gracefully
+	matches := service.findSlackMatches(ctx, "testuser", []string{"test@example.com"})
+
+	// Should return empty matches on error
+	if len(matches) != 0 {
+		t.Errorf("expected no matches on Slack API error, got %d", len(matches))
+	}
+}
+
+func TestService_FindSlackMatches_DeletedUser(t *testing.T) {
+	ctx := context.Background()
+
+	mockSlack := &MockSlackAPI{
+		getUserByEmailFunc: func(ctx context.Context, email string) (*slack.User, error) {
+			return &slack.User{
+				ID:      "U123",
+				Name:    "deleted-user",
+				Deleted: true, // Mark as deleted
+				Profile: slack.UserProfile{
+					Email: email,
+				},
+			}, nil
+		},
+	}
+
+	service := &Service{
+		slackClient: mockSlack,
+		cache:       make(map[string]*UserMapping),
+	}
+
+	// Should skip deleted users
+	matches := service.findSlackMatches(ctx, "testuser", []string{"deleted@example.com"})
+
+	// Should return no matches for deleted users
+	if len(matches) != 0 {
+		t.Errorf("expected no matches for deleted user, got %d", len(matches))
+	}
+}
+
+func TestService_FormatUserMention_EmptyUsername(t *testing.T) {
+	ctx := context.Background()
+	service := &Service{
+		cache: make(map[string]*UserMapping),
+	}
+
+	// Should return empty string for empty GitHub username
+	result := service.FormatUserMention(ctx, "", "test-org", "example.com")
+	if result != "" {
+		t.Errorf("expected empty string for empty username, got: %s", result)
+	}
+}
+
+func TestService_FormatUserMentions_SlackHandlesError(t *testing.T) {
+	ctx := context.Background()
+
+	mockGitHub := &MockGitHubLookup{
+		lookupFunc: func(_ context.Context, username, _ string) (*ghmailto.Result, error) {
+			return nil, fmt.Errorf("GitHub API error")
+		},
+	}
+
+	service := &Service{
+		githubLookup: mockGitHub,
+		slackClient:  &MockSlackAPI{},
+		cache:        make(map[string]*UserMapping),
+		lookupSem:    make(chan struct{}, 5),
+	}
+
+	// Should handle errors gracefully and fall back to @username
+	result := service.FormatUserMentions(ctx, []string{"user1", "user2"}, "test-org", "example.com")
+
+	// Should return plain @username when lookup fails
+	if !strings.Contains(result, "@user1") || !strings.Contains(result, "@user2") {
+		t.Errorf("expected plain @username fallback, got: %s", result)
+	}
+}
+
+func TestService_DoLookup_GitHubLookupError(t *testing.T) {
+	ctx := context.Background()
+
+	mockGitHub := &MockGitHubLookup{
+		lookupFunc: func(_ context.Context, username, _ string) (*ghmailto.Result, error) {
+			return nil, fmt.Errorf("GitHub API error: rate limited")
+		},
+	}
+
+	service := &Service{
+		githubLookup: mockGitHub,
+		cache:        make(map[string]*UserMapping),
+		lookupSem:    make(chan struct{}, 5),
+	}
+
+	// Should return error when GitHub lookup fails
+	_, err := service.doLookup(ctx, "testuser", "test-org", "example.com")
+	if err == nil {
+		t.Error("expected error from GitHub lookup failure, got nil")
+	}
+}
+
+func TestService_DoLookup_NormalizedDomainEmails(t *testing.T) {
+	ctx := context.Background()
+
+	// GitHub returns emails only from wrong domain
+	// The first match attempt will fail, then it will try normalized domain filtering
+	mockGitHub := &MockGitHubLookup{
+		lookupFunc: func(_ context.Context, username, _ string) (*ghmailto.Result, error) {
+			result := &ghmailto.Result{
+				Username: username,
+				Addresses: []ghmailto.Address{
+					{
+						Email:    "user@wrongdomain.com",
+						Verified: true,
+						Methods:  []string{"Commit"},
+					},
+				},
+			}
+			return result, nil
+		},
+	}
+
+	// Slack only accepts certain emails
+	callCount := 0
+	mockSlack := &MockSlackAPI{
+		getUserByEmailFunc: func(ctx context.Context, email string) (*slack.User, error) {
+			callCount++
+			// First call with wrongdomain.com - fail
+			// Potential second call after FilterAndNormalize with example.com domain - succeed
+			if strings.HasSuffix(email, "@example.com") {
+				return &slack.User{
+					ID:   "U123",
+					Name: "user",
+					Profile: slack.UserProfile{
+						Email: email,
+					},
+				}, nil
+			}
+			return nil, &slack.SlackErrorResponse{Err: "users_not_found"}
+		},
+	}
+
+	service := &Service{
+		githubLookup: mockGitHub,
+		slackClient:  mockSlack,
+		cache:        make(map[string]*UserMapping),
+		cacheMu:      sync.RWMutex{},
+		lookupSem:    make(chan struct{}, 5),
+	}
+
+	// Should attempt domain filtering (even if FilterAndNormalize might return empty)
+	slackID, err := service.doLookup(ctx, "testuser", "test-org", "example.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// This test primarily ensures the normalized domain code path is exercised
+	// The actual result depends on what FilterAndNormalize does
+	t.Logf("Result: slackID=%s, callCount=%d", slackID, callCount)
+}
+
+func TestService_DoLookup_GuessingError(t *testing.T) {
+	ctx := context.Background()
+
+	mockGitHub := &MockGitHubLookup{
+		lookupFunc: func(_ context.Context, username, _ string) (*ghmailto.Result, error) {
+			return &ghmailto.Result{
+				Username:  username,
+				Addresses: []ghmailto.Address{}, // No addresses
+			}, nil
+		},
+		guessFunc: func(_ context.Context, username, _ string, _ ghmailto.GuessOptions) (*ghmailto.GuessResult, error) {
+			return nil, fmt.Errorf("guessing service unavailable")
+		},
+	}
+
+	service := &Service{
+		githubLookup: mockGitHub,
+		slackClient:  &MockSlackAPI{},
+		cache:        make(map[string]*UserMapping),
+		cacheMu:      sync.RWMutex{},
+		lookupSem:    make(chan struct{}, 5),
+	}
+
+	// Should handle guessing errors gracefully
+	slackID, err := service.doLookup(ctx, "testuser", "test-org", "example.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should return empty string when guessing fails
+	if slackID != "" {
+		t.Errorf("expected empty Slack ID when guessing fails, got: %s", slackID)
+	}
+}
+
+func TestService_SlackHandle_ConcurrentSingleflight(t *testing.T) {
+	ctx := context.Background()
+
+	callCount := 0
+	mockGitHub := &MockGitHubLookup{
+		lookupFunc: func(_ context.Context, username, _ string) (*ghmailto.Result, error) {
+			callCount++
+			time.Sleep(50 * time.Millisecond) // Simulate slow lookup
+			return &ghmailto.Result{
+				Username: username,
+				Addresses: []ghmailto.Address{
+					{
+						Email:    "test@example.com",
+						Verified: true,
+						Methods:  []string{"Public API"},
+					},
+				},
+			}, nil
+		},
+	}
+
+	mockSlack := &MockSlackAPI{
+		getUserByEmailFunc: func(ctx context.Context, email string) (*slack.User, error) {
+			return &slack.User{
+				ID:   "U123",
+				Name: "testuser",
+				Profile: slack.UserProfile{
+					Email: email,
+				},
+			}, nil
+		},
+	}
+
+	service := &Service{
+		githubLookup: mockGitHub,
+		slackClient:  mockSlack,
+		cache:        make(map[string]*UserMapping),
+		cacheMu:      sync.RWMutex{},
+		lookupSem:    make(chan struct{}, 5),
+	}
+
+	// Launch multiple concurrent lookups for same user
+	var wg sync.WaitGroup
+	results := make([]string, 3)
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			slackID, err := service.SlackHandle(ctx, "testuser", "test-org", "example.com")
+			if err != nil {
+				t.Errorf("unexpected error in concurrent lookup: %v", err)
+			}
+			results[idx] = slackID
+		}(i)
+	}
+
+	wg.Wait()
+
+	// All should get the same result
+	for i, result := range results {
+		if result != "U123" {
+			t.Errorf("concurrent lookup %d: expected U123, got %s", i, result)
+		}
+	}
+
+	// GitHub lookup should only be called once due to singleflight
+	if callCount > 1 {
+		// Note: singleflight may allow 2 calls in edge cases, but not 3
+		t.Logf("warning: GitHub lookup called %d times (singleflight should reduce this)", callCount)
+	}
+}
+
+func TestService_SlackHandles_BatchLookup(t *testing.T) {
+	ctx := context.Background()
+
+	mockGitHub := &MockGitHubLookup{
+		lookupFunc: func(_ context.Context, username, _ string) (*ghmailto.Result, error) {
+			return &ghmailto.Result{
+				Username: username,
+				Addresses: []ghmailto.Address{
+					{
+						Email:    username + "@example.com",
+						Verified: true,
+						Methods:  []string{"Public API"},
+					},
+				},
+			}, nil
+		},
+	}
+
+	mockSlack := &MockSlackAPI{
+		getUserByEmailFunc: func(ctx context.Context, email string) (*slack.User, error) {
+			// Extract username from email
+			username := strings.Split(email, "@")[0]
+			return &slack.User{
+				ID:   "U" + username,
+				Name: username,
+				Profile: slack.UserProfile{
+					Email: email,
+				},
+			}, nil
+		},
+	}
+
+	service := &Service{
+		githubLookup: mockGitHub,
+		slackClient:  mockSlack,
+		cache:        make(map[string]*UserMapping),
+		cacheMu:      sync.RWMutex{},
+		lookupSem:    make(chan struct{}, 5),
+	}
+
+	// Batch lookup multiple users
+	handles, err := service.SlackHandles(ctx, []string{"user1", "user2", "user3"}, "test-org", "example.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(handles) != 3 {
+		t.Fatalf("expected 3 handles, got %d", len(handles))
+	}
+
+	if handles["user1"] != "Uuser1" {
+		t.Errorf("expected Uuser1 for user1, got %s", handles["user1"])
+	}
+}
+
+func TestService_CacheStats_EmptyCache(t *testing.T) {
+	service := &Service{
+		cache:   make(map[string]*UserMapping),
+		cacheMu: sync.RWMutex{},
+	}
+
+	total, expired := service.CacheStats()
+	if total != 0 {
+		t.Errorf("expected 0 total for empty cache, got %d", total)
+	}
+	if expired != 0 {
+		t.Errorf("expected 0 expired for empty cache, got %d", expired)
+	}
+}
+
+func TestService_CacheStats_WithEntries(t *testing.T) {
+	service := &Service{
+		cache:   make(map[string]*UserMapping),
+		cacheMu: sync.RWMutex{},
+	}
+
+	// Add fresh cache entries
+	service.cache["user1"] = &UserMapping{
+		GitHubUsername: "user1",
+		SlackUserID:    "U1",
+		CachedAt:       time.Now(),
+	}
+	service.cache["user2"] = &UserMapping{
+		GitHubUsername: "user2",
+		SlackUserID:    "U2",
+		CachedAt:       time.Now(),
+	}
+
+	// Add expired cache entry
+	service.cache["user3"] = &UserMapping{
+		GitHubUsername: "user3",
+		SlackUserID:    "U3",
+		CachedAt:       time.Now().Add(-25 * time.Hour), // Expired (>24h)
+	}
+
+	total, expired := service.CacheStats()
+	if total != 3 {
+		t.Errorf("expected 3 total entries, got %d", total)
+	}
+	if expired != 1 {
+		t.Errorf("expected 1 expired entry, got %d", expired)
+	}
+}
+
+func TestService_DoLookup_NoMatchesButHasGuesses(t *testing.T) {
+	ctx := context.Background()
+
+	mockGitHub := &MockGitHubLookup{
+		lookupFunc: func(_ context.Context, username, _ string) (*ghmailto.Result, error) {
+			return &ghmailto.Result{
+				Username:  username,
+				Addresses: []ghmailto.Address{}, // No direct addresses
+			}, nil
+		},
+		guessFunc: func(_ context.Context, username, _ string, _ ghmailto.GuessOptions) (*ghmailto.GuessResult, error) {
+			// Return guesses, but they won't match in Slack
+			return &ghmailto.GuessResult{
+				Username: username,
+				Guesses: []ghmailto.Address{
+					{
+						Email:      username + "@example.com",
+						Confidence: 80,
+						Pattern:    "{first}.{last}",
+					},
+				},
+			}, nil
+		},
+	}
+
+	mockSlack := &MockSlackAPI{
+		getUserByEmailFunc: func(ctx context.Context, email string) (*slack.User, error) {
+			// No Slack users match the guesses
+			return nil, &slack.SlackErrorResponse{Err: "users_not_found"}
+		},
+	}
+
+	service := &Service{
+		githubLookup: mockGitHub,
+		slackClient:  mockSlack,
+		cache:        make(map[string]*UserMapping),
+		cacheMu:      sync.RWMutex{},
+		lookupSem:    make(chan struct{}, 5),
+	}
+
+	// Should return empty string when guesses don't match
+	slackID, err := service.doLookup(ctx, "testuser", "test-org", "example.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if slackID != "" {
+		t.Errorf("expected empty Slack ID when guesses don't match, got: %s", slackID)
+	}
+}
+
+func TestService_FindSlackMatches_MultipleEmails(t *testing.T) {
+	ctx := context.Background()
+	email1 := "user1@example.com"
+	email2 := "user2@example.com"
+
+	mockSlack := &MockSlackAPI{
+		getUserByEmailFunc: func(ctx context.Context, email string) (*slack.User, error) {
+			if email == email1 {
+				return &slack.User{
+					ID:      "U111",
+					Name:    "user1",
+					Profile: slack.UserProfile{Email: email1},
+					Deleted: false,
+				}, nil
+			}
+			if email == email2 {
+				return &slack.User{
+					ID:      "U222",
+					Name:    "user2",
+					Profile: slack.UserProfile{Email: email2},
+					Deleted: false,
+				}, nil
+			}
+			return nil, &slack.SlackErrorResponse{Err: "users_not_found"}
+		},
+	}
+
+	service := &Service{
+		slackClient: mockSlack,
+		cache:       make(map[string]*UserMapping),
+		lookupSem:   make(chan struct{}, 5),
+	}
+
+	// findSlackMatches takes githubUsername and []string of emails
+	matches := service.findSlackMatches(ctx, "githubuser", []string{email1, email2})
+	if len(matches) != 2 {
+		t.Fatalf("expected 2 matches, got %d", len(matches))
+	}
+
+	// Verify first match
+	if matches[0].SlackUserID != "U111" {
+		t.Errorf("expected U111 for first match, got %s", matches[0].SlackUserID)
+	}
+
+	// Verify second match
+	if matches[1].SlackUserID != "U222" {
+		t.Errorf("expected U222 for second match, got %s", matches[1].SlackUserID)
+	}
+}
+

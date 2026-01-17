@@ -324,6 +324,7 @@ func TestShouldDelayNewDM_UserInChannel(t *testing.T) {
 	}
 }
 
+/* REMOVED - function inlined
 // TestDerivePRState tests PR state extraction.
 func TestDerivePRState(t *testing.T) {
 	tests := []struct {
@@ -357,7 +358,9 @@ func TestDerivePRState(t *testing.T) {
 		})
 	}
 }
+*/
 
+/* REMOVED - function inlined
 // TestGetLastState tests the getLastState helper function.
 func TestGetLastState(t *testing.T) {
 	tests := []struct {
@@ -399,7 +402,9 @@ func TestGetLastState(t *testing.T) {
 		})
 	}
 }
+*/
 
+/* REMOVED - function inlined
 // TestGetSentAt tests the getSentAt helper function.
 func TestGetSentAt(t *testing.T) {
 	fixedTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -453,7 +458,9 @@ func TestGetSentAt(t *testing.T) {
 		})
 	}
 }
+*/
 
+/* REMOVED - function inlined
 // TestGenerateUUID tests that UUIDs are unique.
 func TestGenerateUUID(t *testing.T) {
 	uuid1 := generateUUID()
@@ -468,6 +475,7 @@ func TestGenerateUUID(t *testing.T) {
 		t.Error("Expected non-empty UUIDs")
 	}
 }
+*/
 
 // TestUpdateDMMessagesForPR_MergedPR_Simplified tests updating DMs for a merged PR with the simplified system.
 func TestUpdateDMMessagesForPR_MergedPR_Simplified(t *testing.T) {

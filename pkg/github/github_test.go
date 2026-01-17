@@ -1569,3 +1569,635 @@ func TestNewManager_WeakRSAKey(t *testing.T) {
 		t.Errorf("expected weak key error, got: %v", err)
 	}
 }
+
+func TestNewManager_PKCS8WeakKey(t *testing.T) {
+	ctx := context.Background()
+	// Generate a weak key in PKCS8 format
+	weakKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("failed to generate weak key: %v", err)
+	}
+
+	// Encode as PKCS8
+	keyBytes, err := x509.MarshalPKCS8PrivateKey(weakKey)
+	if err != nil {
+		t.Fatalf("failed to marshal PKCS8: %v", err)
+	}
+
+	pemBlock := &pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: keyBytes,
+	}
+	weakPEM := string(pem.EncodeToMemory(pemBlock))
+
+	_, err = NewManager(ctx, "123456", weakPEM, false)
+	if err == nil {
+		t.Error("expected error for weak PKCS8 RSA key, got nil")
+	}
+	if !strings.Contains(err.Error(), "RSA key too weak") {
+		t.Errorf("expected weak key error, got: %v", err)
+	}
+}
+
+func TestNewManager_PKCS1SuccessPath(t *testing.T) {
+	ctx := context.Background()
+	// Generate valid RSA key
+	validKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	// Encode as PKCS1
+	keyBytes := x509.MarshalPKCS1PrivateKey(validKey)
+	pemBlock := &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: keyBytes,
+	}
+	validPEM := string(pem.EncodeToMemory(pemBlock))
+
+	// Will fail at RefreshInstallations but tests PKCS1 parse success
+	_, err = NewManager(ctx, "123456", validPEM, false)
+	if err == nil {
+		t.Error("expected error from RefreshInstallations without valid API")
+	}
+	// Should NOT be a parse error
+	if strings.Contains(err.Error(), "parse") && !strings.Contains(err.Error(), "discover") {
+		t.Errorf("unexpected parse error with valid PKCS1 key: %v", err)
+	}
+}
+
+func TestNewManager_PKCS8SuccessPath(t *testing.T) {
+	ctx := context.Background()
+	// Generate valid RSA key
+	validKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	// Encode as PKCS8
+	keyBytes, err := x509.MarshalPKCS8PrivateKey(validKey)
+	if err != nil {
+		t.Fatalf("failed to marshal PKCS8: %v", err)
+	}
+
+	pemBlock := &pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: keyBytes,
+	}
+	validPEM := string(pem.EncodeToMemory(pemBlock))
+
+	// Will fail at RefreshInstallations but tests PKCS8 parse success
+	_, err = NewManager(ctx, "123456", validPEM, false)
+	if err == nil {
+		t.Error("expected error from RefreshInstallations without valid API")
+	}
+	// Should NOT be a parse error
+	if strings.Contains(err.Error(), "parse") && !strings.Contains(err.Error(), "discover") {
+		t.Errorf("unexpected parse error with valid PKCS8 key: %v", err)
+	}
+}
+
+func TestRefreshInstallations_WithMockServer(t *testing.T) {
+	// Generate valid RSA key
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	installationCallCount := 0
+	tokenCallCount := 0
+
+	// Mock server for GitHub API
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// List installations endpoint
+		if strings.HasSuffix(r.URL.Path, "/app/installations") {
+			installationCallCount++
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			resp := []map[string]any{
+				{
+					"id": 123,
+					"account": map[string]any{
+						"login": "test-org",
+						"type":  "Organization",
+					},
+				},
+				{
+					"id": 456,
+					"account": map[string]any{
+						"login": "another-org",
+						"type":  "Organization",
+					},
+				},
+			}
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		// Installation token endpoint
+		if strings.Contains(r.URL.Path, "/access_tokens") {
+			tokenCallCount++
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			resp := map[string]any{
+				"token":      "ghs_test_token_" + fmt.Sprint(tokenCallCount),
+				"expires_at": time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+			}
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	m := &Manager{
+		appID:      "test-app",
+		privateKey: key,
+		clients:    make(map[string]*Client),
+		baseURL:    server.URL,
+	}
+
+	err = m.RefreshInstallations(context.Background())
+
+	// Should succeed with mock server
+	if err != nil {
+		t.Fatalf("expected success with mock server, got error: %v", err)
+	}
+
+	// Should have created clients for both orgs
+	if len(m.clients) != 2 {
+		t.Errorf("expected 2 clients, got %d", len(m.clients))
+	}
+
+	// Verify clients exist
+	if _, ok := m.clients["test-org"]; !ok {
+		t.Error("expected client for test-org")
+	}
+	if _, ok := m.clients["another-org"]; !ok {
+		t.Error("expected client for another-org")
+	}
+
+	// Verify API calls
+	if installationCallCount != 1 {
+		t.Errorf("expected 1 installation list call, got %d", installationCallCount)
+	}
+	if tokenCallCount != 2 {
+		t.Errorf("expected 2 token calls (one per org), got %d", tokenCallCount)
+	}
+}
+
+func TestRefreshInstallations_UnauthorizedError(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	// Mock server that returns 401
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/app/installations") {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	m := &Manager{
+		appID:      "test-app",
+		privateKey: key,
+		clients:    make(map[string]*Client),
+		baseURL:    server.URL,
+	}
+
+	err = m.RefreshInstallations(context.Background())
+
+	// Should fail with unrecoverable error
+	if err == nil {
+		t.Error("expected error for 401 Unauthorized")
+	}
+}
+
+func TestRefreshInstallations_InvalidBaseURL(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	m := &Manager{
+		appID:      "test-app",
+		privateKey: key,
+		clients:    make(map[string]*Client),
+		baseURL:    "://invalid-url",
+	}
+
+	err = m.RefreshInstallations(context.Background())
+
+	// Should fail with URL parse error
+	if err == nil {
+		t.Error("expected error for invalid base URL")
+	}
+	if !strings.Contains(err.Error(), "invalid base URL") {
+		t.Errorf("expected invalid base URL error, got: %v", err)
+	}
+}
+
+func TestInstallationToken_SuccessfulRefresh(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	// Mock server for installation token
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/access_tokens") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			resp := map[string]any{
+				"token":      "ghs_refreshed_token",
+				"expires_at": time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+			}
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	c := &Client{
+		appID:             "test-app",
+		privateKey:        key,
+		installationID:    123,
+		installationToken: "old-token",
+		tokenExpiry:       time.Now().Add(-1 * time.Hour), // Expired
+		baseURL:           server.URL,
+	}
+
+	// Call InstallationToken with expired token
+	token := c.InstallationToken(context.Background())
+
+	// Should return the refreshed token
+	if token != "ghs_refreshed_token" {
+		t.Errorf("expected refreshed token 'ghs_refreshed_token', got %q", token)
+	}
+}
+
+func TestInstallationToken_DoubleCheckLock(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	c := &Client{
+		appID:             "test-app",
+		privateKey:        key,
+		installationID:    123,
+		installationToken: "initial-token",
+		tokenExpiry:       time.Now().Add(-1 * time.Minute), // Expired
+	}
+
+	// Simulate another goroutine refreshing the token
+	// We'll set a future expiry before the second goroutine acquires the lock
+	done := make(chan bool, 2)
+	var token1, token2 string
+
+	// First goroutine - will refresh
+	go func() {
+		c.tokenMutex.Lock()
+		// Simulate refresh by setting new token and expiry
+		c.installationToken = "refreshed-by-goroutine-1"
+		c.tokenExpiry = time.Now().Add(1 * time.Hour)
+		c.tokenMutex.Unlock()
+		token1 = c.InstallationToken(context.Background())
+		done <- true
+	}()
+
+	// Small delay to ensure first goroutine runs first
+	time.Sleep(50 * time.Millisecond)
+
+	// Second goroutine - should see the refreshed token (double-check lock path)
+	go func() {
+		token2 = c.InstallationToken(context.Background())
+		done <- true
+	}()
+
+	// Wait for both
+	<-done
+	<-done
+
+	// Both should get the refreshed token
+	if token1 != "refreshed-by-goroutine-1" {
+		t.Errorf("goroutine 1 expected 'refreshed-by-goroutine-1', got %q", token1)
+	}
+	if token2 != "refreshed-by-goroutine-1" {
+		t.Errorf("goroutine 2 expected 'refreshed-by-goroutine-1', got %q", token2)
+	}
+}
+
+func TestInstallationToken_ShortToken(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	// Test edge case where token is shorter than 10 characters
+	c := &Client{
+		appID:             "test-app",
+		privateKey:        key,
+		installationID:    123,
+		installationToken: "short",
+		tokenExpiry:       time.Now().Add(-1 * time.Hour), // Expired
+	}
+
+	// This should not panic even though token is < 10 chars
+	// It will fail to refresh (no valid API) but should handle the short token safely
+	token := c.InstallationToken(context.Background())
+
+	// Should return the old token as fallback when refresh fails
+	if token != "short" {
+		t.Errorf("expected fallback to 'short', got %q", token)
+	}
+}
+
+func TestRefreshInstallations_SkipPersonalAccount(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	// Mock server that returns a mix of org and user accounts
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/app/installations") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			resp := []map[string]any{
+				{
+					"id": 123,
+					"account": map[string]any{
+						"login": "test-org",
+						"type":  "Organization",
+					},
+				},
+				{
+					"id": 456,
+					"account": map[string]any{
+						"login": "personal-user",
+						"type":  "User",
+					},
+				},
+			}
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		// Installation token endpoint
+		if strings.Contains(r.URL.Path, "/access_tokens") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			resp := map[string]any{
+				"token":      "ghs_test_token",
+				"expires_at": time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+			}
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	m := &Manager{
+		appID:                 "test-app",
+		privateKey:            key,
+		clients:               make(map[string]*Client),
+		baseURL:               server.URL,
+		allowPersonalAccounts: false, // Skip personal accounts
+	}
+
+	err = m.RefreshInstallations(context.Background())
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+
+	// Should only have the organization, not the personal account
+	if len(m.clients) != 1 {
+		t.Errorf("expected 1 client (org only), got %d", len(m.clients))
+	}
+
+	if _, ok := m.clients["test-org"]; !ok {
+		t.Error("expected client for test-org")
+	}
+
+	if _, ok := m.clients["personal-user"]; ok {
+		t.Error("personal-user should have been skipped")
+	}
+}
+
+func TestRefreshInstallations_AuthTimeout(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	// Mock server that returns installations
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/app/installations") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			resp := []map[string]any{
+				{
+					"id": 123,
+					"account": map[string]any{
+						"login": "test-org",
+						"type":  "Organization",
+					},
+				},
+			}
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		// Delay access token to allow context cancellation
+		if strings.Contains(r.URL.Path, "/access_tokens") {
+			time.Sleep(500 * time.Millisecond)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	m := &Manager{
+		appID:      "test-app",
+		privateKey: key,
+		clients:    make(map[string]*Client),
+		baseURL:    server.URL,
+	}
+
+	// Use a context that will be canceled
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	err = m.RefreshInstallations(ctx)
+
+	// Should complete but skip the org that couldn't authenticate
+	if err != nil {
+		t.Fatalf("expected success despite auth timeout, got: %v", err)
+	}
+
+	// Should have no clients since authentication was canceled
+	if len(m.clients) != 0 {
+		t.Errorf("expected 0 clients (auth canceled), got %d", len(m.clients))
+	}
+}
+
+func TestRefreshInstallations_PreserveExistingClient(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	existingClient := &Client{
+		organization:      "test-org",
+		installationToken: "existing-token",
+	}
+
+	// Mock server that returns error for token creation
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/app/installations") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			resp := []map[string]any{
+				{
+					"id": 123,
+					"account": map[string]any{
+						"login": "test-org",
+						"type":  "Organization",
+					},
+				},
+			}
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		// Return error for access token
+		if strings.Contains(r.URL.Path, "/access_tokens") {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	m := &Manager{
+		appID:      "test-app",
+		privateKey: key,
+		clients: map[string]*Client{
+			"test-org": existingClient,
+		},
+		baseURL: server.URL,
+	}
+
+	err = m.RefreshInstallations(context.Background())
+	if err != nil {
+		t.Fatalf("expected success with preserved client, got: %v", err)
+	}
+
+	// Should preserve existing client when auth fails
+	if len(m.clients) != 1 {
+		t.Errorf("expected 1 client (preserved), got %d", len(m.clients))
+	}
+
+	client, ok := m.clients["test-org"]
+	if !ok {
+		t.Fatal("expected client for test-org to be preserved")
+	}
+
+	if client != existingClient {
+		t.Error("expected same client instance to be preserved")
+	}
+}
+
+func TestRefreshInstallations_RemoveUninstalledOrg(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	oldClient := &Client{
+		organization:      "old-org",
+		installationToken: "old-token",
+	}
+
+	// Mock server that returns only new org
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/app/installations") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			resp := []map[string]any{
+				{
+					"id": 123,
+					"account": map[string]any{
+						"login": "new-org",
+						"type":  "Organization",
+					},
+				},
+			}
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		// Installation token endpoint
+		if strings.Contains(r.URL.Path, "/access_tokens") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			resp := map[string]any{
+				"token":      "ghs_new_token",
+				"expires_at": time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+			}
+			//nolint:errcheck // Error intentionally ignored in test mock HTTP handler
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	m := &Manager{
+		appID:      "test-app",
+		privateKey: key,
+		clients: map[string]*Client{
+			"old-org": oldClient,
+		},
+		baseURL: server.URL,
+	}
+
+	err = m.RefreshInstallations(context.Background())
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+
+	// Should have removed old-org and added new-org
+	if len(m.clients) != 1 {
+		t.Errorf("expected 1 client (new-org), got %d", len(m.clients))
+	}
+
+	if _, ok := m.clients["old-org"]; ok {
+		t.Error("old-org should have been removed")
+	}
+
+	if _, ok := m.clients["new-org"]; !ok {
+		t.Error("expected client for new-org")
+	}
+}

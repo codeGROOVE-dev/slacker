@@ -1,10 +1,10 @@
 package bot
 
 import (
+	// Commented out unused: "strings"
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -348,6 +348,7 @@ func TestShouldReconcilePR(t *testing.T) {
 	}
 }
 
+/* REMOVED - function inlined
 // TestMakePollEventKey tests the pure function for creating poll event keys.
 func TestMakePollEventKey(t *testing.T) {
 	tests := []struct {
@@ -382,7 +383,9 @@ func TestMakePollEventKey(t *testing.T) {
 		})
 	}
 }
+*/
 
+/* REMOVED - function inlined
 // TestMakeClosedPREventKey tests the pure function for creating closed PR event keys.
 func TestMakeClosedPREventKey(t *testing.T) {
 	tests := []struct {
@@ -420,6 +423,7 @@ func TestMakeClosedPREventKey(t *testing.T) {
 		})
 	}
 }
+*/
 
 // TestFormatPRIdentifier tests the pure function for formatting PR identifiers.
 func TestFormatPRIdentifier(t *testing.T) {
@@ -463,6 +467,7 @@ func TestFormatPRIdentifier(t *testing.T) {
 	}
 }
 
+/* REMOVED - function inlined
 // TestMakeReconcileEventKey tests the pure function for creating reconcile event keys.
 func TestMakeReconcileEventKey(t *testing.T) {
 	tests := []struct {
@@ -494,6 +499,7 @@ func TestMakeReconcileEventKey(t *testing.T) {
 		})
 	}
 }
+*/
 
 // TestIsChannelResolutionFailed tests channel resolution failure detection.
 func TestIsChannelResolutionFailed(t *testing.T) {

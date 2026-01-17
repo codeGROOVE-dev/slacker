@@ -269,3 +269,195 @@ func TestClientInteractionsHandlerNoDoubleVerification(t *testing.T) {
 	// 3. The interaction was processed successfully
 	t.Logf("✓ InteractionsHandler processed request without double signature verification")
 }
+// TestHandleEvents tests the event routing handler.
+func TestHandleEvents(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		body       string
+		teamID     string
+		eventType  string
+		wantStatus int
+		wantError  bool
+	}{
+		{
+			name:       "url_verification challenge",
+			body:       `{"type":"url_verification","challenge":"test_challenge","token":"test_token"}`,
+			eventType:  "url_verification",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "malformed JSON",
+			body:       `{invalid json`,
+			wantStatus: http.StatusBadRequest,
+			wantError:  true,
+		},
+		{
+			name:       "missing team_id",
+			body:       `{"type":"event_callback","event":{"type":"app_home_opened"}}`,
+			wantStatus: http.StatusBadRequest,
+			wantError:  true,
+		},
+		{
+			name:       "valid event with team_id",
+			body:       `{"type":"event_callback","team_id":"T123","event":{"type":"message"}}`,
+			teamID:     "T123",
+			eventType:  "event_callback",
+			wantStatus: http.StatusUnauthorized, // Will fail signature check without proper setup
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager("")
+			router := NewEventRouter(manager)
+
+			// For tests that need a client, create one
+			if tt.teamID != "" {
+				client := &Client{
+					signingSecret: "test-secret",
+					cache: &apiCache{
+						entries: make(map[string]cacheEntry),
+					},
+				}
+				// Store the client in the manager
+				manager.mu.Lock()
+				manager.clients[tt.teamID] = client
+				manager.mu.Unlock()
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/slack/events", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			if tt.teamID != "" {
+				req.Header.Set("X-Slack-Signature", "v0=invalid")
+				req.Header.Set("X-Slack-Request-Timestamp", "1234567890")
+			}
+
+			w := httptest.NewRecorder()
+			router.HandleEvents(w, req)
+
+			if w.Code != tt.wantStatus {
+				t.Errorf("HandleEvents() status = %v, want %v", w.Code, tt.wantStatus)
+			}
+
+			// For url_verification, check challenge is returned
+			if tt.eventType == "url_verification" {
+				body := w.Body.String()
+				if !strings.Contains(body, "test_challenge") {
+					t.Errorf("HandleEvents() body = %q, want challenge response", body)
+				}
+			}
+		})
+	}
+}
+
+// TestHandleEvents_ReadBodyError tests error handling when body read fails.
+func TestHandleEvents_ReadBodyError(t *testing.T) {
+	t.Parallel()
+
+	manager := NewManager("")
+	router := NewEventRouter(manager)
+
+	req := httptest.NewRequest(http.MethodPost, "/slack/events", &errReader{})
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	router.HandleEvents(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("HandleEvents() status = %v, want %v", w.Code, http.StatusBadRequest)
+	}
+}
+
+// TestHandleSlashCommand tests slash command routing.
+func TestHandleSlashCommand(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		formData   url.Values
+		teamID     string
+		wantStatus int
+	}{
+		{
+			name: "valid slash command",
+			formData: url.Values{
+				"team_id": {"T123"},
+				"command": {"/goose"},
+				"text":    {"help"},
+			},
+			teamID:     "T123",
+			wantStatus: http.StatusUnauthorized, // Will fail signature check
+		},
+		{
+			name: "missing team_id",
+			formData: url.Values{
+				"command": {"/goose"},
+			},
+			wantStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager("")
+			router := NewEventRouter(manager)
+
+			// Register client if team_id is provided
+			if tt.teamID != "" {
+				client := &Client{
+					signingSecret: "test-secret",
+					cache: &apiCache{
+						entries: make(map[string]cacheEntry),
+					},
+				}
+				// Store the client in the manager
+				manager.mu.Lock()
+				manager.clients[tt.teamID] = client
+				manager.mu.Unlock()
+			}
+
+			body := tt.formData.Encode()
+			req := httptest.NewRequest(http.MethodPost, "/slack/commands", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			if tt.teamID != "" {
+				req.Header.Set("X-Slack-Signature", "v0=invalid")
+				req.Header.Set("X-Slack-Request-Timestamp", "1234567890")
+			}
+
+			w := httptest.NewRecorder()
+			router.HandleSlashCommand(w, req)
+
+			if w.Code != tt.wantStatus {
+				t.Errorf("HandleSlashCommand() status = %v, want %v", w.Code, tt.wantStatus)
+			}
+		})
+	}
+}
+
+// TestHandleSlashCommand_ParseFormError tests form parsing errors.
+func TestHandleSlashCommand_ParseFormError(t *testing.T) {
+	t.Parallel()
+
+	manager := NewManager("")
+	router := NewEventRouter(manager)
+
+	// Create request with invalid form data (missing Content-Type will cause parse error on some payloads)
+	req := httptest.NewRequest(http.MethodPost, "/slack/commands", strings.NewReader("invalid%form"))
+	// Don't set Content-Type to trigger parse error
+
+	w := httptest.NewRecorder()
+	router.HandleSlashCommand(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("HandleSlashCommand() status = %v, want %v", w.Code, http.StatusBadRequest)
+	}
+}
+
+// errReader is an io.Reader that always returns an error.
+type errReader struct{}
+
+func (e *errReader) Read(p []byte) (n int, err error) {
+	return 0, fmt.Errorf("read error")
+}
