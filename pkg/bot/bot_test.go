@@ -512,6 +512,110 @@ func TestShouldPostThread(t *testing.T) {
 			wantPost:       true,
 			wantReasonPart: "invalid_config",
 		},
+		{
+			name: "passing: posts when in StateReviewedNeedsRefinement",
+			when: "passing",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State: "open",
+				},
+				Analysis: turn.Analysis{
+					WorkflowState: string(turn.StateReviewedNeedsRefinement),
+				},
+			},
+			wantPost:       true,
+			wantReasonPart: "workflow_state",
+		},
+		{
+			name: "passing: posts when in StateRefinedWaitingForApproval",
+			when: "passing",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State: "open",
+				},
+				Analysis: turn.Analysis{
+					WorkflowState: string(turn.StateRefinedWaitingForApproval),
+				},
+			},
+			wantPost:       true,
+			wantReasonPart: "workflow_state",
+		},
+		{
+			name: "passing: posts when in StateApprovedWaitingForMerge",
+			when: "passing",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State: "open",
+				},
+				Analysis: turn.Analysis{
+					WorkflowState: string(turn.StateApprovedWaitingForMerge),
+				},
+			},
+			wantPost:       true,
+			wantReasonPart: "workflow_state",
+		},
+		{
+			name: "passing: does not post when StateNewlyPublished",
+			when: "passing",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State: "open",
+				},
+				Analysis: turn.Analysis{
+					WorkflowState: string(turn.StateNewlyPublished),
+				},
+			},
+			wantPost:       false,
+			wantReasonPart: "waiting_for",
+		},
+		{
+			name: "passing: does not post when StateInDraft",
+			when: "passing",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State: "open",
+				},
+				Analysis: turn.Analysis{
+					WorkflowState: string(turn.StateInDraft),
+				},
+			},
+			wantPost:       false,
+			wantReasonPart: "waiting_for",
+		},
+		{
+			name: "passing: does not post when StateTestedWaitingForAssignment",
+			when: "passing",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State: "open",
+				},
+				Analysis: turn.Analysis{
+					WorkflowState: string(turn.StateTestedWaitingForAssignment),
+				},
+			},
+			wantPost:       false,
+			wantReasonPart: "waiting_for",
+		},
+		{
+			name: "passing: uses fallback when tests have Waiting status",
+			when: "passing",
+			checkResult: &turn.CheckResponse{
+				PullRequest: prx.PullRequest{
+					State: "open",
+				},
+				Analysis: turn.Analysis{
+					WorkflowState: "unknown_state",
+					Checks: turn.Checks{
+						Passing: 0,
+						Failing: 0,
+						Pending: 0,
+						Waiting: 3,
+					},
+				},
+			},
+			wantPost:       false,
+			wantReasonPart: "tests_pending",
+		},
 	}
 
 	for _, tt := range tests {

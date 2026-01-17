@@ -15,28 +15,10 @@ import (
 	gogithub "github.com/google/go-github/v50/github"
 )
 
-// makePollEventKey creates an event key for poll-based PR processing.
-// This is a pure function that can be easily tested.
-func makePollEventKey(prURL string, updatedAt time.Time) string {
-	return fmt.Sprintf("poll:%s:%s", prURL, updatedAt.Format(time.RFC3339))
-}
-
-// makeClosedPREventKey creates an event key for closed/merged PR updates.
-// This is a pure function that can be easily tested.
-func makeClosedPREventKey(prURL, state string, updatedAt time.Time) string {
-	return fmt.Sprintf("poll_closed:%s:%s:%s", prURL, state, updatedAt.Format(time.RFC3339))
-}
-
 // formatPRIdentifier creates a human-readable PR identifier.
 // This is a pure function that can be easily tested.
 func formatPRIdentifier(owner, repo string, prNumber int) string {
 	return fmt.Sprintf("%s/%s#%d", owner, repo, prNumber)
-}
-
-// makeReconcileEventKey creates an event key for startup reconciliation.
-// This is a pure function that can be easily tested.
-func makeReconcileEventKey(prURL string, updatedAt time.Time) string {
-	return fmt.Sprintf("reconcile:%s:%s", prURL, updatedAt.Format(time.RFC3339))
 }
 
 // PollAndReconcile checks all open PRs and ensures notifications are sent.
@@ -89,7 +71,7 @@ func (c *Coordinator) pollAndReconcileWithSearcher(ctx context.Context, searcher
 		pr := &prs[i]
 
 		// Create event key for this PR update to prevent duplicate processing
-		eventKey := makePollEventKey(pr.URL, pr.UpdatedAt)
+		eventKey := fmt.Sprintf("poll:%s:%s", pr.URL, pr.UpdatedAt.Format(time.RFC3339))
 
 		// Skip if already processed (by webhook or previous poll)
 		if c.stateStore.WasProcessed(ctx, eventKey) {
@@ -145,7 +127,7 @@ func (c *Coordinator) pollAndReconcileWithSearcher(ctx context.Context, searcher
 			pr := &closedPRs[i]
 
 			// Create event key for this PR state change
-			eventKey := makeClosedPREventKey(pr.URL, pr.State, pr.UpdatedAt)
+			eventKey := fmt.Sprintf("poll_closed:%s:%s:%s", pr.URL, pr.State, pr.UpdatedAt.Format(time.RFC3339))
 
 			// Skip if already processed
 			if c.stateStore.WasProcessed(ctx, eventKey) {
@@ -375,7 +357,7 @@ func (c *Coordinator) StartupReconciliation(ctx context.Context) {
 
 		// Create event key for this PR update (same format as webhook events)
 		// This prevents processing the same update twice if a webhook was already received
-		eventKey := makeReconcileEventKey(pr.URL, pr.UpdatedAt)
+		eventKey := fmt.Sprintf("reconcile:%s:%s", pr.URL, pr.UpdatedAt.Format(time.RFC3339))
 
 		// Check if we already processed this exact PR update (via webhook or previous reconciliation)
 		if c.stateStore.WasProcessed(ctx, eventKey) {

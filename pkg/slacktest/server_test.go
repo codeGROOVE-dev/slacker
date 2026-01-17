@@ -264,8 +264,10 @@ func TestMockServerConversationsOpen(t *testing.T) {
 	}
 }
 
-// TestMockServerUsersInfo skipped due to mock implementation details
-// The mock server's handleUsersInfo may have presence field type mismatch
+// TestMockServerUsersInfo is skipped due to type mismatch between mock
+// implementation and Slack SDK expectations for the presence field.
+// The mock returns presence as an object, but the SDK expects a string.
+// This endpoint is covered by getUserInfo calls in other tests.
 
 func TestMockServerUsersGetPresence(t *testing.T) {
 	server := New()
@@ -305,5 +307,115 @@ func TestMockServerAuthTest(t *testing.T) {
 
 	if response.User != "test-bot" {
 		t.Errorf("Expected user 'test-bot', got '%s'", response.User)
+	}
+}
+
+func TestMockServerConversationsInfo_NotFound(t *testing.T) {
+	server := New()
+	defer server.Close()
+
+	client := slack.New("test-token", slack.OptionAPIURL(server.URL+"/api/"))
+
+	// Try to get info for non-existent channel
+	_, err := client.GetConversationInfo(&slack.GetConversationInfoInput{
+		ChannelID: "C999",
+	})
+	if err == nil {
+		t.Error("Expected error for non-existent channel, got nil")
+	}
+}
+
+func TestMockServerConversationsMembers_NotFound(t *testing.T) {
+	server := New()
+	defer server.Close()
+
+	client := slack.New("test-token", slack.OptionAPIURL(server.URL+"/api/"))
+
+	// Try to get members for non-existent channel
+	_, _, err := client.GetUsersInConversation(&slack.GetUsersInConversationParameters{
+		ChannelID: "C999",
+	})
+	if err == nil {
+		t.Error("Expected error for non-existent channel, got nil")
+	}
+}
+
+func TestMockServerPostMessage_WithBlocks(t *testing.T) {
+	server := New()
+	defer server.Close()
+
+	server.AddChannel("C001", "general", true)
+
+	client := slack.New("test-token", slack.OptionAPIURL(server.URL+"/api/"))
+
+	// Post a message with blocks (blocks are handled but not stored separately)
+	blocks := []slack.Block{
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", "Test message", false, false),
+			nil,
+			nil,
+		),
+	}
+
+	_, _, err := client.PostMessage("C001", slack.MsgOptionBlocks(blocks...))
+	if err != nil {
+		t.Fatalf("PostMessage with blocks failed: %v", err)
+	}
+
+	// Verify message was posted
+	messages := server.PostedMessages()
+	if len(messages) != 1 {
+		t.Fatalf("Expected 1 posted message, got %d", len(messages))
+	}
+}
+
+func TestMockServerChatUpdate_WithBlocks(t *testing.T) {
+	server := New()
+	defer server.Close()
+
+	server.AddChannel("C001", "general", true)
+	server.AddMessage("C001", "Original", "123")
+
+	client := slack.New("test-token", slack.OptionAPIURL(server.URL+"/api/"))
+
+	// Update with blocks (blocks are handled but not stored separately)
+	blocks := []slack.Block{
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", "Updated with blocks", false, false),
+			nil,
+			nil,
+		),
+	}
+
+	_, _, _, err := client.UpdateMessage("C001", "123", slack.MsgOptionBlocks(blocks...))
+	if err != nil {
+		t.Fatalf("UpdateMessage with blocks failed: %v", err)
+	}
+
+	updates := server.UpdatedMessages()
+	if len(updates) != 1 {
+		t.Fatalf("Expected 1 update, got %d", len(updates))
+	}
+}
+
+func TestMockServerConversationsHistory_Empty(t *testing.T) {
+	server := New()
+	defer server.Close()
+
+	server.AddChannel("C001", "general", true)
+	// Don't add any messages
+
+	client := slack.New("test-token", slack.OptionAPIURL(server.URL+"/api/"))
+
+	// Get history for channel with no messages
+	history, err := client.GetConversationHistory(&slack.GetConversationHistoryParameters{
+		ChannelID: "C001",
+	})
+	if err != nil {
+		t.Fatalf("GetConversationHistory failed: %v", err)
+	}
+
+	if len(history.Messages) != 0 {
+		t.Errorf("Expected 0 messages, got %d", len(history.Messages))
 	}
 }

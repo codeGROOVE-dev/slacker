@@ -241,3 +241,82 @@ func TestReverseMapping_WrongOrgDomain(t *testing.T) {
 		t.Fatal("expected error for mismatched email domain, got nil")
 	}
 }
+
+func TestReverseMapping_CacheCleanup(t *testing.T) {
+	service := NewReverseService(nil, "fake-token")
+
+	// Add mix of expired and fresh entries
+	service.cache["U1"] = &ReverseMapping{
+		CachedAt:    time.Now().Add(-25 * time.Hour), // Expired
+		SlackUserID: "U1",
+	}
+	service.cache["U2"] = &ReverseMapping{
+		CachedAt:    time.Now(), // Fresh
+		SlackUserID: "U2",
+	}
+	service.cache["U3"] = &ReverseMapping{
+		CachedAt:    time.Now().Add(-26 * time.Hour), // Expired
+		SlackUserID: "U3",
+	}
+
+	// Cache a new mapping, which should trigger cleanup
+	service.cacheMapping(&ReverseMapping{
+		CachedAt:       time.Now(),
+		SlackUserID:    "U4",
+		GitHubUsername: "newuser",
+	})
+
+	// Check that expired entries were removed
+	total, _ := service.CacheStats()
+	if total != 2 { // Should only have U2 and U4
+		t.Errorf("expected 2 entries after cleanup, got: %d", total)
+	}
+
+	// Verify U1 and U3 were removed
+	if _, exists := service.cache["U1"]; exists {
+		t.Error("expected U1 to be cleaned up")
+	}
+	if _, exists := service.cache["U3"]; exists {
+		t.Error("expected U3 to be cleaned up")
+	}
+
+	// Verify U2 and U4 remain
+	if _, exists := service.cache["U2"]; !exists {
+		t.Error("expected U2 to remain")
+	}
+	if _, exists := service.cache["U4"]; !exists {
+		t.Error("expected U4 to remain")
+	}
+}
+
+func TestReverseMapping_CachedMappingMiss(t *testing.T) {
+	service := NewReverseService(nil, "fake-token")
+
+	// Try to get a mapping that doesn't exist
+	mapping := service.cachedMapping("UNONEXISTENT")
+	if mapping != nil {
+		t.Errorf("expected nil for non-existent cache key, got: %v", mapping)
+	}
+}
+
+func TestReverseMapping_CachedMappingFresh(t *testing.T) {
+	service := NewReverseService(nil, "fake-token")
+
+	// Add a fresh entry
+	service.cache["U123"] = &ReverseMapping{
+		CachedAt:       time.Now(),
+		SlackUserID:    "U123",
+		GitHubUsername: "testuser",
+		Confidence:     90,
+	}
+
+	// Should return the fresh mapping
+	mapping := service.cachedMapping("U123")
+	if mapping == nil {
+		t.Fatal("expected mapping, got nil")
+	}
+
+	if mapping.GitHubUsername != "testuser" {
+		t.Errorf("expected 'testuser', got: %s", mapping.GitHubUsername)
+	}
+}

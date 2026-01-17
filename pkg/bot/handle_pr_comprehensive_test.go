@@ -59,6 +59,167 @@ func TestHandlePullRequestEventWithData_ConfigLoadError(t *testing.T) {
 	// Test passes if it returns without panicking
 }
 
+// TestHandlePullRequestEventWithData_NoChannels tests when no channels are configured.
+func TestHandlePullRequestEventWithData_NoChannels(t *testing.T) {
+	ctx := context.Background()
+
+	cfg := NewMockConfig().
+		WithChannels("testorg", "testrepo", []string{}). // No channels
+		Build()
+
+	c := NewTestCoordinator().
+		WithConfig(cfg).
+		Build()
+
+	event := struct {
+		Action      string `json:"action"`
+		PullRequest struct {
+			HTMLURL   string    `json:"html_url"`
+			Title     string    `json:"title"`
+			CreatedAt time.Time `json:"created_at"`
+			User      struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			Number int `json:"number"`
+		} `json:"pull_request"`
+		Number int `json:"number"`
+	}{
+		Action: "opened",
+		Number: 42,
+	}
+	event.PullRequest.HTMLURL = "https://github.com/testorg/testrepo/pull/42"
+	event.PullRequest.Title = "Test PR"
+	event.PullRequest.CreatedAt = time.Now()
+	event.PullRequest.User.Login = "testauthor"
+	event.PullRequest.Number = 42
+
+	checkResult := &turn.CheckResponse{
+		PullRequest: prx.PullRequest{State: "open"},
+		Analysis:    turn.Analysis{},
+	}
+
+	// Should return early when no channels configured
+	c.handlePullRequestEventWithData(ctx, "testorg", "testrepo", event, checkResult, nil)
+
+	// Test passes if it returns without panicking
+}
+
+// TestHandlePullRequestEventWithData_MergedNoBlockedUsers tests merged PR with no blocked users.
+func TestHandlePullRequestEventWithData_MergedNoBlockedUsers(t *testing.T) {
+	ctx := context.Background()
+
+	cfg := NewMockConfig().
+		WithChannels("testorg", "testrepo", []string{"testrepo"}).
+		Build()
+
+	mockSlack := NewMockSlack().
+		WithChannelResolution("testrepo", "C123").
+		Build()
+
+	c := NewTestCoordinator().
+		WithConfig(cfg).
+		WithSlack(mockSlack).
+		Build()
+
+	event := struct {
+		Action      string `json:"action"`
+		PullRequest struct {
+			HTMLURL   string    `json:"html_url"`
+			Title     string    `json:"title"`
+			CreatedAt time.Time `json:"created_at"`
+			User      struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			Number int `json:"number"`
+		} `json:"pull_request"`
+		Number int `json:"number"`
+	}{
+		Action: "closed",
+		Number: 42,
+	}
+	event.PullRequest.HTMLURL = "https://github.com/testorg/testrepo/pull/42"
+	event.PullRequest.Title = "Test PR"
+	event.PullRequest.CreatedAt = time.Now()
+	event.PullRequest.User.Login = "testauthor"
+	event.PullRequest.Number = 42
+
+	checkResult := &turn.CheckResponse{
+		PullRequest: prx.PullRequest{
+			State:  "closed",
+			Merged: true,
+		},
+		Analysis: turn.Analysis{
+			NextAction: map[string]turn.Action{}, // No blocked users
+		},
+	}
+
+	// Should call updateDMMessagesForPR for merged state
+	c.handlePullRequestEventWithData(ctx, "testorg", "testrepo", event, checkResult, nil)
+
+	// Give async operations time to complete
+	time.Sleep(100 * time.Millisecond)
+
+	// Test passes if it returns without panicking
+}
+
+// TestHandlePullRequestEventWithData_ClosedNoBlockedUsers tests closed (not merged) PR with no blocked users.
+func TestHandlePullRequestEventWithData_ClosedNoBlockedUsers(t *testing.T) {
+	ctx := context.Background()
+
+	cfg := NewMockConfig().
+		WithChannels("testorg", "testrepo", []string{"testrepo"}).
+		Build()
+
+	mockSlack := NewMockSlack().
+		WithChannelResolution("testrepo", "C123").
+		Build()
+
+	c := NewTestCoordinator().
+		WithConfig(cfg).
+		WithSlack(mockSlack).
+		Build()
+
+	event := struct {
+		Action      string `json:"action"`
+		PullRequest struct {
+			HTMLURL   string    `json:"html_url"`
+			Title     string    `json:"title"`
+			CreatedAt time.Time `json:"created_at"`
+			User      struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			Number int `json:"number"`
+		} `json:"pull_request"`
+		Number int `json:"number"`
+	}{
+		Action: "closed",
+		Number: 42,
+	}
+	event.PullRequest.HTMLURL = "https://github.com/testorg/testrepo/pull/42"
+	event.PullRequest.Title = "Test PR"
+	event.PullRequest.CreatedAt = time.Now()
+	event.PullRequest.User.Login = "testauthor"
+	event.PullRequest.Number = 42
+
+	checkResult := &turn.CheckResponse{
+		PullRequest: prx.PullRequest{
+			State:  "closed",
+			Merged: false, // Closed but not merged
+		},
+		Analysis: turn.Analysis{
+			NextAction: map[string]turn.Action{}, // No blocked users
+		},
+	}
+
+	// Should call updateDMMessagesForPR for closed state
+	c.handlePullRequestEventWithData(ctx, "testorg", "testrepo", event, checkResult, nil)
+
+	// Give async operations time to complete
+	time.Sleep(100 * time.Millisecond)
+
+	// Test passes if it returns without panicking
+}
+
 // TestHandlePullRequestEventWithData_WithChannelsAndTaggedUsers tests the full flow with tagged users.
 func TestHandlePullRequestEventWithData_WithChannelsAndTaggedUsers(t *testing.T) {
 	ctx := context.Background()

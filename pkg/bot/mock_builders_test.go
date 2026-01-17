@@ -7,8 +7,9 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/slacker/pkg/bot/cache"
-
+	"github.com/codeGROOVE-dev/slacker/pkg/config"
 	"github.com/codeGROOVE-dev/slacker/pkg/notify"
+	slackapi "github.com/codeGROOVE-dev/slacker/pkg/slack"
 	"github.com/slack-go/slack"
 )
 
@@ -112,6 +113,14 @@ func (b *MockSlackBuilder) WithWorkspaceInfoError() *MockSlackBuilder {
 	return b
 }
 
+// WithFindDMMessagesInHistory configures the mock to return specific DM locations when searching history.
+func (b *MockSlackBuilder) WithFindDMMessagesInHistory(locations []slackapi.DMLocation, err error) *MockSlackBuilder {
+	b.mock.findDMMessagesFunc = func(ctx context.Context, userID, prURL string, since time.Time) ([]slackapi.DMLocation, error) {
+		return locations, err
+	}
+	return b
+}
+
 // Build returns the configured mockSlackClient.
 func (b *MockSlackBuilder) Build() *mockSlackClient {
 	return b.mock
@@ -157,6 +166,24 @@ func (b *MockStateBuilder) WithMarkProcessedError(err error) *MockStateBuilder {
 // WithSaveThreadError configures the mock to fail when saving threads.
 func (b *MockStateBuilder) WithSaveThreadError(err error) *MockStateBuilder {
 	b.mock.saveThreadErr = err
+	return b
+}
+
+// WithQueuePendingDMError configures the mock to fail when queueing pending DMs.
+func (b *MockStateBuilder) WithQueuePendingDMError(err error) *MockStateBuilder {
+	b.mock.queuePendingDMErr = err
+	return b
+}
+
+// WithPendingDMsError configures the mock to fail when retrieving pending DMs.
+func (b *MockStateBuilder) WithPendingDMsError(err error) *MockStateBuilder {
+	b.mock.pendingDMsErr = err
+	return b
+}
+
+// WithRemovePendingDMError configures the mock to fail when removing pending DMs.
+func (b *MockStateBuilder) WithRemovePendingDMError(err error) *MockStateBuilder {
+	b.mock.removePendingDMErr = err
 	return b
 }
 
@@ -266,6 +293,22 @@ func (b *MockConfigBuilder) WithDomain(domain string) *MockConfigBuilder {
 // WithLoadError configures LoadConfig to return an error.
 func (b *MockConfigBuilder) WithLoadError(err error) *MockConfigBuilder {
 	b.mock.loadErr = err
+	return b
+}
+
+// WithReloadConfigError configures ReloadConfig to return an error.
+// This is a convenience method that sets loadErr since ReloadConfig calls LoadConfig.
+func (b *MockConfigBuilder) WithReloadConfigError() *MockConfigBuilder {
+	return b.WithLoadError(errors.New("config reload failed"))
+}
+
+// WithOrg configures an org to exist in configData.
+func (b *MockConfigBuilder) WithOrg(org string) *MockConfigBuilder {
+	if b.mock.configData == nil {
+		b.mock.configData = make(map[string]interface{})
+	}
+	// Add a minimal config for the org
+	b.mock.configData[org] = &config.RepoConfig{}
 	return b
 }
 

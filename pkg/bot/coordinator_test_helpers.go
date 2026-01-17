@@ -18,17 +18,20 @@ import (
 //
 //nolint:govet // fieldalignment optimization would reduce test readability
 type mockStateStore struct {
-	markProcessedErr  error
-	saveThreadErr     error
-	saveDMMessageErr  error
-	threads           map[string]cache.ThreadInfo
-	dmTimes           map[string]time.Time
-	dmUsers           map[string][]string
-	dmMessages        map[string]state.DMInfo
-	pendingDMs        []*state.PendingDM
-	processedEvents   map[string]bool
-	lastNotifications map[string]time.Time
-	mu                sync.Mutex
+	markProcessedErr   error
+	saveThreadErr      error
+	saveDMMessageErr   error
+	queuePendingDMErr  error
+	pendingDMsErr      error
+	removePendingDMErr error
+	threads            map[string]cache.ThreadInfo
+	dmTimes            map[string]time.Time
+	dmUsers            map[string][]string
+	dmMessages         map[string]state.DMInfo
+	pendingDMs         []*state.PendingDM
+	processedEvents    map[string]bool
+	lastNotifications  map[string]time.Time
+	mu                 sync.Mutex
 }
 
 func (m *mockStateStore) Thread(ctx context.Context, owner, repo string, number int, channelID string) (cache.ThreadInfo, bool) {
@@ -180,6 +183,9 @@ func (m *mockStateStore) RecordNotification(ctx context.Context, prURL string, n
 func (m *mockStateStore) QueuePendingDM(ctx context.Context, dm *state.PendingDM) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.queuePendingDMErr != nil {
+		return m.queuePendingDMErr
+	}
 	m.pendingDMs = append(m.pendingDMs, dm)
 	return nil
 }
@@ -187,6 +193,9 @@ func (m *mockStateStore) QueuePendingDM(ctx context.Context, dm *state.PendingDM
 func (m *mockStateStore) PendingDMs(ctx context.Context, before time.Time) ([]state.PendingDM, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.pendingDMsErr != nil {
+		return nil, m.pendingDMsErr
+	}
 	var result []state.PendingDM
 	for _, dm := range m.pendingDMs {
 		if dm.SendAfter.Before(before) {
@@ -199,6 +208,9 @@ func (m *mockStateStore) PendingDMs(ctx context.Context, before time.Time) ([]st
 func (m *mockStateStore) RemovePendingDM(ctx context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.removePendingDMErr != nil {
+		return m.removePendingDMErr
+	}
 	for i, dm := range m.pendingDMs {
 		if dm.ID == id {
 			m.pendingDMs = append(m.pendingDMs[:i], m.pendingDMs[i+1:]...)
